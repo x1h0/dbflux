@@ -2,6 +2,24 @@
 
 All notable changes to DBFlux will be documented in this file.
 
+## [0.4.0-dev.5] – 2026-03-05
+
+### Added
+
+* Tab context menu: right-click or Ctrl+M on workspace tabs to Close, Close Others, Close All, Close to the Left, Close to the Right; supports j/k and arrow key navigation
+* Sidebar: new folders auto-select, scroll into view, and enter rename mode immediately after creation
+* Sidebar: "Duplicate" option in connection profile context menu clones the profile including keyring passwords into the same folder
+* Shared `context_menu` component used by both sidebar and tab bar menus, replacing the old sidebar-specific implementation
+
+### Changed
+
+* `dbflux_core` reorganized from 50 flat files into 10 thematic subdirectories: `core/`, `driver/`, `schema/`, `sql/`, `query/`, `connection/`, `storage/`, `data/`, `config/`, `facade/`; all public re-exports preserved for backward compatibility
+* UI layer reorganized: workspace, sidebar, status bar, and tasks panel moved into `views/`; modals into `overlays/`; toast and dropdown into `components/`
+* `key_value.rs` (4601 lines) split into 9 focused submodules; `settings.rs` split into lifecycle/dirty_state/sidebar_nav; `connection_manager/render.rs` split into per-section files
+* Documentation updated (ARCHITECTURE.md, AGENTS.md, CLAUDE.md, CODE_STYLE.md) to reflect new directory structure and `mod.rs` convention
+
+---
+
 ## [0.4.0-dev.4] – 2026-03-04
 
 ### Added
