@@ -275,31 +275,49 @@ nix-shell
 ```
 dbflux/
 ├── crates/
-│   ├── dbflux/                 # Main application
+│   ├── dbflux/                    # App + UI (GPUI)
 │   │   ├── ui/
-│   │   │   ├── document/       # Document system (SqlQuery, DataDocument)
-│   │   │   ├── dock/           # SidebarDock, BottomDock
-│   │   │   ├── components/     # DataTable, icons
-│   │   │   └── ...             # Other UI panels
-│   │   └── keymap/             # Keyboard system
-│   ├── dbflux_core/            # Core types and traits
-│   ├── dbflux_driver_sqlite/   # SQLite driver
-│   ├── dbflux_driver_postgres/ # PostgreSQL driver
-│   ├── dbflux_driver_mysql/    # MySQL driver
-│   ├── dbflux_driver_mongodb/  # MongoDB driver
-│   ├── dbflux_driver_redis/   # Redis driver
-│   ├── dbflux_ssh/             # SSH tunnel support
-│   └── dbflux_export/          # Export (CSV, JSON, Text, Binary)
+│   │   │   ├── views/             # Workspace, sidebar, status bar, tasks panel
+│   │   │   ├── overlays/          # Modals (command palette, cell editor, etc.)
+│   │   │   ├── document/          # Document system (SQL query, data grid)
+│   │   │   ├── components/        # DataTable, DocumentTree, toast, dropdown
+│   │   │   ├── dock/              # SidebarDock, BottomDock
+│   │   │   └── windows/           # Connection manager, settings
+│   │   └── keymap/                # Keyboard system
+│   ├── dbflux_core/               # Core types, traits, and driver capabilities
+│   │   ├── core/                  # Error, value, traits, shutdown
+│   │   ├── driver/                # Capabilities, form definitions
+│   │   ├── schema/                # Schema types, builder, node IDs
+│   │   ├── sql/                   # Dialect, SQL generation, query builder
+│   │   ├── query/                 # Query types, generator, language service
+│   │   ├── connection/            # Profiles, hooks, proxies, SSH tunnels
+│   │   ├── storage/               # JSON store, session, history, secrets
+│   │   ├── data/                  # CRUD mutations, key-value ops, views
+│   │   ├── config/                # App config, refresh policy, scripts
+│   │   └── facade/                # High-level session facade
+│   ├── dbflux_ipc/                # IPC protocol and framing
+│   ├── dbflux_driver_ipc/         # External driver proxy over local IPC
+│   ├── dbflux_driver_host/        # RPC host process for out-of-process drivers
+│   ├── dbflux_driver_postgres/    # PostgreSQL driver
+│   ├── dbflux_driver_mysql/       # MySQL driver
+│   ├── dbflux_driver_sqlite/      # SQLite driver
+│   ├── dbflux_driver_mongodb/     # MongoDB driver
+│   ├── dbflux_driver_redis/       # Redis driver
+│   ├── dbflux_tunnel_core/        # Shared RAII tunnel infrastructure
+│   ├── dbflux_proxy/              # SOCKS5/HTTP CONNECT proxy tunnel
+│   ├── dbflux_ssh/                # SSH tunnel support
+│   ├── dbflux_export/             # Export (CSV, JSON, Text, Binary)
+│   └── dbflux_test_support/       # Docker containers and test fixtures
 ├── resources/
-│   ├── desktop/                # Linux desktop entry
-│   ├── icons/                  # Application icons (SVG)
-│   ├── macos/                  # macOS bundle resources
-│   ├── mime/                   # MIME type definitions
-│   └── windows/                # Windows installer resources
+│   ├── desktop/                   # Linux desktop entry
+│   ├── icons/                     # Application icons (SVG)
+│   ├── macos/                     # macOS bundle resources
+│   ├── mime/                      # MIME type definitions
+│   └── windows/                   # Windows installer resources
 └── scripts/
-    ├── install.sh              # Linux installer
-    ├── uninstall.sh            # Linux uninstaller
-    └── PKGBUILD                # Arch Linux package
+    ├── install.sh                 # Linux installer
+    ├── uninstall.sh               # Linux uninstaller
+    └── PKGBUILD                   # Arch Linux package
 ```
 
 ## License
