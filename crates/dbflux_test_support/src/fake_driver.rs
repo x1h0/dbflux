@@ -1,14 +1,14 @@
 use dbflux_core::{
     Connection, ConnectionProfile, DatabaseCategory, DbConfig, DbDriver, DbError, DbKind,
-    DriverCapabilities, DriverFormDef, DriverMetadata, FormValues, Icon, MONGODB_FORM, MYSQL_FORM,
-    POSTGRES_FORM, QueryHandle, QueryLanguage, QueryRequest, QueryResult, REDIS_FORM,
-    RedisLanguageService, SQLITE_FORM, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
-    SqlLanguageService,
+    DriverCapabilities, DriverFormDef, DriverMetadata, FormValues, Icon, QueryHandle,
+    QueryLanguage, QueryRequest, QueryResult, RedisLanguageService, SchemaLoadingStrategy,
+    SchemaSnapshot, SqlDialect, SqlLanguageService, MONGODB_FORM, MYSQL_FORM, POSTGRES_FORM,
+    REDIS_FORM, SQLITE_FORM,
 };
 use dbflux_core::{DatabaseInfo, DefaultSqlDialect};
 use std::collections::HashMap;
-use std::sync::LazyLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::LazyLock;
 use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 #[derive(Debug, Clone)]
@@ -20,12 +20,12 @@ pub enum FakeQueryOutcome {
 }
 
 impl FakeQueryOutcome {
-    fn to_result(&self) -> Result<QueryResult, DbError> {
+    fn to_result(&self) -> Result<QueryResult, Box<DbError>> {
         match self {
             Self::Success(result) => Ok(result.clone()),
-            Self::Error(message) => Err(DbError::query_failed(message.clone())),
-            Self::Timeout => Err(DbError::Timeout),
-            Self::Cancelled => Err(DbError::Cancelled),
+            Self::Error(message) => Err(Box::new(DbError::query_failed(message.clone()))),
+            Self::Timeout => Err(Box::new(DbError::Timeout)),
+            Self::Cancelled => Err(Box::new(DbError::Cancelled)),
         }
     }
 }
@@ -314,7 +314,7 @@ impl FakeConnection {
         }
     }
 
-    fn execute_internal(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
+    fn execute_internal(&self, req: &QueryRequest) -> Result<QueryResult, Box<DbError>> {
         mutex_lock(&self.state.executed_requests).push(req.clone());
 
         if let Some(database) = req.database.clone() {
@@ -355,7 +355,7 @@ impl Connection for FakeConnection {
     }
 
     fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
-        self.execute_internal(req)
+        self.execute_internal(req).map_err(|error| *error)
     }
 
     fn execute_with_handle(
@@ -363,7 +363,7 @@ impl Connection for FakeConnection {
         req: &QueryRequest,
     ) -> Result<(QueryHandle, QueryResult), DbError> {
         let handle = QueryHandle::new();
-        let result = self.execute_internal(req)?;
+        let result = self.execute_internal(req).map_err(|error| *error)?;
         Ok((handle, result))
     }
 

@@ -736,6 +736,7 @@ impl SqlQueryDocument {
                 self.cancel_query(cx);
                 true
             }
+            Command::Cancel | Command::CancelQuery => false,
 
             Command::FocusUp if self.focus_mode == SqlQueryFocus::Editor => {
                 self.enter_context_bar(window, cx);
@@ -749,6 +750,7 @@ impl SqlQueryDocument {
                 cx.notify();
                 true
             }
+            Command::FocusDown => false,
 
             // Layout toggles
             Command::ToggleEditor => {
