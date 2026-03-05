@@ -705,22 +705,14 @@ mod tests {
 
     #[test]
     fn validate_resets_orphaned_private_key() {
-        let mut nav = SshFormNav::new(
-            SshAuthSelection::PrivateKey,
-            None,
-            SshFormField::Password,
-        );
+        let mut nav = SshFormNav::new(SshAuthSelection::PrivateKey, None, SshFormField::Password);
         nav.validate_field();
         assert_eq!(nav.field(), SshFormField::KeyPath);
     }
 
     #[test]
     fn validate_resets_orphaned_password() {
-        let mut nav = SshFormNav::new(
-            SshAuthSelection::Password,
-            None,
-            SshFormField::KeyPath,
-        );
+        let mut nav = SshFormNav::new(SshAuthSelection::Password, None, SshFormField::KeyPath);
         nav.validate_field();
         assert_eq!(nav.field(), SshFormField::Password);
     }

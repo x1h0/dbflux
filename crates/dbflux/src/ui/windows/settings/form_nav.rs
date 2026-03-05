@@ -126,11 +126,7 @@ mod tests {
     }
 
     fn grid() -> Vec<Vec<F>> {
-        vec![
-            vec![F::A],
-            vec![F::B, F::C],
-            vec![F::D, F::E, F::G],
-        ]
+        vec![vec![F::A], vec![F::B, F::C], vec![F::D, F::E, F::G]]
     }
 
     #[test]

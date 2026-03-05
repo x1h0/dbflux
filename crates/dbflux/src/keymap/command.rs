@@ -12,6 +12,7 @@ pub enum Command {
     NextTab,
     PrevTab,
     SwitchToTab(usize),
+    OpenTabMenu,
 
     // === Focus Navigation ===
     FocusSidebar,
@@ -126,6 +127,7 @@ impl Command {
             "open_settings" => Some(Command::OpenSettings),
             "open_script_file" => Some(Command::OpenScriptFile),
             "save_file_as" => Some(Command::SaveFileAs),
+            "open_tab_menu" => Some(Command::OpenTabMenu),
             _ => None,
         }
     }
@@ -140,6 +142,7 @@ impl Command {
             Command::NextTab => "Next Tab",
             Command::PrevTab => "Previous Tab",
             Command::SwitchToTab(_) => "Switch to Tab",
+            Command::OpenTabMenu => "Open Tab Menu",
 
             Command::FocusSidebar => "Focus Sidebar",
             Command::FocusEditor => "Focus Editor",
@@ -225,7 +228,8 @@ impl Command {
             | Command::CloseCurrentTab
             | Command::NextTab
             | Command::PrevTab
-            | Command::SwitchToTab(_) => "Global",
+            | Command::SwitchToTab(_)
+            | Command::OpenTabMenu => "Global",
 
             Command::FocusSidebar
             | Command::FocusEditor

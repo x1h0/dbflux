@@ -9,7 +9,7 @@ mod key_value;
 mod new_key_modal;
 mod result_view;
 mod sql_query;
-mod tab_bar;
+pub mod tab_bar;
 mod tab_manager;
 mod task_runner;
 mod types;

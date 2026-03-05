@@ -198,6 +198,57 @@ impl TabManager {
         }
     }
 
+    pub fn close_others(&mut self, keep_id: DocumentId, cx: &mut Context<Self>) {
+        let ids_to_close: Vec<DocumentId> = self
+            .documents
+            .iter()
+            .map(|d| d.id())
+            .filter(|&id| id != keep_id)
+            .collect();
+
+        for id in ids_to_close {
+            self.close(id, cx);
+        }
+    }
+
+    pub fn close_all(&mut self, cx: &mut Context<Self>) {
+        let ids: Vec<DocumentId> = self.documents.iter().map(|d| d.id()).collect();
+
+        for id in ids {
+            self.close(id, cx);
+        }
+    }
+
+    pub fn close_to_left(&mut self, id: DocumentId, cx: &mut Context<Self>) {
+        let Some(target_idx) = self.index_of(id) else {
+            return;
+        };
+
+        let ids_to_close: Vec<DocumentId> = self.documents[..target_idx]
+            .iter()
+            .map(|d| d.id())
+            .collect();
+
+        for id in ids_to_close {
+            self.close(id, cx);
+        }
+    }
+
+    pub fn close_to_right(&mut self, id: DocumentId, cx: &mut Context<Self>) {
+        let Some(target_idx) = self.index_of(id) else {
+            return;
+        };
+
+        let ids_to_close: Vec<DocumentId> = self.documents[(target_idx + 1)..]
+            .iter()
+            .map(|d| d.id())
+            .collect();
+
+        for id in ids_to_close {
+            self.close(id, cx);
+        }
+    }
+
     /// Closes the active tab.
     pub fn close_active(&mut self, cx: &mut Context<Self>) {
         if let Some(idx) = self.active_index {
@@ -289,6 +340,28 @@ impl Default for TabManager {
 
 impl EventEmitter<TabManagerEvent> for TabManager {}
 
+fn ids_to_close_others(all_ids: &[DocumentId], keep_id: DocumentId) -> Vec<DocumentId> {
+    all_ids
+        .iter()
+        .copied()
+        .filter(|&id| id != keep_id)
+        .collect()
+}
+
+fn ids_to_close_left(all_ids: &[DocumentId], target_id: DocumentId) -> Vec<DocumentId> {
+    let Some(idx) = all_ids.iter().position(|&id| id == target_id) else {
+        return Vec::new();
+    };
+    all_ids[..idx].to_vec()
+}
+
+fn ids_to_close_right(all_ids: &[DocumentId], target_id: DocumentId) -> Vec<DocumentId> {
+    let Some(idx) = all_ids.iter().position(|&id| id == target_id) else {
+        return Vec::new();
+    };
+    all_ids[(idx + 1)..].to_vec()
+}
+
 #[derive(Clone, Debug)]
 pub enum TabManagerEvent {
     Opened(DocumentId),
@@ -307,4 +380,83 @@ pub enum TabManagerEvent {
         pk_indices: Vec<usize>,
         generation_type: crate::ui::sql_preview_modal::SqlGenerationType,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ids_to_close_left, ids_to_close_others, ids_to_close_right, DocumentId};
+    use uuid::Uuid;
+
+    fn make_ids(n: usize) -> Vec<DocumentId> {
+        (0..n).map(|_| DocumentId(Uuid::new_v4())).collect()
+    }
+
+    #[test]
+    fn close_others_excludes_keep_id() {
+        let ids = make_ids(5);
+        let keep = ids[2];
+        let result = ids_to_close_others(&ids, keep);
+
+        assert_eq!(result.len(), 4);
+        assert!(!result.contains(&keep));
+        assert!(result.contains(&ids[0]));
+        assert!(result.contains(&ids[1]));
+        assert!(result.contains(&ids[3]));
+        assert!(result.contains(&ids[4]));
+    }
+
+    #[test]
+    fn close_others_with_single_tab_returns_empty() {
+        let ids = make_ids(1);
+        let result = ids_to_close_others(&ids, ids[0]);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn close_left_returns_ids_before_target() {
+        let ids = make_ids(5);
+        let result = ids_to_close_left(&ids, ids[3]);
+
+        assert_eq!(result.len(), 3);
+        assert_eq!(result, &ids[..3]);
+    }
+
+    #[test]
+    fn close_left_at_first_position_returns_empty() {
+        let ids = make_ids(5);
+        let result = ids_to_close_left(&ids, ids[0]);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn close_left_with_unknown_id_returns_empty() {
+        let ids = make_ids(3);
+        let unknown = DocumentId(Uuid::new_v4());
+        let result = ids_to_close_left(&ids, unknown);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn close_right_returns_ids_after_target() {
+        let ids = make_ids(5);
+        let result = ids_to_close_right(&ids, ids[1]);
+
+        assert_eq!(result.len(), 3);
+        assert_eq!(result, &ids[2..]);
+    }
+
+    #[test]
+    fn close_right_at_last_position_returns_empty() {
+        let ids = make_ids(5);
+        let result = ids_to_close_right(&ids, ids[4]);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn close_right_with_unknown_id_returns_empty() {
+        let ids = make_ids(3);
+        let unknown = DocumentId(Uuid::new_v4());
+        let result = ids_to_close_right(&ids, unknown);
+        assert!(result.is_empty());
+    }
 }

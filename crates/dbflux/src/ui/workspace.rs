@@ -20,7 +20,7 @@ use crate::ui::sql_preview_modal::SqlPreviewModal;
 use crate::ui::status_bar::{StatusBar, ToggleTasksPanel};
 use crate::ui::tasks_panel::TasksPanel;
 use crate::ui::toast::{ToastGlobal, ToastHost};
-use crate::ui::tokens::{FontSizes, Radii, Spacing};
+use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use crate::ui::windows::connection_manager::ConnectionManagerWindow;
 use crate::ui::windows::settings::SettingsWindow;
 use dbflux_core::{ExecutionContext, QueryLanguage};
@@ -241,6 +241,59 @@ impl Workspace {
                 TabBarEvent::NewTabRequested => {
                     this.new_query_tab(window, cx);
                 }
+                TabBarEvent::CloseTab(id) => {
+                    this.close_tab(*id, window, cx);
+                }
+                TabBarEvent::CloseOtherTabs(id) => {
+                    this.close_tabs_batch(
+                        window,
+                        cx,
+                        |docs, keep| {
+                            docs.iter()
+                                .map(|d| d.id())
+                                .filter(|&did| did != keep)
+                                .collect()
+                        },
+                        *id,
+                    );
+                }
+                TabBarEvent::CloseAllTabs => {
+                    let ids: Vec<_> = this
+                        .tab_manager
+                        .read(cx)
+                        .documents()
+                        .iter()
+                        .map(|d| d.id())
+                        .collect();
+                    for doc_id in ids {
+                        this.close_tab(doc_id, window, cx);
+                    }
+                }
+                TabBarEvent::CloseTabsToLeft(id) => {
+                    this.close_tabs_batch(
+                        window,
+                        cx,
+                        |docs, target| {
+                            let idx = docs.iter().position(|d| d.id() == target).unwrap_or(0);
+                            docs[..idx].iter().map(|d| d.id()).collect()
+                        },
+                        *id,
+                    );
+                }
+                TabBarEvent::CloseTabsToRight(id) => {
+                    this.close_tabs_batch(
+                        window,
+                        cx,
+                        |docs, target| {
+                            let idx = docs
+                                .iter()
+                                .position(|d| d.id() == target)
+                                .unwrap_or(docs.len().saturating_sub(1));
+                            docs[(idx + 1)..].iter().map(|d| d.id()).collect()
+                        },
+                        *id,
+                    );
+                }
             },
         )
         .detach();
@@ -410,6 +463,10 @@ impl Workspace {
 
         if self.sql_preview_modal.read(cx).is_visible() {
             return ContextId::SqlPreviewModal;
+        }
+
+        if self.tab_bar.read(cx).has_context_menu_open() {
+            return ContextId::ContextMenu;
         }
 
         if self.focus_target == FocusTarget::Sidebar && self.sidebar.read(cx).is_renaming() {

@@ -528,9 +528,9 @@ impl ConnectionProfile {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::RefreshPolicySetting;
     use crate::app_config::GlobalOverrides;
     use crate::driver_form::FormValues;
-    use crate::RefreshPolicySetting;
 
     fn sqlite_profile() -> ConnectionProfile {
         ConnectionProfile::new("test-sqlite", DbConfig::default_sqlite())

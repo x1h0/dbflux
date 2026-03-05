@@ -566,14 +566,16 @@ impl Render for Workspace {
             .child(self.shutdown_overlay.clone())
             // Context menu rendered at workspace level for proper positioning
             .when_some(self.sidebar.read(cx).context_menu_state(), |this, menu| {
-                let theme = cx.theme();
+                use crate::ui::components::context_menu as ctx;
+                use crate::ui::sidebar::ContextMenuItem;
+
                 let sidebar_entity = self.sidebar.clone();
 
                 let menu_x = menu.position.x;
                 let menu_y = menu.position.y;
                 let menu_width = px(160.0);
                 let menu_gap = Spacing::XS;
-                let menu_item_height = px(32.0);
+                let menu_item_height = Heights::ROW_COMPACT;
                 let menu_container_padding = px(4.0);
 
                 let parent_entry = menu.parent_stack.last();
@@ -586,44 +588,44 @@ impl Render for Workspace {
 
                 let in_submenu = parent_entry.is_some();
 
-                this
-                    // Full-screen overlay to capture clicks outside
-                    .child(
-                        div()
-                            .id("context-menu-overlay")
-                            .absolute()
-                            .top_0()
-                            .left_0()
-                            .size_full()
-                            .on_mouse_down(MouseButton::Left, {
-                                let sidebar = sidebar_entity.clone();
-                                move |_, _, cx| {
-                                    sidebar.update(cx, |s, cx| s.close_context_menu(cx));
-                                }
-                            }),
-                    )
+                // Overlay to dismiss on outside click
+                let sidebar_dismiss = sidebar_entity.clone();
+                let overlay = ctx::render_menu_overlay("context-menu-overlay", move |_, cx| {
+                    sidebar_dismiss.update(cx, |s, cx| s.close_context_menu(cx));
+                });
+
+                this.child(overlay)
                     // Parent menu (shown when in submenu, at original position)
                     .when_some(parent_entry, |d, (parent_items, parent_selected)| {
-                        d.child(
-                            div()
-                                .absolute()
-                                .top(menu_y)
-                                .left(menu_x)
-                                .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                                    cx.stop_propagation();
-                                })
-                                .child(Sidebar::render_menu_panel(
-                                    theme,
-                                    parent_items,
-                                    Some(*parent_selected),
-                                    Some(sidebar_entity.clone()),
-                                    "parent-menu",
-                                    true, // is_parent_menu
-                                )),
-                        )
+                        let shared_items = ContextMenuItem::to_menu_items(parent_items);
+                        let sidebar_click = sidebar_entity.clone();
+                        let sidebar_hover = sidebar_entity.clone();
+
+                        d.child(div().absolute().top(menu_y).left(menu_x).child(
+                            ctx::render_menu_container(
+                                "parent-menu",
+                                &shared_items,
+                                Some(*parent_selected),
+                                move |idx, cx| {
+                                    sidebar_click.update(cx, |s, cx| {
+                                        s.context_menu_parent_execute_at(idx, cx);
+                                    });
+                                },
+                                move |idx, cx| {
+                                    sidebar_hover.update(cx, |s, cx| {
+                                        s.context_menu_parent_hover_at(idx, cx);
+                                    });
+                                },
+                                cx,
+                            ),
+                        ))
                     })
                     // Current menu (submenu to the right of parent, or main menu at click position)
-                    .child(
+                    .child({
+                        let shared_items = ContextMenuItem::to_menu_items(&menu.items);
+                        let sidebar_click = sidebar_entity.clone();
+                        let sidebar_hover = sidebar_entity.clone();
+
                         div()
                             .absolute()
                             .top(menu_y + submenu_y_offset)
@@ -632,18 +634,63 @@ impl Render for Workspace {
                             } else {
                                 menu_x
                             })
-                            .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                                cx.stop_propagation();
-                            })
-                            .child(Sidebar::render_menu_panel(
-                                theme,
-                                &menu.items,
-                                Some(menu.selected_index),
-                                Some(sidebar_entity.clone()),
+                            .child(ctx::render_menu_container(
                                 "context-menu",
-                                false, // is_parent_menu
-                            )),
-                    )
+                                &shared_items,
+                                Some(menu.selected_index),
+                                move |idx, cx| {
+                                    sidebar_click.update(cx, |s, cx| {
+                                        s.context_menu_execute_at(idx, cx);
+                                    });
+                                },
+                                move |idx, cx| {
+                                    sidebar_hover.update(cx, |s, cx| {
+                                        s.context_menu_hover_at(idx, cx);
+                                    });
+                                },
+                                cx,
+                            ))
+                    })
+            })
+            // Tab context menu rendered at workspace level for proper positioning
+            .when_some(self.tab_bar.read(cx).context_menu_state(), |this, menu| {
+                use crate::ui::components::context_menu as ctx;
+                use crate::ui::document::tab_bar::TabBar;
+
+                let tab_bar_entity = self.tab_bar.clone();
+
+                let menu_x = menu.position_x;
+                let menu_y = px(36.0);
+                let items = TabBar::build_tab_menu_items();
+                let selected = menu.selected_index;
+
+                let tab_bar_dismiss = tab_bar_entity.clone();
+                let overlay = ctx::render_menu_overlay("tab-context-menu-overlay", move |_, cx| {
+                    tab_bar_dismiss.update(cx, |tb, cx| tb.close_context_menu(cx));
+                });
+
+                let tab_bar_click = tab_bar_entity.clone();
+                let tab_bar_hover = tab_bar_entity.clone();
+
+                this.child(overlay)
+                    .child(div().absolute().top(menu_y).left(menu_x).child(
+                        ctx::render_menu_container(
+                            "tab-context-menu",
+                            &items,
+                            Some(selected),
+                            move |idx, cx| {
+                                tab_bar_click.update(cx, |tb, cx| {
+                                    tb.context_menu_execute_at(idx, cx);
+                                });
+                            },
+                            move |idx, cx| {
+                                tab_bar_hover.update(cx, |tb, cx| {
+                                    tb.context_menu_hover_at(idx, cx);
+                                });
+                            },
+                            cx,
+                        ),
+                    ))
             })
             // Delete confirmation modal rendered at workspace level for proper centering
             .when_some(

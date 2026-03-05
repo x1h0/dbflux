@@ -11,12 +11,12 @@
 
 use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use dbflux_core::{DbError, ProxyAuth, ProxyKind, ProxyProfile};
 use dbflux_tunnel_core::{
-    adaptive_sleep, blocking_write_all, ForwardingConnection, Tunnel, TunnelConnector,
+    ForwardingConnection, Tunnel, TunnelConnector, adaptive_sleep, blocking_write_all,
 };
 
 /// Proxy protocol to use for tunneling.

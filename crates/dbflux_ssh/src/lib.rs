@@ -8,11 +8,11 @@
 use std::io::Write;
 use std::net::{TcpListener, TcpStream};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use dbflux_core::{DbError, SshAuthMethod, SshTunnelConfig};
-use dbflux_tunnel_core::{adaptive_sleep, ForwardingConnection, Tunnel, TunnelConnector};
+use dbflux_tunnel_core::{ForwardingConnection, Tunnel, TunnelConnector, adaptive_sleep};
 use ssh2::Session;
 
 /// An active SSH tunnel that forwards local connections to a remote host.

@@ -513,6 +513,25 @@ impl Sidebar {
         }
     }
 
+    pub fn context_menu_hover_at(&mut self, index: usize, cx: &mut Context<Self>) {
+        if let Some(ref mut menu) = self.context_menu
+            && menu.selected_index != index
+        {
+            menu.selected_index = index;
+            cx.notify();
+        }
+    }
+
+    pub fn context_menu_parent_hover_at(&mut self, index: usize, cx: &mut Context<Self>) {
+        if let Some(ref mut menu) = self.context_menu
+            && let Some((_, parent_selected)) = menu.parent_stack.last_mut()
+            && *parent_selected != index
+        {
+            *parent_selected = index;
+            cx.notify();
+        }
+    }
+
     pub fn context_menu_execute(&mut self, cx: &mut Context<Self>) {
         let Some(ref mut menu) = self.context_menu else {
             return;

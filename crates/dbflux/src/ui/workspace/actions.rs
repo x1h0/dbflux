@@ -354,18 +354,55 @@ impl Workspace {
         self.set_focus(FocusTarget::Document, window, cx);
     }
 
+    pub(super) fn close_tabs_batch(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        selector: impl FnOnce(
+            &[crate::ui::document::DocumentHandle],
+            crate::ui::document::DocumentId,
+        ) -> Vec<crate::ui::document::DocumentId>,
+        reference_id: crate::ui::document::DocumentId,
+    ) {
+        let ids = selector(self.tab_manager.read(cx).documents(), reference_id);
+
+        for doc_id in ids {
+            self.close_tab(doc_id, window, cx);
+        }
+    }
+
+    pub(super) fn close_tab(
+        &mut self,
+        doc_id: crate::ui::document::DocumentId,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.cleanup_empty_script(doc_id, cx);
+
+        self.tab_manager.update(cx, |mgr, cx| {
+            mgr.close(doc_id, cx);
+        });
+    }
+
     /// Closes the active tab.
-    pub(super) fn close_active_tab(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        let active_id = self.tab_manager.read(cx).active_id();
-        let Some(doc_id) = active_id else {
+    pub(super) fn close_active_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(doc_id) = self.tab_manager.read(cx).active_id() else {
             return;
         };
 
-        // Delete backing file for empty file-backed scripts on close.
+        self.close_tab(doc_id, window, cx);
+    }
+
+    /// Deletes the backing file for empty file-backed scripts about to be closed.
+    fn cleanup_empty_script(
+        &mut self,
+        doc_id: crate::ui::document::DocumentId,
+        cx: &mut Context<Self>,
+    ) {
         let empty_script_path = self
             .tab_manager
             .read(cx)
-            .active_document()
+            .document(doc_id)
             .and_then(|handle| {
                 if let crate::ui::document::DocumentHandle::SqlQuery { entity, .. } = handle {
                     let doc = entity.read(cx);
@@ -385,10 +422,6 @@ impl Workspace {
                 }
             });
         }
-
-        self.tab_manager.update(cx, |mgr, cx| {
-            mgr.close(doc_id, cx);
-        });
     }
 
     /// Opens a file dialog to pick a script file and opens it in a new tab.

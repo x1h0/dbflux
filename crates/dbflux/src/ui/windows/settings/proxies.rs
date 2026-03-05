@@ -663,11 +663,7 @@ mod tests {
 
     #[test]
     fn validate_resets_orphaned_field() {
-        let mut nav = ProxyFormNav::new(
-            ProxyAuthSelection::None,
-            None,
-            ProxyFormField::Username,
-        );
+        let mut nav = ProxyFormNav::new(ProxyAuthSelection::None, None, ProxyFormField::Username);
         nav.validate_field();
         assert_eq!(nav.field(), ProxyFormField::Name);
     }

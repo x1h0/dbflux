@@ -1752,8 +1752,8 @@ mod tests {
     // --- ConnectProfileParams::execute tests ---
 
     use crate::{
-        DatabaseCategory, DriverFormDef, FormValues, Icon, POSTGRES_FORM,
-        SshTunnelConfig, SshAuthMethod,
+        DatabaseCategory, DriverFormDef, FormValues, Icon, POSTGRES_FORM, SshAuthMethod,
+        SshTunnelConfig,
     };
     use std::sync::LazyLock;
 
@@ -1825,22 +1825,25 @@ mod tests {
 
     #[test]
     fn execute_rejects_proxy_and_ssh_tunnel_together() {
-        let profile = ConnectionProfile::new("dual", DbConfig::Postgres {
-            use_uri: false,
-            uri: None,
-            host: "db.prod".to_string(),
-            port: 5432,
-            user: "root".to_string(),
-            database: "app".to_string(),
-            ssl_mode: crate::SslMode::Disable,
-            ssh_tunnel: Some(SshTunnelConfig {
-                host: "bastion.local".to_string(),
-                port: 22,
-                user: "jump".to_string(),
-                auth_method: SshAuthMethod::Password,
-            }),
-            ssh_tunnel_profile_id: None,
-        });
+        let profile = ConnectionProfile::new(
+            "dual",
+            DbConfig::Postgres {
+                use_uri: false,
+                uri: None,
+                host: "db.prod".to_string(),
+                port: 5432,
+                user: "root".to_string(),
+                database: "app".to_string(),
+                ssl_mode: crate::SslMode::Disable,
+                ssh_tunnel: Some(SshTunnelConfig {
+                    host: "bastion.local".to_string(),
+                    port: 22,
+                    user: "jump".to_string(),
+                    auth_method: SshAuthMethod::Password,
+                }),
+                ssh_tunnel_profile_id: None,
+            },
+        );
 
         let proxy = make_proxy("corp", true);
         let resolved = ResolvedProxy {
@@ -1868,17 +1871,20 @@ mod tests {
 
     #[test]
     fn execute_skips_proxy_when_no_proxy_matches_host() {
-        let profile = ConnectionProfile::new("pg", DbConfig::Postgres {
-            use_uri: false,
-            uri: None,
-            host: "db.local".to_string(),
-            port: 5432,
-            user: "root".to_string(),
-            database: "app".to_string(),
-            ssl_mode: crate::SslMode::Disable,
-            ssh_tunnel: None,
-            ssh_tunnel_profile_id: None,
-        });
+        let profile = ConnectionProfile::new(
+            "pg",
+            DbConfig::Postgres {
+                use_uri: false,
+                uri: None,
+                host: "db.local".to_string(),
+                port: 5432,
+                user: "root".to_string(),
+                database: "app".to_string(),
+                ssl_mode: crate::SslMode::Disable,
+                ssh_tunnel: None,
+                ssh_tunnel_profile_id: None,
+            },
+        );
 
         let proxy = ProxyProfile {
             no_proxy: Some("db.local".to_string()),
@@ -1906,14 +1912,20 @@ mod tests {
         };
 
         let result = params.execute(Some(noop_tunnel));
-        assert!(result.is_ok(), "execute should succeed with no_proxy bypass");
+        assert!(
+            result.is_ok(),
+            "execute should succeed with no_proxy bypass"
+        );
     }
 
     #[test]
     fn execute_skips_proxy_when_host_port_is_none() {
-        let profile = ConnectionProfile::new("lite", DbConfig::SQLite {
-            path: std::path::PathBuf::from("/tmp/test.db"),
-        });
+        let profile = ConnectionProfile::new(
+            "lite",
+            DbConfig::SQLite {
+                path: std::path::PathBuf::from("/tmp/test.db"),
+            },
+        );
 
         let proxy = make_proxy("corp", true);
         let resolved = ResolvedProxy {
@@ -1952,9 +1964,8 @@ mod tests {
             }
 
             fn form_definition(&self) -> &DriverFormDef {
-                static FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDef {
-                    tabs: vec![],
-                });
+                static FORM: LazyLock<DriverFormDef> =
+                    LazyLock::new(|| DriverFormDef { tabs: vec![] });
                 &FORM
             }
 

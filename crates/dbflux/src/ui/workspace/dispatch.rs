@@ -653,13 +653,30 @@ impl CommandDispatcher for Workspace {
                 false
             }
 
-            // Context menu commands - handled by DataGridPanel
+            Command::OpenTabMenu => {
+                self.tab_bar
+                    .update(cx, |tb, cx| tb.open_context_menu_for_active(cx));
+                true
+            }
+
+            // Context menu commands — route to tab bar if its menu is open,
+            // otherwise to the active document (DataGridPanel).
             Command::OpenContextMenu
             | Command::MenuUp
             | Command::MenuDown
             | Command::MenuSelect
             | Command::MenuBack => {
-                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                if self.tab_bar.read(cx).has_context_menu_open() {
+                    self.tab_bar.update(cx, |tb, cx| match cmd {
+                        Command::MenuDown => tb.context_menu_select_next(cx),
+                        Command::MenuUp => tb.context_menu_select_prev(cx),
+                        Command::MenuSelect => tb.context_menu_execute(cx),
+                        Command::MenuBack => tb.close_context_menu(cx),
+                        _ => {}
+                    });
+                } else if let Some(doc) =
+                    self.tab_manager.read(cx).active_document().cloned()
+                {
                     doc.dispatch_command(cmd, window, cx);
                 }
                 true

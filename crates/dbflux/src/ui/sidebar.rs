@@ -102,6 +102,29 @@ pub struct ContextMenuItem {
     pub action: ContextMenuAction,
 }
 
+impl ContextMenuItem {
+    pub fn to_menu_items(
+        items: &[ContextMenuItem],
+    ) -> Vec<crate::ui::components::context_menu::MenuItem> {
+        items
+            .iter()
+            .map(|item| {
+                let mut mi = crate::ui::components::context_menu::MenuItem::new(item.label.clone());
+
+                if let Some(icon) = item.action.icon() {
+                    mi = mi.icon(icon);
+                }
+
+                if matches!(item.action, ContextMenuAction::Submenu(_)) {
+                    mi = mi.submenu();
+                }
+
+                mi
+            })
+            .collect()
+    }
+}
+
 #[derive(Clone)]
 pub enum ContextMenuAction {
     Open,
@@ -1004,5 +1027,55 @@ mod tests {
         let s = id.to_string();
         let parsed: SchemaNodeId = s.parse().unwrap();
         assert_eq!(parsed, id);
+    }
+
+    #[test]
+    fn to_menu_items_maps_labels_and_icons() {
+        use super::{ContextMenuAction, ContextMenuItem};
+
+        let items = vec![
+            ContextMenuItem {
+                label: "Open".into(),
+                action: ContextMenuAction::Open,
+            },
+            ContextMenuItem {
+                label: "Delete".into(),
+                action: ContextMenuAction::Delete,
+            },
+        ];
+
+        let menu_items = ContextMenuItem::to_menu_items(&items);
+        assert_eq!(menu_items.len(), 2);
+        assert_eq!(menu_items[0].label.as_ref(), "Open");
+        assert!(menu_items[0].icon.is_some());
+        assert!(!menu_items[0].has_submenu);
+        assert_eq!(menu_items[1].label.as_ref(), "Delete");
+        assert!(menu_items[1].icon.is_some());
+    }
+
+    #[test]
+    fn to_menu_items_marks_submenu_items() {
+        use super::{ContextMenuAction, ContextMenuItem};
+
+        let items = vec![ContextMenuItem {
+            label: "Move to".into(),
+            action: ContextMenuAction::Submenu(vec![ContextMenuItem {
+                label: "Folder A".into(),
+                action: ContextMenuAction::MoveToFolder(Some(test_uuid())),
+            }]),
+        }];
+
+        let menu_items = ContextMenuItem::to_menu_items(&items);
+        assert_eq!(menu_items.len(), 1);
+        assert!(menu_items[0].has_submenu);
+        assert!(menu_items[0].icon.is_none());
+    }
+
+    #[test]
+    fn to_menu_items_empty_input_returns_empty() {
+        use super::ContextMenuItem;
+
+        let menu_items = ContextMenuItem::to_menu_items(&[]);
+        assert!(menu_items.is_empty());
     }
 }

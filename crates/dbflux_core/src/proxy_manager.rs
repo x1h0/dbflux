@@ -1,5 +1,5 @@
-use crate::item_manager::{DefaultFilename, ItemManager};
 use crate::ProxyProfile;
+use crate::item_manager::{DefaultFilename, ItemManager};
 
 pub type ProxyManager = ItemManager<ProxyProfile>;
 

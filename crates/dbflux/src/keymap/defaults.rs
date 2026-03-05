@@ -104,6 +104,9 @@ fn global_layer() -> KeymapLayer {
         Command::ToggleSidebar,
     );
 
+    // Tab context menu
+    layer.bind(KeyChord::new("m", Modifiers::ctrl()), Command::OpenTabMenu);
+
     layer
 }
 
