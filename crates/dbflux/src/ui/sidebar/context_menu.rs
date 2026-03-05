@@ -138,6 +138,10 @@ impl Sidebar {
                     action: ContextMenuAction::Edit,
                 });
                 items.push(ContextMenuItem {
+                    label: "Duplicate".into(),
+                    action: ContextMenuAction::Duplicate,
+                });
+                items.push(ContextMenuItem {
                     label: "Rename".into(),
                     action: ContextMenuAction::RenameFolder, // Reuse for profile rename
                 });
@@ -587,6 +591,9 @@ impl Sidebar {
                 if let Some(SchemaNodeId::Profile { profile_id }) = parse_node_id(&item_id) {
                     self.edit_profile(profile_id, cx);
                 }
+            }
+            ContextMenuAction::Duplicate => {
+                self.duplicate_profile(&item_id, cx);
             }
             ContextMenuAction::Delete => {
                 self.show_delete_confirm_modal(&item_id, cx);

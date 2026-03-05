@@ -251,28 +251,107 @@ impl Sidebar {
 
     /// Creates a new folder at the root level.
     pub fn create_root_folder(&mut self, cx: &mut Context<Self>) {
-        self.app_state.update(cx, |state, cx| {
-            state.create_folder("New Folder", None);
+        let folder_id = self.app_state.update(cx, |state, cx| {
+            let id = state.create_folder("New Folder", None);
             cx.emit(AppStateChanged);
+            id
         });
 
         self.refresh_tree(cx);
+
+        let item_id = SchemaNodeId::ConnectionFolder {
+            node_id: folder_id,
+        }
+        .to_string();
+
+        self.select_and_rename_item(&item_id, cx);
     }
 
     pub(super) fn create_folder_from_context(&mut self, item_id: &str, cx: &mut Context<Self>) {
-        // Determine parent folder ID from item_id
         let parent_id = match parse_node_id(item_id) {
             Some(SchemaNodeId::ConnectionFolder { node_id }) => Some(node_id),
             _ => None,
         };
 
-        // Create folder with default name
-        self.app_state.update(cx, |state, cx| {
-            state.create_folder("New Folder", parent_id);
+        if parent_id.is_some() {
+            self.set_expanded(item_id, true, cx);
+        }
+
+        let folder_id = self.app_state.update(cx, |state, cx| {
+            let id = state.create_folder("New Folder", parent_id);
             cx.emit(AppStateChanged);
+            id
         });
 
         self.refresh_tree(cx);
+
+        let new_item_id = SchemaNodeId::ConnectionFolder {
+            node_id: folder_id,
+        }
+        .to_string();
+
+        self.select_and_rename_item(&new_item_id, cx);
+    }
+
+    /// Selects the item, scrolls to it, and queues a rename for the next render.
+    fn select_and_rename_item(&mut self, item_id: &str, cx: &mut Context<Self>) {
+        let tree_state = self.active_tree_state().clone();
+
+        if let Some(index) = self.find_item_index(item_id, cx) {
+            tree_state.update(cx, |state, cx| {
+                state.set_selected_index(Some(index), cx);
+                state.scroll_to_item(index, gpui::ScrollStrategy::Center);
+            });
+        }
+
+        self.pending_rename_item = Some(item_id.to_string());
+        cx.notify();
+    }
+
+    pub(super) fn duplicate_profile(&mut self, item_id: &str, cx: &mut Context<Self>) {
+        let Some(SchemaNodeId::Profile { profile_id }) = parse_node_id(item_id) else {
+            return;
+        };
+
+        let Some(new_id) = self.app_state.update(cx, |state, cx| {
+            let original = state.profiles().iter().find(|p| p.id == profile_id)?.clone();
+
+            let folder_id = state
+                .connection_tree()
+                .find_by_profile(profile_id)
+                .and_then(|node| node.parent_id);
+
+            let password = state.get_password(&original);
+            let ssh_password = state.get_ssh_password(&original);
+
+            let mut cloned = original;
+            cloned.id = Uuid::new_v4();
+            cloned.name = format!("{} (Copy)", cloned.name);
+            let new_id = cloned.id;
+
+            state.add_profile_in_folder(cloned.clone(), folder_id);
+
+            if let Some(pw) = password {
+                state.save_password(&cloned, &pw);
+            }
+            if let Some(pw) = ssh_password {
+                state.save_ssh_password(&cloned, &pw);
+            }
+
+            cx.emit(AppStateChanged);
+            Some(new_id)
+        }) else {
+            return;
+        };
+
+        self.refresh_tree(cx);
+
+        let new_item_id = SchemaNodeId::Profile {
+            profile_id: new_id,
+        }
+        .to_string();
+
+        self.select_and_rename_item(&new_item_id, cx);
     }
 
     pub(super) fn create_connection_in_folder(&mut self, item_id: &str, cx: &mut Context<Self>) {
@@ -1455,17 +1534,26 @@ impl Sidebar {
     ) {
         let name = "new_folder";
 
-        let result = self.app_state.update(cx, |state, _cx| {
+        let created_path = self.app_state.update(cx, |state, _cx| {
             let dir = state.scripts_directory_mut()?;
             dir.create_folder(parent.as_deref(), name).ok()
         });
 
-        if result.is_some() {
-            self.app_state.update(cx, |state, _cx| {
-                state.refresh_scripts();
-            });
-            self.refresh_scripts_tree(cx);
+        let Some(path) = created_path else {
+            return;
+        };
+
+        self.app_state.update(cx, |state, _cx| {
+            state.refresh_scripts();
+        });
+        self.refresh_scripts_tree(cx);
+
+        let item_id = SchemaNodeId::ScriptsFolder {
+            path: Some(path.to_string_lossy().to_string()),
         }
+        .to_string();
+
+        self.select_and_rename_item(&item_id, cx);
     }
 
     pub fn create_script_folder(&mut self, cx: &mut Context<Self>) {
