@@ -344,8 +344,8 @@ fn start_detached_hook_task(
                     )));
                 }
 
-                let details_result = result.as_ref().map(Clone::clone).map_err(|error| {
-                    detached_process_error_message(error, &description_for_completion)
+                let details_result = result.clone().map_err(|error| {
+                    detached_process_error_message(&error, &description_for_completion)
                 });
 
                 let details =
@@ -630,13 +630,13 @@ async fn run_hook_phase(
                 }
             }
 
-            if readiness_error.is_none() && phase == HookPhase::PreConnect {
-                if let (Some(host), Some(port)) = (context.host.clone(), context.port)
-                    && let Err(state) =
-                        wait_for_hook_endpoint_ready(host, port, parent_cancel.as_ref(), cx).await
-                {
-                    readiness_error = Some(state);
-                }
+            if readiness_error.is_none()
+                && phase == HookPhase::PreConnect
+                && let (Some(host), Some(port)) = (context.host.clone(), context.port)
+                && let Err(state) =
+                    wait_for_hook_endpoint_ready(host, port, parent_cancel.as_ref(), cx).await
+            {
+                readiness_error = Some(state);
             }
 
             match readiness_error {

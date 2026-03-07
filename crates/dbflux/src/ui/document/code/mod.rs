@@ -12,9 +12,8 @@ use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_core::{
     DangerousAction, DangerousQueryKind, DbError, DiagnosticSeverity as CoreDiagnosticSeverity,
     DriverCapabilities, EditorDiagnostic as CoreEditorDiagnostic, ExecutionContext, HistoryEntry,
-    OutputReceiver, QueryLanguage, QueryRequest, QueryResult, RefreshPolicy,
-    SchemaLoadingStrategy, TaskTarget,
-    ValidationResult, detect_dangerous_query,
+    OutputReceiver, QueryLanguage, QueryRequest, QueryResult, RefreshPolicy, SchemaLoadingStrategy,
+    TaskTarget, ValidationResult, detect_dangerous_query,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::*;

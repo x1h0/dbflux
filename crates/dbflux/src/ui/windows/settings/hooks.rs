@@ -865,10 +865,9 @@ impl SettingsWindow {
             self.selected_hook_kind(cx),
             HookKindSelection::Script | HookKindSelection::Lua
         ) && self.current_script_file_path(cx).is_none()
+            && self.ensure_hook_script_file(window, cx, false).is_none()
         {
-            if self.ensure_hook_script_file(window, cx, false).is_none() {
-                return;
-            }
+            return;
         }
 
         let (hook_id, hook) = match self.hook_from_form(cx, true) {
