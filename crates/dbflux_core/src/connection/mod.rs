@@ -13,8 +13,12 @@ pub(crate) mod tree_store;
 
 pub use context::ExecutionContext;
 pub use hook::{
-    ConnectionHook, ConnectionHookBindings, ConnectionHooks, HookContext, HookExecution,
-    HookFailureMode, HookPhase, HookPhaseOutcome, HookResult, HookRunner,
+    ConnectionHook, ConnectionHookBindings, ConnectionHooks, DetachedProcessHandle,
+    DetachedProcessReceiver, DetachedProcessSender, HookContext, HookExecution, HookExecutionMode,
+    HookExecutor, HookFailureMode, HookKind, HookPhase, HookPhaseOutcome, HookResult, HookRunner,
+    LuaCapabilities, OutputEvent, OutputReceiver, OutputSender, OutputStreamKind,
+    ProcessExecutionError, ProcessExecutor, ScriptLanguage, ScriptSource, detached_process_channel,
+    execute_streaming_process, output_channel,
 };
 pub use item_manager::{Identifiable, ItemManager};
 pub use manager::{

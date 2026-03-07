@@ -1,9 +1,12 @@
 use super::*;
+use gpui_component::scroll::ScrollableElement;
 
-impl SqlQueryDocument {
+impl CodeDocument {
     fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let is_executing = self.state == DocumentState::Executing;
+        let is_db_language = self.query_language.supports_connection_context();
+
         let auto_refresh_enabled = self.refresh_policy.is_auto();
         let refresh_label = if auto_refresh_enabled {
             self.refresh_policy.label()
@@ -34,6 +37,12 @@ impl SqlQueryDocument {
                 r.finished_at
                     .map(|finished| finished.duration_since(r.started_at))
             });
+
+        let shortcut_hint = if is_db_language {
+            "Ctrl+Enter (selection/full)"
+        } else {
+            "Ctrl+Enter"
+        };
 
         div()
             .id("sql-toolbar")
@@ -85,7 +94,7 @@ impl SqlQueryDocument {
                     )
                     .child(run_label),
             )
-            .when(!is_executing, |el| {
+            .when(is_db_language && !is_executing, |el| {
                 el.child(
                     div()
                         .id("run-in-new-tab-btn")
@@ -141,54 +150,56 @@ impl SqlQueryDocument {
                 div()
                     .text_xs()
                     .text_color(theme.muted_foreground)
-                    .child("Ctrl+Enter (selection/full)"),
+                    .child(shortcut_hint),
             )
-            .child(
-                div()
-                    .id("sql-refresh-control")
-                    .flex()
-                    .items_center()
-                    .gap_0()
-                    .h(Heights::BUTTON)
-                    .bg(theme.background)
-                    .border_1()
-                    .border_color(theme.input)
-                    .rounded(Radii::SM)
-                    .child(
-                        div()
-                            .id("sql-refresh-action")
-                            .h_full()
-                            .px(Spacing::SM)
-                            .flex()
-                            .items_center()
-                            .gap_1()
-                            .text_sm()
-                            .cursor_pointer()
-                            .text_color(theme.foreground)
-                            .hover(|d| d.bg(theme.accent.opacity(0.08)))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                if this.runner.is_primary_active() {
-                                    this.cancel_query(cx);
-                                } else {
-                                    this.run_query(window, cx);
-                                }
-                            }))
-                            .child(
-                                svg()
-                                    .path(refresh_icon.path())
-                                    .size_3()
-                                    .text_color(theme.foreground),
-                            )
-                            .child(refresh_label),
-                    )
-                    .child(div().w(px(1.0)).h_full().bg(theme.input))
-                    .child(
-                        div()
-                            .w(px(28.0))
-                            .h_full()
-                            .child(self.refresh_dropdown.clone()),
-                    ),
-            )
+            .when(is_db_language, |el| {
+                el.child(
+                    div()
+                        .id("sql-refresh-control")
+                        .flex()
+                        .items_center()
+                        .gap_0()
+                        .h(Heights::BUTTON)
+                        .bg(theme.background)
+                        .border_1()
+                        .border_color(theme.input)
+                        .rounded(Radii::SM)
+                        .child(
+                            div()
+                                .id("sql-refresh-action")
+                                .h_full()
+                                .px(Spacing::SM)
+                                .flex()
+                                .items_center()
+                                .gap_1()
+                                .text_sm()
+                                .cursor_pointer()
+                                .text_color(theme.foreground)
+                                .hover(|d| d.bg(theme.accent.opacity(0.08)))
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    if this.runner.is_primary_active() {
+                                        this.cancel_query(cx);
+                                    } else {
+                                        this.run_query(window, cx);
+                                    }
+                                }))
+                                .child(
+                                    svg()
+                                        .path(refresh_icon.path())
+                                        .size_3()
+                                        .text_color(theme.foreground),
+                                )
+                                .child(refresh_label),
+                        )
+                        .child(div().w(px(1.0)).h_full().bg(theme.input))
+                        .child(
+                            div()
+                                .w(px(28.0))
+                                .h_full()
+                                .child(self.refresh_dropdown.clone()),
+                        ),
+                )
+            })
             .child(div().flex_1())
             .when_some(execution_time, |el, duration| {
                 el.child(
@@ -251,9 +262,10 @@ impl SqlQueryDocument {
             .and_then(|r| r.error.clone());
 
         let has_error = error.is_some();
+        let has_live_output = self.live_output.is_some() && !has_error;
         let active_grid = self.active_result_grid();
         let has_grid = active_grid.is_some();
-        let has_tabs = !self.result_tabs.is_empty();
+        let has_tabs = !has_live_output && !self.result_tabs.is_empty();
 
         div()
             .size_full()
@@ -269,11 +281,86 @@ impl SqlQueryDocument {
                     .flex_1()
                     .overflow_hidden()
                     .when_some(error, |el, err| el.child(self.render_error_state(&err, cx)))
-                    .when_some(active_grid, |el, grid| el.child(grid))
-                    .when(!has_grid && !has_error, |el| {
+                    .when(has_live_output, |el| el.child(self.render_live_output(cx)))
+                    .when(!has_live_output, |el| {
+                        el.when_some(active_grid, |el, grid| el.child(grid))
+                    })
+                    .when(!has_live_output && !has_grid && !has_error, |el| {
                         el.child(self.render_empty_results(cx))
                     }),
             )
+    }
+
+    fn render_live_output(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let live_output = self
+            .live_output
+            .as_ref()
+            .expect("live output state should exist when rendering");
+
+        let status = if self.state == DocumentState::Executing {
+            "Running..."
+        } else if live_output.is_finished() {
+            "Stopped"
+        } else {
+            "Output"
+        };
+
+        let text = SharedString::from(live_output.render_text());
+        let line_count = live_output.line_count();
+
+        div()
+            .id("script-live-output")
+            .size_full()
+            .flex()
+            .flex_col()
+            .bg(theme.background)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .px(Spacing::MD)
+                    .py(Spacing::SM)
+                    .border_b_1()
+                    .border_color(theme.border)
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(theme.foreground)
+                            .child(status),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child(format!("{} lines", line_count)),
+                    )
+                    .when(live_output.has_stderr(), |el| {
+                        el.child(div().text_xs().text_color(theme.warning).child("stderr"))
+                    }),
+            )
+            .child(
+                div().flex_1().overflow_y_scrollbar().p(Spacing::MD).child(
+                    div()
+                        .font_family("monospace")
+                        .text_size(FontSizes::SM)
+                        .text_color(theme.foreground)
+                        .whitespace_nowrap()
+                        .child(text),
+                ),
+            )
+            .when(live_output.is_truncated(), |el| {
+                el.child(
+                    div()
+                        .px(Spacing::MD)
+                        .pb(Spacing::SM)
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child("(truncated at 5000 lines)"),
+                )
+            })
     }
 
     fn render_results_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -653,7 +740,7 @@ impl SqlQueryDocument {
     }
 }
 
-impl Render for SqlQueryDocument {
+impl Render for CodeDocument {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.process_pending_result(window, cx);
 

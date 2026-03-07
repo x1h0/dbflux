@@ -55,7 +55,7 @@ fn task_target_for_execution(
     }
 }
 
-impl SqlQueryDocument {
+impl CodeDocument {
     /// Returns selected text when a non-empty selection exists.
     fn selected_query(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<String> {
         self.input_state.update(cx, |state, cx| {
@@ -79,7 +79,53 @@ impl SqlQueryDocument {
             .unwrap_or_else(|| self.input_state.read(cx).value().to_string())
     }
 
+    fn clear_live_output(&mut self) {
+        self.live_output = None;
+        self._live_output_drain = None;
+    }
+
+    fn start_live_output(&mut self, receiver: OutputReceiver, cx: &mut Context<Self>) {
+        self.live_output = Some(LiveOutputState::new(receiver));
+        self._live_output_drain = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(150))
+                    .await;
+
+                let should_continue = cx
+                    .update(|cx| {
+                        let Some(entity) = this.upgrade() else {
+                            return false;
+                        };
+
+                        entity.update(cx, |doc, cx| {
+                            let Some(live_output) = doc.live_output.as_mut() else {
+                                return false;
+                            };
+
+                            let changed = live_output.drain();
+
+                            if changed {
+                                cx.notify();
+                            }
+
+                            !live_output.is_finished()
+                        })
+                    })
+                    .unwrap_or(false);
+
+                if !should_continue {
+                    break;
+                }
+            }
+        }));
+    }
+
     pub fn run_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.query_language.supports_connection_context() {
+            self.run_script(window, cx);
+            return;
+        }
         self.run_query_impl(false, window, cx);
     }
 
@@ -88,6 +134,11 @@ impl SqlQueryDocument {
             cx.toast_warning("Select query text to run", window);
             return;
         };
+
+        if !self.query_language.supports_connection_context() {
+            self.run_script(window, cx);
+            return;
+        }
 
         self.run_query_text(query, false, window, cx);
     }
@@ -218,6 +269,7 @@ impl SqlQueryDocument {
             }
         };
 
+        self.clear_live_output();
         self.run_in_new_tab = in_new_tab;
 
         let description = dbflux_core::truncate_string_safe(query.trim(), 80);
@@ -415,6 +467,7 @@ impl SqlQueryDocument {
             return;
         };
 
+        self.clear_live_output();
         self.state = DocumentState::Clean;
 
         let Some(record) = self
@@ -574,6 +627,13 @@ impl SqlQueryDocument {
 
     pub fn cancel_query(&mut self, cx: &mut Context<Self>) {
         if self.runner.cancel_primary(cx) {
+            if let Some(index) = self.active_execution_index
+                && let Some(record) = self.execution_history.get_mut(index)
+                && record.finished_at.is_none()
+            {
+                record.finished_at = Some(Instant::now());
+            }
+
             if let Some(task) = self.active_query_task.as_ref() {
                 self.app_state
                     .read(cx)
@@ -622,6 +682,10 @@ impl SqlQueryDocument {
     }
 
     pub fn run_query_in_new_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.query_language.supports_connection_context() {
+            self.run_script(window, cx);
+            return;
+        }
         self.run_query_impl(true, window, cx);
     }
 
@@ -658,5 +722,182 @@ impl SqlQueryDocument {
         self.active_result_index
             .and_then(|i| self.result_tabs.get(i))
             .map(|tab| tab.grid.clone())
+    }
+
+    fn run_script(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::hook_executor::CompositeExecutor;
+        use dbflux_core::{
+            CancelToken, ConnectionHook, HookContext, HookExecutionMode, HookExecutor,
+            HookFailureMode, HookKind, LuaCapabilities, ScriptLanguage, ScriptSource,
+        };
+
+        let content = self.input_state.read(cx).value().to_string();
+        if content.trim().is_empty() {
+            cx.toast_warning("Enter script content to run", window);
+            return;
+        }
+
+        let kind = match &self.query_language {
+            QueryLanguage::Lua => HookKind::Lua {
+                source: ScriptSource::Inline {
+                    content: content.clone(),
+                },
+                capabilities: LuaCapabilities::all_enabled(),
+            },
+            QueryLanguage::Python => HookKind::Script {
+                language: ScriptLanguage::Python,
+                source: ScriptSource::Inline {
+                    content: content.clone(),
+                },
+                interpreter: None,
+            },
+            QueryLanguage::Bash => HookKind::Script {
+                language: ScriptLanguage::Bash,
+                source: ScriptSource::Inline {
+                    content: content.clone(),
+                },
+                interpreter: None,
+            },
+            _ => return,
+        };
+
+        let hook = ConnectionHook {
+            enabled: true,
+            kind,
+            cwd: None,
+            env: std::collections::HashMap::new(),
+            inherit_env: true,
+            timeout_ms: Some(30_000),
+            execution_mode: HookExecutionMode::Blocking,
+            ready_signal: None,
+            on_failure: HookFailureMode::Warn,
+        };
+
+        let context = HookContext {
+            profile_id: Uuid::nil(),
+            profile_name: "script-runner".to_string(),
+            db_kind: "none".to_string(),
+            host: None,
+            port: None,
+            database: None,
+            phase: None,
+        };
+
+        let description = format!("Run {} script", self.query_language.display_name());
+        let (output_sender, output_receiver) = dbflux_core::output_channel();
+        let (task_id, cancel_token) =
+            self.runner
+                .start_primary(dbflux_core::TaskKind::Query, description, cx);
+
+        let exec_id = Uuid::new_v4();
+        let record = ExecutionRecord {
+            id: exec_id,
+            started_at: Instant::now(),
+            finished_at: None,
+            result: None,
+            error: None,
+            rows_affected: None,
+        };
+        self.execution_history.push(record);
+        self.active_execution_index = Some(self.execution_history.len() - 1);
+
+        self.clear_live_output();
+        self.start_live_output(output_receiver, cx);
+        self.state = DocumentState::Executing;
+        self.run_in_new_tab = false;
+        if self.layout == SqlQueryLayout::EditorOnly {
+            self.layout = SqlQueryLayout::Split;
+        }
+        cx.emit(DocumentEvent::ExecutionStarted);
+        cx.notify();
+
+        let executor = CompositeExecutor::new();
+        let bg_cancel = cancel_token.clone();
+
+        let task = cx.background_executor().spawn(async move {
+            let started_at = Instant::now();
+            let result = executor.execute_hook(
+                &hook,
+                &context,
+                &bg_cancel,
+                None,
+                Some(&output_sender),
+                None,
+            );
+
+            match result {
+                Ok(hook_result) => {
+                    let mut output = String::new();
+
+                    if !hook_result.stdout.is_empty() {
+                        output.push_str(&hook_result.stdout);
+                    }
+
+                    if !hook_result.stderr.is_empty() {
+                        if !output.is_empty() {
+                            output.push_str("\n--- stderr ---\n");
+                        }
+                        output.push_str(&hook_result.stderr);
+                    }
+
+                    if hook_result.timed_out {
+                        output.push_str("\n[Script timed out]");
+                    }
+
+                    let exit_info = match hook_result.exit_code {
+                        Some(0) => None,
+                        Some(code) => Some(format!("Process exited with code {}", code)),
+                        None if hook_result.timed_out => None,
+                        None => Some("Process exited without status code".to_string()),
+                    };
+
+                    if let Some(info) = exit_info {
+                        if !output.is_empty() {
+                            output.push('\n');
+                        }
+                        output.push_str(&info);
+                    }
+
+                    if output.is_empty() {
+                        output = "(no output)".to_string();
+                    }
+
+                    let elapsed = started_at.elapsed();
+                    Ok(QueryResult {
+                        shape: dbflux_core::QueryResultShape::Text,
+                        columns: Vec::new(),
+                        rows: Vec::new(),
+                        affected_rows: None,
+                        execution_time: elapsed,
+                        text_body: Some(output),
+                        raw_bytes: None,
+                    })
+                }
+                Err(error) => Err(DbError::query_failed(error)),
+            }
+        });
+
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+
+            if cancel_token.is_cancelled() {
+                return;
+            }
+
+            cx.update(|cx| {
+                this.update(cx, |doc, cx| {
+                    doc.pending_result = Some(PendingQueryResult {
+                        task_id,
+                        exec_id,
+                        query: content,
+                        result,
+                    });
+                    cx.notify();
+                })
+                .ok();
+            })
+            .ok();
+        })
+        .detach();
     }
 }

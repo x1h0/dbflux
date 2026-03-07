@@ -25,7 +25,7 @@ use dbflux_core::{
     DropForeignKeyRequest, DropIndexRequest, DropTypeRequest, IndexData, IndexDirection,
     QueryLanguage, ReindexRequest, SchemaCacheKey, SchemaForeignKeyInfo, SchemaIndexInfo,
     SchemaLoadingStrategy, SchemaNodeId, SchemaNodeKind, SchemaSnapshot, TableInfo, TableRef,
-    TaskKind, TypeDefinition, ViewInfo,
+    TypeDefinition, ViewInfo,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::*;

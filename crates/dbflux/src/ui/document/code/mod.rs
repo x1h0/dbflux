@@ -12,7 +12,8 @@ use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_core::{
     DangerousAction, DangerousQueryKind, DbError, DiagnosticSeverity as CoreDiagnosticSeverity,
     DriverCapabilities, EditorDiagnostic as CoreEditorDiagnostic, ExecutionContext, HistoryEntry,
-    QueryLanguage, QueryRequest, QueryResult, RefreshPolicy, SchemaLoadingStrategy, TaskTarget,
+    OutputReceiver, QueryLanguage, QueryRequest, QueryResult, RefreshPolicy,
+    SchemaLoadingStrategy, TaskTarget,
     ValidationResult, detect_dangerous_query,
 };
 use gpui::prelude::FluentBuilder;
@@ -43,11 +44,13 @@ mod diagnostics;
 mod execution;
 mod file_ops;
 mod focus;
+mod live_output;
 mod render;
 
 use completion::QueryCompletionProvider;
+use live_output::LiveOutputState;
 
-/// A single result tab within the SqlQueryDocument.
+/// A single result tab within the CodeDocument.
 struct ResultTab {
     id: Uuid,
     title: String,
@@ -73,7 +76,7 @@ pub enum SqlQueryFocus {
     ContextBar,
 }
 
-pub struct SqlQueryDocument {
+pub struct CodeDocument {
     // Identity
     id: DocumentId,
     title: String,
@@ -106,6 +109,8 @@ pub struct SqlQueryDocument {
     execution_history: Vec<ExecutionRecord>,
     active_execution_index: Option<usize>,
     pending_result: Option<PendingQueryResult>,
+    live_output: Option<LiveOutputState>,
+    _live_output_drain: Option<Task<()>>,
     active_query_task: Option<ActiveQueryTask>,
 
     // Result tabs
@@ -187,7 +192,7 @@ pub struct ExecutionRecord {
     pub rows_affected: Option<u64>,
 }
 
-impl SqlQueryDocument {
+impl CodeDocument {
     pub fn new(app_state: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let connection_id = app_state.read(cx).active_connection_id();
 
@@ -222,8 +227,11 @@ impl SqlQueryDocument {
         let completion_provider: Rc<dyn CompletionProvider> = Rc::new(
             QueryCompletionProvider::new(query_language.clone(), app_state.clone(), connection_id),
         );
+        let supports_connection_context = query_language.supports_connection_context();
+
         input_state.update(cx, |state, _cx| {
-            state.lsp.completion_provider = Some(completion_provider);
+            state.lsp.completion_provider =
+                supports_connection_context.then_some(completion_provider.clone());
         });
 
         let input_change_sub = cx.subscribe_in(
@@ -368,6 +376,8 @@ impl SqlQueryDocument {
             execution_history: Vec::new(),
             active_execution_index: None,
             pending_result: None,
+            live_output: None,
+            _live_output_drain: None,
             active_query_task: None,
             result_tabs: Vec::new(),
             active_result_index: None,
@@ -814,4 +824,4 @@ impl SqlQueryDocument {
     }
 }
 
-impl EventEmitter<DocumentEvent> for SqlQueryDocument {}
+impl EventEmitter<DocumentEvent> for CodeDocument {}

@@ -291,13 +291,26 @@ pub struct SettingsWindow {
     editing_hook_id: Option<String>,
     pending_delete_hook_id: Option<String>,
     input_hook_id: Entity<InputState>,
+    hook_kind_dropdown: Entity<Dropdown>,
     input_hook_command: Entity<InputState>,
     input_hook_args: Entity<InputState>,
+    script_language_dropdown: Entity<Dropdown>,
+    script_source_dropdown: Entity<Dropdown>,
+    input_hook_script_file_path: Entity<InputState>,
+    input_hook_script_content: Entity<InputState>,
+    hook_script_content_subscription: Option<Subscription>,
+    input_hook_interpreter: Entity<InputState>,
+    hook_execution_mode_dropdown: Entity<Dropdown>,
+    input_hook_ready_signal: Entity<InputState>,
     input_hook_cwd: Entity<InputState>,
     input_hook_env: Entity<InputState>,
     input_hook_timeout: Entity<InputState>,
     hook_enabled: bool,
     hook_inherit_env: bool,
+    hook_lua_logging: bool,
+    hook_lua_env_read: bool,
+    hook_lua_connection_metadata: bool,
+    hook_lua_process_run: bool,
     hook_failure_dropdown: Entity<Dropdown>,
 
     // Drivers section state
@@ -343,3 +356,10 @@ pub struct SettingsWindow {
 pub struct DismissEvent;
 
 impl EventEmitter<DismissEvent> for SettingsWindow {}
+
+#[derive(Clone, Debug)]
+pub enum SettingsEvent {
+    OpenScript { path: std::path::PathBuf },
+}
+
+impl EventEmitter<SettingsEvent> for SettingsWindow {}

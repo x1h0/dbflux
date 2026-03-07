@@ -1,6 +1,6 @@
 use super::*;
 
-impl SqlQueryDocument {
+impl CodeDocument {
     /// Save to the current path. If no path is set, redirects to Save As.
     pub fn save_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(path) = self.path.clone() else {
@@ -45,7 +45,15 @@ impl SqlQueryDocument {
                 .unwrap_or("untitled")
                 .to_string()
         } else {
-            format!("untitled.{}", default_ext)
+            let title = self.title.trim();
+
+            if title.is_empty() {
+                format!("untitled.{}", default_ext)
+            } else if title.contains('.') {
+                title.to_string()
+            } else {
+                format!("{}.{}", title, default_ext)
+            }
         };
 
         let entity = cx.entity().clone();
@@ -211,6 +219,10 @@ impl SqlQueryDocument {
         let editor_content = self.input_state.read(cx).value().to_string();
 
         let language = self.query_language.clone();
+        if !language.supports_connection_context() {
+            return editor_content;
+        }
+
         let header = self.exec_ctx.to_comment_header(language.clone());
         if header.is_empty() {
             return editor_content;
