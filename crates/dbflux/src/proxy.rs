@@ -1,5 +1,6 @@
 use std::any::Any;
 
+use dbflux_core::secrecy::ExposeSecret;
 use dbflux_core::ResolvedProxy;
 use dbflux_proxy::{ProxyTunnel, ProxyTunnelConfig};
 
@@ -12,7 +13,10 @@ pub fn create_proxy_tunnel(
     remote_host: &str,
     remote_port: u16,
 ) -> Result<(Box<dyn Any + Send + Sync>, u16), String> {
-    let config = ProxyTunnelConfig::from_profile(&resolved.profile, resolved.secret.as_deref());
+    let config = ProxyTunnelConfig::from_profile(
+        &resolved.profile,
+        resolved.secret.as_ref().map(|value| value.expose_secret()),
+    );
 
     let tunnel = ProxyTunnel::start(config, remote_host.to_string(), remote_port)
         .map_err(|e| e.to_string())?;

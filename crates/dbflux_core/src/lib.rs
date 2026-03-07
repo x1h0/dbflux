@@ -102,6 +102,7 @@ pub use sql::{
 };
 
 pub use chrono;
+pub use secrecy;
 pub use storage::{
     HasSecretRef, HistoryEntry, HistoryManager, HistoryStore, JsonStore, KeyringSecretStore,
     NoopSecretStore, ProfileStore, ProxyStore, RecentFile, RecentFilesStore, SavedQuery,

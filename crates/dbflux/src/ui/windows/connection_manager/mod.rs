@@ -14,6 +14,7 @@ use crate::keymap::KeymapStack;
 use crate::ui::components::dropdown::{Dropdown, DropdownSelectionChanged};
 use crate::ui::components::form_renderer::{self, FormRendererState};
 use crate::ui::windows::ssh_shared::SshAuthSelection;
+use dbflux_core::secrecy::ExposeSecret;
 use dbflux_core::{
     ConnectionHookBindings, DbDriver, DbKind, DriverFormDef, FormFieldDef, FormFieldKind,
     GlobalOverrides,
@@ -464,8 +465,9 @@ impl ConnectionManagerWindow {
         });
 
         if let Some(password) = app_state.read(cx).get_password(profile) {
+            let password = password.expose_secret().to_string();
             instance.input_password.update(cx, |state, cx| {
-                state.set_value(&password, window, cx);
+                state.set_value(password.clone(), window, cx);
             });
         }
 
@@ -507,15 +509,16 @@ impl ConnectionManagerWindow {
             }
 
             if let Some(ssh_secret) = app_state.read(cx).get_ssh_password(profile) {
+                let ssh_secret = ssh_secret.expose_secret().to_string();
                 match instance.ssh_auth_method {
                     SshAuthSelection::PrivateKey => {
                         instance.input_ssh_key_passphrase.update(cx, |state, cx| {
-                            state.set_value(&ssh_secret, window, cx);
+                            state.set_value(ssh_secret.clone(), window, cx);
                         });
                     }
                     SshAuthSelection::Password => {
                         instance.input_ssh_password.update(cx, |state, cx| {
-                            state.set_value(&ssh_secret, window, cx);
+                            state.set_value(ssh_secret.clone(), window, cx);
                         });
                     }
                 }

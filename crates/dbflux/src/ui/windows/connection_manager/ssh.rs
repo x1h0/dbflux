@@ -1,6 +1,7 @@
 use crate::ui::components::dropdown::DropdownSelectionChanged;
 use crate::ui::windows::ssh_shared::SshAuthSelection;
 use dbflux_core::{SshAuthMethod, SshTunnelProfile};
+use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use gpui::*;
 use log::info;
 use uuid::Uuid;
@@ -22,7 +23,7 @@ impl ConnectionManagerWindow {
     pub(super) fn apply_ssh_tunnel(
         &mut self,
         tunnel: &SshTunnelProfile,
-        secret: Option<String>,
+        secret: Option<SecretString>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -48,16 +49,18 @@ impl ConnectionManagerWindow {
                     });
                 }
                 if let Some(ref passphrase) = secret {
+                    let passphrase = passphrase.expose_secret().to_string();
                     self.input_ssh_key_passphrase.update(cx, |state, cx| {
-                        state.set_value(passphrase, window, cx);
+                        state.set_value(passphrase.clone(), window, cx);
                     });
                 }
             }
             SshAuthMethod::Password => {
                 self.ssh_auth_method = SshAuthSelection::Password;
                 if let Some(ref password) = secret {
+                    let password = password.expose_secret().to_string();
                     self.input_ssh_password.update(cx, |state, cx| {
-                        state.set_value(password, window, cx);
+                        state.set_value(password.clone(), window, cx);
                     });
                 }
             }

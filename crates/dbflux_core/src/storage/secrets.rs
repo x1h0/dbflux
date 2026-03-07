@@ -1,8 +1,9 @@
 use crate::DbError;
+use secrecy::SecretString;
 
 pub trait SecretStore: Send + Sync {
     fn is_available(&self) -> bool;
-    fn get(&self, secret_ref: &str) -> Result<Option<String>, DbError>;
+    fn get(&self, secret_ref: &str) -> Result<Option<SecretString>, DbError>;
     fn set(&self, secret_ref: &str, value: &str) -> Result<(), DbError>;
     fn delete(&self, secret_ref: &str) -> Result<(), DbError>;
 }
@@ -14,7 +15,7 @@ impl SecretStore for NoopSecretStore {
         false
     }
 
-    fn get(&self, _secret_ref: &str) -> Result<Option<String>, DbError> {
+    fn get(&self, _secret_ref: &str) -> Result<Option<SecretString>, DbError> {
         Ok(None)
     }
 
@@ -62,7 +63,7 @@ impl SecretStore for KeyringSecretStore {
         self.available
     }
 
-    fn get(&self, secret_ref: &str) -> Result<Option<String>, DbError> {
+    fn get(&self, secret_ref: &str) -> Result<Option<SecretString>, DbError> {
         if !self.available {
             return Ok(None);
         }
@@ -71,7 +72,7 @@ impl SecretStore for KeyringSecretStore {
             .map_err(|e| DbError::IoError(std::io::Error::other(e.to_string())))?;
 
         match entry.get_password() {
-            Ok(password) => Ok(Some(password)),
+            Ok(password) => Ok(Some(SecretString::from(password))),
             Err(keyring::Error::NoEntry) => Ok(None),
             Err(e) => Err(DbError::IoError(std::io::Error::other(e.to_string()))),
         }

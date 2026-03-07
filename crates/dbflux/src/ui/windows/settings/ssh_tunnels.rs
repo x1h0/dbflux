@@ -1,6 +1,7 @@
 use crate::app::AppStateChanged;
 use crate::ui::windows::ssh_shared::{self, SshAuthSelection};
 use dbflux_core::{SshAuthMethod, SshTunnelProfile};
+use dbflux_core::secrecy::ExposeSecret;
 use gpui::*;
 use uuid::Uuid;
 
@@ -189,15 +190,17 @@ impl SettingsWindow {
                     .update(cx, |s, cx| s.set_value(&path_str, window, cx));
 
                 if let Some(secret) = self.app_state.read(cx).get_ssh_tunnel_secret(tunnel) {
+                    let secret = secret.expose_secret().to_string();
                     self.input_ssh_key_passphrase
-                        .update(cx, |s, cx| s.set_value(&secret, window, cx));
+                        .update(cx, |s, cx| s.set_value(secret.clone(), window, cx));
                 }
             }
             SshAuthMethod::Password => {
                 self.ssh_auth_method = SshAuthSelection::Password;
                 if let Some(secret) = self.app_state.read(cx).get_ssh_tunnel_secret(tunnel) {
+                    let secret = secret.expose_secret().to_string();
                     self.input_ssh_password
-                        .update(cx, |s, cx| s.set_value(&secret, window, cx));
+                        .update(cx, |s, cx| s.set_value(secret.clone(), window, cx));
                 }
             }
         }

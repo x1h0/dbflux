@@ -5,6 +5,7 @@ use dbflux_core::{
     HookPhase, HookResult, OutputReceiver, ProcessExecutionError, TaskId, TaskKind,
     detached_process_channel, execute_streaming_process, output_channel,
 };
+use dbflux_core::secrecy::ExposeSecret;
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::time::{Duration, Instant};
 
@@ -874,10 +875,10 @@ impl Sidebar {
             state.add_profile_in_folder(cloned.clone(), folder_id);
 
             if let Some(pw) = password {
-                state.save_password(&cloned, &pw);
+                state.save_password(&cloned, pw.expose_secret());
             }
             if let Some(pw) = ssh_password {
-                state.save_ssh_password(&cloned, &pw);
+                state.save_ssh_password(&cloned, pw.expose_secret());
             }
 
             cx.emit(AppStateChanged);

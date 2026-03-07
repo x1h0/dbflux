@@ -1,3 +1,4 @@
+use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
     AppConfigStore, CancelToken, Connection, ConnectionHook, ConnectionHooks, ConnectionProfile,
     DbDriver, DbSchemaInfo, DriverKey, EffectiveSettings, FormValues, GeneralSettings,
@@ -5,7 +6,7 @@ use dbflux_core::{
     SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot, ScriptsDirectory, SecretStore,
     SessionFacade, SessionStore, ShutdownPhase, SshTunnelProfile, TaskId, TaskKind, TaskSnapshot,
 };
-use dbflux_driver_ipc::{IpcDriver, driver::IpcDriverLaunchConfig};
+use dbflux_driver_ipc::{driver::IpcDriverLaunchConfig, IpcDriver};
 use gpui::{EventEmitter, WindowHandle};
 use gpui_component::Root;
 use std::collections::{HashMap, HashSet};
@@ -651,11 +652,11 @@ impl AppState {
         self.facade.secrets.delete_password(profile);
     }
 
-    pub fn get_password(&self, profile: &ConnectionProfile) -> Option<String> {
+    pub fn get_password(&self, profile: &ConnectionProfile) -> Option<SecretString> {
         self.facade.secrets.get_password(profile)
     }
 
-    pub fn get_ssh_password(&self, profile: &ConnectionProfile) -> Option<String> {
+    pub fn get_ssh_password(&self, profile: &ConnectionProfile) -> Option<SecretString> {
         self.facade.secrets.get_ssh_password(profile)
     }
 
@@ -667,7 +668,7 @@ impl AppState {
         self.facade.secrets.delete_ssh_password(profile);
     }
 
-    pub fn get_ssh_tunnel_secret(&self, tunnel: &SshTunnelProfile) -> Option<String> {
+    pub fn get_ssh_tunnel_secret(&self, tunnel: &SshTunnelProfile) -> Option<SecretString> {
         self.facade.secrets.get_ssh_tunnel_secret(tunnel)
     }
 
@@ -723,7 +724,7 @@ impl AppState {
         self.facade.proxies.update(proxy);
     }
 
-    pub fn get_proxy_secret(&self, proxy: &dbflux_core::ProxyProfile) -> Option<String> {
+    pub fn get_proxy_secret(&self, proxy: &dbflux_core::ProxyProfile) -> Option<SecretString> {
         self.facade.secrets.get_proxy_secret(proxy)
     }
 

@@ -1,5 +1,6 @@
 use crate::app::AppStateChanged;
 use dbflux_core::{ProxyAuth, ProxyKind, ProxyProfile};
+use dbflux_core::secrecy::ExposeSecret;
 use gpui::*;
 use uuid::Uuid;
 
@@ -187,8 +188,9 @@ impl SettingsWindow {
                     .update(cx, |s, cx| s.set_value(username, window, cx));
 
                 if let Some(secret) = self.app_state.read(cx).get_proxy_secret(proxy) {
+                    let secret = secret.expose_secret().to_string();
                     self.input_proxy_password
-                        .update(cx, |s, cx| s.set_value(&secret, window, cx));
+                        .update(cx, |s, cx| s.set_value(secret.clone(), window, cx));
                 } else {
                     self.input_proxy_password
                         .update(cx, |s, cx| s.set_value("", window, cx));

@@ -5,6 +5,7 @@ use crate::{
     TaskTarget,
 };
 use log::{error, info};
+use secrecy::{ExposeSecret, SecretString};
 use std::any::Any;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -745,8 +746,8 @@ impl ConnectionManager {
         ssh_tunnels: &[SshTunnelProfile],
         proxies: &[ProxyProfile],
         secret_store: &Arc<RwLock<Box<dyn SecretStore>>>,
-        get_ssh_secret: impl FnOnce(&ConnectionProfile, &[SshTunnelProfile]) -> Option<String>,
-        proxy_secret: Option<String>,
+        get_ssh_secret: impl FnOnce(&ConnectionProfile, &[SshTunnelProfile]) -> Option<SecretString>,
+        proxy_secret: Option<SecretString>,
     ) -> Result<ConnectProfileParams, String> {
         let profile = profiles
             .iter()
@@ -774,7 +775,7 @@ impl ConnectionManager {
 
         let ssh_secret = get_ssh_secret(&profile, ssh_tunnels);
 
-        let resolved_proxy = Self::resolve_proxy(&profile, proxies, proxy_secret.as_deref());
+        let resolved_proxy = Self::resolve_proxy(&profile, proxies, proxy_secret.as_ref());
 
         Ok(ConnectProfileParams {
             profile,
@@ -790,7 +791,7 @@ impl ConnectionManager {
     fn resolve_proxy(
         profile: &ConnectionProfile,
         proxies: &[ProxyProfile],
-        proxy_secret: Option<&str>,
+        proxy_secret: Option<&SecretString>,
     ) -> Option<ResolvedProxy> {
         let proxy_id = profile.proxy_profile_id?;
 
@@ -812,7 +813,7 @@ impl ConnectionManager {
 
         Some(ResolvedProxy {
             profile: proxy.clone(),
-            secret: proxy_secret.map(|s| s.to_string()),
+            secret: proxy_secret.cloned(),
         })
     }
 
@@ -1151,7 +1152,7 @@ impl ConnectionManager {
 
 pub struct ResolvedProxy {
     pub profile: ProxyProfile,
-    pub secret: Option<String>,
+    pub secret: Option<SecretString>,
 }
 
 pub type CreateTunnelFn =
@@ -1161,7 +1162,7 @@ pub struct ConnectProfileParams {
     pub profile: ConnectionProfile,
     pub driver: Arc<dyn DbDriver>,
     pub secret_store: Option<Arc<RwLock<Box<dyn SecretStore>>>>,
-    pub ssh_secret: Option<String>,
+    pub ssh_secret: Option<SecretString>,
     pub proxy: Option<ResolvedProxy>,
 }
 
@@ -1220,7 +1221,13 @@ impl ConnectProfileParams {
 
         let connection = self
             .driver
-            .connect_with_secrets(&profile, password.as_deref(), self.ssh_secret.as_deref())
+            .connect_with_secrets(
+                &profile,
+                password.as_ref().map(|value| value.expose_secret()),
+                self.ssh_secret
+                    .as_ref()
+                    .map(|value| value.expose_secret()),
+            )
             .map_err(|e| e.to_string())?;
 
         let schema = match connection.schema() {
@@ -1246,7 +1253,7 @@ impl ConnectProfileParams {
         })
     }
 
-    fn get_password(&self) -> Option<String> {
+    fn get_password(&self) -> Option<SecretString> {
         if !self.profile.save_password {
             return None;
         }
@@ -1295,7 +1302,10 @@ impl SwitchDatabaseParams {
 
         let connection = self
             .driver
-            .connect_with_password(&self.new_profile, password.as_deref())
+            .connect_with_password(
+                &self.new_profile,
+                password.as_ref().map(|value| value.expose_secret()),
+            )
             .map_err(|e| format!("Failed to connect to {}: {:?}", self.database, e))?;
 
         let schema = match connection.schema() {
@@ -1322,7 +1332,7 @@ impl SwitchDatabaseParams {
         })
     }
 
-    fn get_password(&self) -> Option<String> {
+    fn get_password(&self) -> Option<SecretString> {
         if !self.original_profile.save_password {
             return None;
         }
@@ -1775,11 +1785,18 @@ mod tests {
         let proxy_id = proxy.id;
         let profile = make_profile_with_proxy(Some(proxy_id));
 
-        let resolved = ConnectionManager::resolve_proxy(&profile, &[proxy], Some("s3cret"));
+        let resolved = ConnectionManager::resolve_proxy(
+            &profile,
+            &[proxy],
+            Some(&SecretString::from("s3cret".to_string())),
+        );
 
         let resolved = resolved.expect("should resolve");
         assert_eq!(resolved.profile.id, proxy_id);
-        assert_eq!(resolved.secret.as_deref(), Some("s3cret"));
+        assert_eq!(
+            resolved.secret.as_ref().map(|value| value.expose_secret()),
+            Some("s3cret")
+        );
     }
 
     #[test]

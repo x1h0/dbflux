@@ -22,6 +22,7 @@ tree-sitter = "0.25"
 tree-sitter-sequel = "0.3"
 urlencoding = "2"
 tempfile = "3"
+secrecy = "0.10"
 
 [dev-dependencies]
 dbflux_test_support.workspace = true

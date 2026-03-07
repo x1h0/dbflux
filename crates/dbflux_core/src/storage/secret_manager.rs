@@ -1,5 +1,6 @@
 use crate::{ConnectionProfile, DbConfig, ProxyProfile, SecretStore, SshTunnelProfile};
 use log::error;
+use secrecy::SecretString;
 use std::sync::Arc;
 use std::sync::RwLock;
 
@@ -49,7 +50,7 @@ impl SecretManager {
         self.secret_store.clone()
     }
 
-    pub fn get_secret<T: HasSecretRef>(&self, item: &T, label: &str) -> Option<String> {
+    pub fn get_secret<T: HasSecretRef>(&self, item: &T, label: &str) -> Option<SecretString> {
         match self.store_read().get(&item.secret_ref()) {
             Ok(secret) => secret,
             Err(e) => {
@@ -111,7 +112,7 @@ impl SecretManager {
         }
     }
 
-    pub fn get_password(&self, profile: &ConnectionProfile) -> Option<String> {
+    pub fn get_password(&self, profile: &ConnectionProfile) -> Option<SecretString> {
         let store = self.store_read();
 
         if !store.is_available() {
@@ -127,7 +128,7 @@ impl SecretManager {
         }
     }
 
-    pub fn get_ssh_password(&self, profile: &ConnectionProfile) -> Option<String> {
+    pub fn get_ssh_password(&self, profile: &ConnectionProfile) -> Option<SecretString> {
         let store = self.store_read();
 
         if !store.is_available() {
@@ -167,7 +168,7 @@ impl SecretManager {
         }
     }
 
-    pub fn get_ssh_tunnel_secret(&self, tunnel: &SshTunnelProfile) -> Option<String> {
+    pub fn get_ssh_tunnel_secret(&self, tunnel: &SshTunnelProfile) -> Option<SecretString> {
         self.get_secret(tunnel, "SSH tunnel")
     }
 
@@ -179,7 +180,7 @@ impl SecretManager {
         self.delete_secret(tunnel, "SSH tunnel");
     }
 
-    pub fn get_proxy_secret(&self, proxy: &ProxyProfile) -> Option<String> {
+    pub fn get_proxy_secret(&self, proxy: &ProxyProfile) -> Option<SecretString> {
         self.get_secret(proxy, "proxy")
     }
 
@@ -195,7 +196,7 @@ impl SecretManager {
         &self,
         profile: &ConnectionProfile,
         proxies: &[ProxyProfile],
-    ) -> Option<String> {
+    ) -> Option<SecretString> {
         let proxy_id = profile.proxy_profile_id?;
         let proxy = proxies.iter().find(|p| p.id == proxy_id)?;
 
@@ -214,7 +215,7 @@ impl SecretManager {
         &self,
         profile: &ConnectionProfile,
         ssh_tunnels: &[SshTunnelProfile],
-    ) -> Option<String> {
+    ) -> Option<SecretString> {
         let (ssh_tunnel, ssh_tunnel_profile_id) = match &profile.config {
             DbConfig::Postgres {
                 ssh_tunnel,
