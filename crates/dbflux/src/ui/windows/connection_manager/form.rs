@@ -1,6 +1,7 @@
 use crate::ui::components::form_renderer;
 use crate::ui::components::toast::ToastExt;
 use crate::ui::windows::ssh_shared;
+use dbflux_core::secrecy::SecretString;
 use dbflux_core::{ConnectionProfile, DbConfig, FormFieldKind, SshTunnelConfig};
 use gpui::*;
 use log::info;
@@ -340,10 +341,10 @@ impl ConnectionManagerWindow {
         let password_opt = if password.is_empty() {
             None
         } else {
-            Some(password)
+            Some(SecretString::from(password))
         };
 
-        let ssh_secret = self.get_ssh_secret(cx);
+        let ssh_secret = self.get_ssh_secret(cx).map(SecretString::from);
 
         let Some(driver) = self.selected_driver.clone() else {
             self.test_status = TestStatus::Failed;
@@ -356,7 +357,7 @@ impl ConnectionManagerWindow {
         let this = cx.entity().clone();
 
         let task = cx.background_executor().spawn(async move {
-            driver.connect_with_secrets(&profile, password_opt.as_deref(), ssh_secret.as_deref())
+            driver.connect_with_secrets(&profile, password_opt.as_ref(), ssh_secret.as_ref())
         });
 
         cx.spawn(async move |_this, cx| {

@@ -1,6 +1,6 @@
 use crate::app::AppStateChanged;
-use dbflux_core::{ProxyAuth, ProxyKind, ProxyProfile};
 use dbflux_core::secrecy::ExposeSecret;
+use dbflux_core::{ProxyAuth, ProxyKind, ProxyProfile};
 use gpui::*;
 use uuid::Uuid;
 

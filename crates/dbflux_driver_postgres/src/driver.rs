@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
+use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
     AddEnumValueRequest, AddForeignKeyRequest, CodeGenCapabilities, CodeGenScope, CodeGenerator,
     CodeGeneratorInfo, ColumnInfo, ColumnMeta, Connection, ConnectionErrorFormatter,
@@ -273,10 +274,13 @@ impl DbDriver for PostgresDriver {
     fn connect_with_secrets(
         &self,
         profile: &ConnectionProfile,
-        password: Option<&str>,
-        ssh_secret: Option<&str>,
+        password: Option<&SecretString>,
+        ssh_secret: Option<&SecretString>,
     ) -> Result<Box<dyn Connection>, DbError> {
         let config = extract_postgres_config(&profile.config)?;
+
+        let password = password.map(|value| value.expose_secret());
+        let ssh_secret = ssh_secret.map(|value| value.expose_secret());
 
         if config.use_uri {
             return self.connect_with_uri(config.uri.as_deref().unwrap_or(""), password);

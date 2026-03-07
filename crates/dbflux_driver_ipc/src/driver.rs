@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use std::{process::Stdio, thread};
 
+use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
     ConnectionProfile, DbConfig, DbError, DbKind, DriverFormDef, DriverMetadata, FormValues,
 };
@@ -356,8 +357,8 @@ impl dbflux_core::DbDriver for IpcDriver {
     fn connect_with_secrets(
         &self,
         profile: &ConnectionProfile,
-        password: Option<&str>,
-        ssh_secret: Option<&str>,
+        password: Option<&SecretString>,
+        ssh_secret: Option<&SecretString>,
     ) -> Result<Box<dyn dbflux_core::Connection>, DbError> {
         self.ensure_host_running()?;
 
@@ -369,7 +370,11 @@ impl dbflux_core::DbDriver for IpcDriver {
             .map_err(|e| DbError::InvalidProfile(format!("JSON serialization failed: {e}")))?;
 
         let response = client
-            .open_session(&profile_json, password, ssh_secret)
+            .open_session(
+                &profile_json,
+                password.map(|value| value.expose_secret()),
+                ssh_secret.map(|value| value.expose_secret()),
+            )
             .map_err(DbError::from)?;
 
         let DriverResponseBody::SessionOpened {

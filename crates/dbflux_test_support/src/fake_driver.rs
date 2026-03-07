@@ -1,3 +1,4 @@
+use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
     Connection, ConnectionProfile, DatabaseCategory, DbConfig, DbDriver, DbError, DbKind,
     DriverCapabilities, DriverFormDef, DriverMetadata, FormValues, Icon, MONGODB_FORM, MYSQL_FORM,
@@ -276,8 +277,8 @@ impl DbDriver for FakeDriver {
     fn connect_with_secrets(
         &self,
         profile: &ConnectionProfile,
-        _password: Option<&str>,
-        _ssh_secret: Option<&str>,
+        _password: Option<&SecretString>,
+        _ssh_secret: Option<&SecretString>,
     ) -> Result<Box<dyn Connection>, DbError> {
         if let Some(message) = rwlock_read(&self.state.connect_error).clone() {
             return Err(DbError::connection_failed(message));

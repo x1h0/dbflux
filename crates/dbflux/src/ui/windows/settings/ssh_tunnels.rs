@@ -1,7 +1,7 @@
 use crate::app::AppStateChanged;
 use crate::ui::windows::ssh_shared::{self, SshAuthSelection};
-use dbflux_core::{SshAuthMethod, SshTunnelProfile};
 use dbflux_core::secrecy::ExposeSecret;
+use dbflux_core::{SshAuthMethod, SshTunnelProfile};
 use gpui::*;
 use uuid::Uuid;
 

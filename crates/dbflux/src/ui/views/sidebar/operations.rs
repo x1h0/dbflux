@@ -1,11 +1,11 @@
 use super::*;
 use crate::hook_executor::CompositeExecutor;
+use dbflux_core::secrecy::ExposeSecret;
 use dbflux_core::{
     CancelToken, ConnectionHook, DetachedProcessHandle, HookContext, HookExecutor, HookKind,
     HookPhase, HookResult, OutputReceiver, ProcessExecutionError, TaskId, TaskKind,
     detached_process_channel, execute_streaming_process, output_channel,
 };
-use dbflux_core::secrecy::ExposeSecret;
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::time::{Duration, Instant};
 

@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
     CodeGenCapabilities, CodeGenScope, CodeGenerator, CodeGeneratorInfo, ColumnInfo, ColumnMeta,
     Connection, ConnectionProfile, ConstraintInfo, ConstraintKind, CreateIndexRequest, CrudResult,
@@ -166,8 +167,8 @@ impl DbDriver for SqliteDriver {
     fn connect_with_secrets(
         &self,
         profile: &ConnectionProfile,
-        _password: Option<&str>,
-        _ssh_secret: Option<&str>,
+        _password: Option<&SecretString>,
+        _ssh_secret: Option<&SecretString>,
     ) -> Result<Box<dyn Connection>, DbError> {
         let path = match &profile.config {
             DbConfig::SQLite { path } => path.clone(),

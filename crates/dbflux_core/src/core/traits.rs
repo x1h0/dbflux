@@ -1,4 +1,5 @@
 use bitflags::bitflags;
+use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -261,7 +262,7 @@ pub trait DbDriver: Send + Sync {
     fn connect_with_password(
         &self,
         profile: &ConnectionProfile,
-        password: Option<&str>,
+        password: Option<&SecretString>,
     ) -> Result<Box<dyn Connection>, DbError> {
         self.connect_with_secrets(profile, password, None)
     }
@@ -273,8 +274,8 @@ pub trait DbDriver: Send + Sync {
     fn connect_with_secrets(
         &self,
         profile: &ConnectionProfile,
-        password: Option<&str>,
-        ssh_secret: Option<&str>,
+        password: Option<&SecretString>,
+        ssh_secret: Option<&SecretString>,
     ) -> Result<Box<dyn Connection>, DbError>;
 
     /// Test if a connection can be established without keeping it open.

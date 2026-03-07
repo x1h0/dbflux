@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 #[cfg(feature = "mysql")]
 use dbflux_core::DbKind;
+use dbflux_core::secrecy::SecretString;
 use dbflux_core::{ConnectionProfile, DbDriver};
 use dbflux_ipc::driver_protocol::{
     DriverHelloResponse, DriverRequestBody, DriverRequestEnvelope, DriverResponseBody,
@@ -263,7 +264,14 @@ fn handle_open_session(
         }
     };
 
-    match driver.connect_with_secrets(&profile, password, ssh_secret) {
+    let password_secret = password.map(|value| SecretString::from(value.to_string()));
+    let ssh_secret_secret = ssh_secret.map(|value| SecretString::from(value.to_string()));
+
+    match driver.connect_with_secrets(
+        &profile,
+        password_secret.as_ref(),
+        ssh_secret_secret.as_ref(),
+    ) {
         Ok(conn) => {
             let session_id = Uuid::new_v4();
             let kind = conn.kind();

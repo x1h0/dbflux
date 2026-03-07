@@ -5,6 +5,7 @@ use std::time::Instant;
 
 use std::sync::Arc;
 
+use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
     ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionProfile, DatabaseCategory,
     DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DefaultSqlDialect, Diagnostic,
@@ -391,10 +392,13 @@ impl DbDriver for RedisDriver {
     fn connect_with_secrets(
         &self,
         profile: &ConnectionProfile,
-        password: Option<&str>,
-        ssh_secret: Option<&str>,
+        password: Option<&SecretString>,
+        ssh_secret: Option<&SecretString>,
     ) -> Result<Box<dyn Connection>, DbError> {
         let config = extract_redis_config(&profile.config)?;
+
+        let password = password.map(|value| value.expose_secret());
+        let ssh_secret = ssh_secret.map(|value| value.expose_secret());
 
         if config.use_uri {
             if config.ssh_tunnel.is_some() {

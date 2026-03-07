@@ -1,7 +1,7 @@
 use crate::ui::components::dropdown::DropdownSelectionChanged;
 use crate::ui::windows::ssh_shared::SshAuthSelection;
-use dbflux_core::{SshAuthMethod, SshTunnelProfile};
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
+use dbflux_core::{SshAuthMethod, SshTunnelProfile};
 use gpui::*;
 use log::info;
 use uuid::Uuid;

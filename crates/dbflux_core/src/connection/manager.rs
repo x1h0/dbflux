@@ -5,7 +5,7 @@ use crate::{
     TaskTarget,
 };
 use log::{error, info};
-use secrecy::{ExposeSecret, SecretString};
+use secrecy::SecretString;
 use std::any::Any;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -1221,13 +1221,7 @@ impl ConnectProfileParams {
 
         let connection = self
             .driver
-            .connect_with_secrets(
-                &profile,
-                password.as_ref().map(|value| value.expose_secret()),
-                self.ssh_secret
-                    .as_ref()
-                    .map(|value| value.expose_secret()),
-            )
+            .connect_with_secrets(&profile, password.as_ref(), self.ssh_secret.as_ref())
             .map_err(|e| e.to_string())?;
 
         let schema = match connection.schema() {
@@ -1302,10 +1296,7 @@ impl SwitchDatabaseParams {
 
         let connection = self
             .driver
-            .connect_with_password(
-                &self.new_profile,
-                password.as_ref().map(|value| value.expose_secret()),
-            )
+            .connect_with_password(&self.new_profile, password.as_ref())
             .map_err(|e| format!("Failed to connect to {}: {:?}", self.database, e))?;
 
         let schema = match connection.schema() {
@@ -1517,6 +1508,7 @@ pub struct FetchSchemaForeignKeysResult {
 mod tests {
     use super::*;
     use crate::{DbConfig, DbError, DbKind, DriverCapabilities, DriverMetadata, QueryLanguage};
+    use secrecy::ExposeSecret;
 
     struct TestConnection {
         kind: DbKind,
@@ -1876,8 +1868,8 @@ mod tests {
         fn connect_with_secrets(
             &self,
             _profile: &ConnectionProfile,
-            _password: Option<&str>,
-            _ssh_secret: Option<&str>,
+            _password: Option<&SecretString>,
+            _ssh_secret: Option<&SecretString>,
         ) -> Result<Box<dyn Connection>, DbError> {
             Ok(Box::new(TestConnection::new(
                 DbKind::Postgres,
@@ -2053,8 +2045,8 @@ mod tests {
             fn connect_with_secrets(
                 &self,
                 _profile: &ConnectionProfile,
-                _password: Option<&str>,
-                _ssh_secret: Option<&str>,
+                _password: Option<&SecretString>,
+                _ssh_secret: Option<&SecretString>,
             ) -> Result<Box<dyn Connection>, DbError> {
                 Ok(Box::new(TestConnection::new(
                     DbKind::SQLite,
