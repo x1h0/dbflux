@@ -95,6 +95,13 @@ pub enum AppIcon {
     BrandMongodb,
     BrandRedis,
 
+    // Language brands (for script file icons)
+    BrandLua,
+    BrandPython,
+    BrandBash,
+    BrandJavaScript,
+    BrandInfluxDb,
+
     // App branding
     DbFlux,
 }
@@ -172,6 +179,11 @@ impl AppIcon {
             Self::BrandSqlite => "icons/brand/sqlite.svg",
             Self::BrandMongodb => "icons/brand/mongodb.svg",
             Self::BrandRedis => "icons/brand/redis.svg",
+            Self::BrandLua => "icons/brand/lua.svg",
+            Self::BrandPython => "icons/brand/python.svg",
+            Self::BrandBash => "icons/brand/gnubash.svg",
+            Self::BrandJavaScript => "icons/brand/javascript.svg",
+            Self::BrandInfluxDb => "icons/brand/influxdb.svg",
             Self::DbFlux => "icons/dbflux.svg",
         }
     }
@@ -281,7 +293,37 @@ impl AppIcon {
                 include_bytes!("../../../../../resources/icons/brand/mongodb.svg")
             }
             Self::BrandRedis => include_bytes!("../../../../../resources/icons/brand/redis.svg"),
+            Self::BrandLua => include_bytes!("../../../../../resources/icons/brand/lua.svg"),
+            Self::BrandPython => include_bytes!("../../../../../resources/icons/brand/python.svg"),
+            Self::BrandBash => include_bytes!("../../../../../resources/icons/brand/gnubash.svg"),
+            Self::BrandJavaScript => {
+                include_bytes!("../../../../../resources/icons/brand/javascript.svg")
+            }
+            Self::BrandInfluxDb => {
+                include_bytes!("../../../../../resources/icons/brand/influxdb.svg")
+            }
             Self::DbFlux => include_bytes!("../../../../../resources/icons/dbflux.svg"),
+        }
+    }
+
+    /// Returns the best icon for a given query language.
+    ///
+    /// Languages with a dedicated brand SVG get their own icon. Languages that
+    /// are DB-specific (SQL, MongoDB query, Redis, Cypher, CQL, InfluxQL) reuse
+    /// the corresponding DB brand icon when one exists, or fall back to a
+    /// generic file icon.
+    pub fn for_language(lang: &dbflux_core::QueryLanguage) -> Self {
+        use dbflux_core::QueryLanguage;
+        match lang {
+            QueryLanguage::Lua => Self::BrandLua,
+            QueryLanguage::Python => Self::BrandPython,
+            QueryLanguage::Bash => Self::BrandBash,
+            QueryLanguage::MongoQuery => Self::BrandMongodb,
+            QueryLanguage::RedisCommands => Self::BrandRedis,
+            QueryLanguage::InfluxQuery => Self::BrandInfluxDb,
+            QueryLanguage::Sql | QueryLanguage::Cql => Self::Database,
+            QueryLanguage::Cypher => Self::Database,
+            QueryLanguage::Custom(_) => Self::FileCode,
         }
     }
 
@@ -369,5 +411,10 @@ pub const ALL_ICONS: &[AppIcon] = &[
     AppIcon::BrandSqlite,
     AppIcon::BrandMongodb,
     AppIcon::BrandRedis,
+    AppIcon::BrandLua,
+    AppIcon::BrandPython,
+    AppIcon::BrandBash,
+    AppIcon::BrandJavaScript,
+    AppIcon::BrandInfluxDb,
     AppIcon::DbFlux,
 ];

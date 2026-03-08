@@ -733,7 +733,18 @@ fn resolve_node_icon(
         }
         SchemaNodeKind::CollectionIndex => (Some(AppIcon::Hash), "", params.color_purple),
         SchemaNodeKind::ScriptsFolder => (Some(AppIcon::Folder), "", theme.muted_foreground),
-        SchemaNodeKind::ScriptFile => (Some(AppIcon::ScrollText), "", theme.muted_foreground),
+        SchemaNodeKind::ScriptFile => {
+            let icon = parsed_id
+                .as_ref()
+                .and_then(|n| match n {
+                    SchemaNodeId::ScriptFile { path } => Some(path.as_str()),
+                    _ => None,
+                })
+                .and_then(|p| dbflux_core::QueryLanguage::from_path(std::path::Path::new(p)))
+                .map(|lang| AppIcon::for_language(&lang))
+                .unwrap_or(AppIcon::ScrollText);
+            (Some(icon), "", theme.muted_foreground)
+        }
         _ => (None, "", theme.muted_foreground),
     }
 }
