@@ -146,16 +146,19 @@ fn run_gui() {
         let theme_setting = app_state.read(cx).general_settings().theme;
         ui::theme::apply_theme(theme_setting, None, cx);
 
+        let mut main_window_options = WindowOptions {
+            app_id: Some("dbflux".into()),
+            titlebar: Some(TitlebarOptions {
+                title: Some("DBFlux".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        platform::apply_window_options(&mut main_window_options, 800.0, 600.0);
+
         let window_handle = cx
             .open_window(
-                WindowOptions {
-                    app_id: Some("dbflux".into()),
-                    titlebar: Some(TitlebarOptions {
-                        title: Some("DBFlux".into()),
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                },
+                main_window_options,
                 |window, cx| {
                     cx.bind_keys(command_palette_keybindings());
 

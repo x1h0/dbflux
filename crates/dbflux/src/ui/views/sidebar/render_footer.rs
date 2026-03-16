@@ -57,9 +57,7 @@ impl Sidebar {
                             focus: true,
                             ..Default::default()
                         };
-                        if let Some(kind) = platform::floating_window_kind() {
-                            options.kind = kind;
-                        }
+                        platform::apply_window_options(&mut options, 800.0, 600.0);
 
                         if let Ok(handle) = cx.open_window(
                             options,

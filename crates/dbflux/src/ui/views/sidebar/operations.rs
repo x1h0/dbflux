@@ -959,9 +959,7 @@ impl Sidebar {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             ..Default::default()
         };
-        if let Some(kind) = platform::floating_window_kind() {
-            options.kind = kind;
-        }
+        platform::apply_window_options(&mut options, 600.0, 500.0);
 
         if let Err(error) = cx.open_window(
             options,
@@ -2673,9 +2671,7 @@ impl Sidebar {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             ..Default::default()
         };
-        if let Some(kind) = platform::floating_window_kind() {
-            options.kind = kind;
-        }
+        platform::apply_window_options(&mut options, 600.0, 500.0);
 
         if let Err(error) = cx.open_window(
             options,

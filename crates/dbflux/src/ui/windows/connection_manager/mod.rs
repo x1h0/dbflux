@@ -1954,9 +1954,7 @@ impl ConnectionManagerWindow {
             focus: true,
             ..Default::default()
         };
-        if let Some(kind) = platform::floating_window_kind() {
-            options.kind = kind;
-        }
+        platform::apply_window_options(&mut options, 600.0, 500.0);
 
         let _ = cx.open_window(
             options,

@@ -3,7 +3,7 @@
 /// Different window systems have different behaviors and requirements.
 /// This module provides helpers to detect the current platform and
 /// adjust window creation accordingly.
-use gpui::WindowKind;
+use gpui::{px, WindowKind, WindowOptions};
 
 /// Returns true if running on X11 (not Wayland, macOS, or Windows).
 ///
@@ -46,4 +46,18 @@ pub fn floating_window_kind() -> Option<WindowKind> {
     } else {
         Some(WindowKind::Floating)
     }
+}
+
+/// Applies standard DBFlux window options: floating kind (where supported) and
+/// min size so X11 window managers emit `WM_NORMAL_HINTS`, enabling floating
+/// and resizing in tiling WMs like LeftWM, i3, and bspwm.
+pub fn apply_window_options(options: &mut WindowOptions, min_width: f32, min_height: f32) {
+    if let Some(kind) = floating_window_kind() {
+        options.kind = kind;
+    }
+
+    options.window_min_size = Some(gpui::Size {
+        width: px(min_width),
+        height: px(min_height),
+    });
 }

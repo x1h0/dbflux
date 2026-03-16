@@ -107,9 +107,7 @@ impl Sidebar {
                         ))),
                         ..Default::default()
                     };
-                    if let Some(kind) = platform::floating_window_kind() {
-                        options.kind = kind;
-                    }
+                    platform::apply_window_options(&mut options, 600.0, 500.0);
 
                     cx.open_window(options, |window, cx| {
                         let manager =
