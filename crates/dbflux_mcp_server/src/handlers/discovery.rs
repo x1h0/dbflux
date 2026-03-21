@@ -1,4 +1,5 @@
 use crate::bootstrap::ServerState;
+use crate::error_messages;
 
 use super::{get_or_connect, require_str};
 
@@ -41,16 +42,16 @@ fn get_connection(
     args: &serde_json::Value,
     state: &ServerState,
 ) -> Result<serde_json::Value, String> {
-    let connection_id = require_str(args, "connection_id")?;
+    let connection_id = require_str(args, "connection_id", "get_connection")?;
 
     let profile_uuid = connection_id
         .parse::<uuid::Uuid>()
-        .map_err(|_| format!("Invalid connection_id: {connection_id}"))?;
+        .map_err(|_| error_messages::invalid_connection_id(connection_id))?;
 
     let profile = state
         .profile_manager
         .find_by_id(profile_uuid)
-        .ok_or_else(|| format!("Connection not found: {connection_id}"))?;
+        .ok_or_else(|| error_messages::connection_not_found(connection_id))?;
 
     Ok(serde_json::json!({
         "id": profile.id.to_string(),
@@ -68,7 +69,7 @@ fn get_connection_metadata(
     args: &serde_json::Value,
     state: &mut ServerState,
 ) -> Result<serde_json::Value, String> {
-    let connection_id = require_str(args, "connection_id")?;
+    let connection_id = require_str(args, "connection_id", "get_connection_metadata")?;
 
     let connection = get_or_connect(state, connection_id)?;
     let metadata = connection.metadata();

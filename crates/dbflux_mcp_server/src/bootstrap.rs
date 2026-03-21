@@ -11,6 +11,7 @@ use dbflux_mcp::{
 };
 
 use crate::connection_cache::ConnectionCache;
+use crate::error_messages;
 
 /// All state loaded at startup that the server needs to handle requests.
 pub struct ServerState {
@@ -53,11 +54,13 @@ fn build_runtime(config_dir: Option<&std::path::Path>) -> Result<McpRuntime, Str
     let audit_service = match config_dir {
         Some(dir) => {
             let audit_path = dir.join("mcp_audit.sqlite");
-            dbflux_audit::AuditService::new_sqlite(&audit_path)
-                .map_err(|e| format!("Failed to init audit service: {e}"))?
+            dbflux_audit::AuditService::new_sqlite(&audit_path).map_err(|e| {
+                error_messages::config_error("initialize audit database", Some(&audit_path), e)
+            })?
         }
-        None => dbflux_audit::AuditService::new_sqlite_default()
-            .map_err(|e| format!("Failed to init default audit service: {e}"))?,
+        None => dbflux_audit::AuditService::new_sqlite_default().map_err(|e| {
+            error_messages::config_error("initialize default audit database", None, e)
+        })?,
     };
 
     let mut runtime = McpRuntime::new(audit_service);
@@ -128,13 +131,14 @@ fn load_governance_into_runtime(
     // Load user-defined governance from AppConfig.
     let config_store = match config_dir {
         Some(dir) => AppConfigStore::from_dir(dir)
-            .map_err(|e| format!("Failed to open config store: {e}"))?,
-        None => AppConfigStore::new().map_err(|e| format!("Failed to open config store: {e}"))?,
+            .map_err(|e| error_messages::config_error("open config store", Some(dir), e))?,
+        None => AppConfigStore::new()
+            .map_err(|e| error_messages::config_error("open config store", None, e))?,
     };
 
     let config = config_store
         .load()
-        .map_err(|e| format!("Failed to load config: {e}"))?;
+        .map_err(|e| error_messages::config_error("load config", None, e))?;
 
     for client in config.governance.trusted_clients {
         let _ = runtime.upsert_trusted_client_mut(TrustedClientDto {

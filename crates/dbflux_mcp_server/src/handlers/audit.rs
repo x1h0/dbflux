@@ -1,6 +1,7 @@
 use dbflux_mcp::{AuditExportFormat, AuditQuery, McpGovernanceService};
 
 use crate::bootstrap::ServerState;
+use crate::error_messages;
 
 use super::{optional_str, require_str};
 
@@ -36,7 +37,7 @@ fn query_audit_logs(
     };
 
     let entries = McpGovernanceService::query_audit_entries(&state.runtime, &query)
-        .map_err(|e| format!("query_audit_logs failed: {e}"))?;
+        .map_err(|e| error_messages::audit_error("query audit logs", e))?;
 
     let items: Vec<serde_json::Value> = entries
         .iter()
@@ -59,7 +60,7 @@ fn get_audit_entry(
     args: &serde_json::Value,
     state: &ServerState,
 ) -> Result<serde_json::Value, String> {
-    let entry_id = require_str(args, "entry_id")?;
+    let entry_id = require_str(args, "entry_id", "get_audit_entry")?;
 
     // Query by ID — filter from a full query.
     let query = AuditQuery {
@@ -72,7 +73,7 @@ fn get_audit_entry(
     };
 
     let entries = McpGovernanceService::query_audit_entries(&state.runtime, &query)
-        .map_err(|e| format!("get_audit_entry failed: {e}"))?;
+        .map_err(|e| error_messages::audit_error("get audit entry", e))?;
 
     let entry = entries
         .into_iter()
@@ -93,7 +94,7 @@ fn export_audit_logs(
     args: &serde_json::Value,
     state: &ServerState,
 ) -> Result<serde_json::Value, String> {
-    let format_str = require_str(args, "format")?;
+    let format_str = require_str(args, "format", "export_audit_logs")?;
     let format = match format_str {
         "csv" => AuditExportFormat::Csv,
         "json" => AuditExportFormat::Json,
@@ -112,7 +113,7 @@ fn export_audit_logs(
     };
 
     let exported = McpGovernanceService::export_audit_entries(&state.runtime, &query, format)
-        .map_err(|e| format!("export_audit_logs failed: {e}"))?;
+        .map_err(|e| error_messages::audit_error("export audit logs", e))?;
 
     Ok(serde_json::json!({
         "format": format_str,

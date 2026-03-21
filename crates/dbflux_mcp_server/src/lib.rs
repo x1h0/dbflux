@@ -1,5 +1,6 @@
 mod bootstrap;
 mod connection_cache;
+mod error_messages;
 mod handlers;
 mod server;
 mod transport;

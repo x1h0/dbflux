@@ -24,8 +24,8 @@ fn request_execution(
     args: &serde_json::Value,
     state: &mut ServerState,
 ) -> Result<serde_json::Value, String> {
-    let connection_id = require_str(args, "connection_id")?;
-    let tool_id = require_str(args, "tool_id")?;
+    let connection_id = require_str(args, "connection_id", "request_execution")?;
+    let tool_id = require_str(args, "tool_id", "request_execution")?;
     let payload = args
         .get("payload")
         .cloned()
@@ -78,10 +78,10 @@ fn get_pending_execution(
     args: &serde_json::Value,
     state: &ServerState,
 ) -> Result<serde_json::Value, String> {
-    let pending_id = require_str(args, "pending_id")?;
+    let pending_id = require_str(args, "pending_id", "get_pending_execution")?;
 
     let detail = McpGovernanceService::get_pending_execution(&state.runtime, pending_id)
-        .map_err(|e| format!("get_pending_execution failed: {e}"))?;
+        .map_err(|e| format!("Failed to get pending execution '{}': {}", pending_id, e))?;
 
     Ok(serde_json::json!({
         "id": detail.summary.id,
@@ -97,12 +97,12 @@ fn approve_execution(
     args: &serde_json::Value,
     state: &mut ServerState,
 ) -> Result<serde_json::Value, String> {
-    let pending_id = require_str(args, "pending_id")?;
+    let pending_id = require_str(args, "pending_id", "approve_execution")?;
 
     let entry = state
         .runtime
         .approve_pending_execution_mut(pending_id)
-        .map_err(|e| format!("approve_execution failed: {e}"))?;
+        .map_err(|e| format!("Failed to approve execution '{}': {}", pending_id, e))?;
 
     Ok(serde_json::json!({
         "audit_entry_id": entry.id,
@@ -114,12 +114,12 @@ fn reject_execution(
     args: &serde_json::Value,
     state: &mut ServerState,
 ) -> Result<serde_json::Value, String> {
-    let pending_id = require_str(args, "pending_id")?;
+    let pending_id = require_str(args, "pending_id", "reject_execution")?;
 
     let entry = state
         .runtime
         .reject_pending_execution_mut(pending_id)
-        .map_err(|e| format!("reject_execution failed: {e}"))?;
+        .map_err(|e| format!("Failed to reject execution '{}': {}", pending_id, e))?;
 
     Ok(serde_json::json!({
         "audit_entry_id": entry.id,

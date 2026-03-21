@@ -1,6 +1,7 @@
 use dbflux_core::{DataStructure, DescribeRequest, QueryResult, TableRef, Value};
 
 use crate::bootstrap::ServerState;
+use crate::error_messages;
 
 use super::{get_or_connect, optional_str, require_str};
 
@@ -22,12 +23,12 @@ fn list_databases(
     args: &serde_json::Value,
     state: &mut ServerState,
 ) -> Result<serde_json::Value, String> {
-    let connection_id = require_str(args, "connection_id")?;
+    let connection_id = require_str(args, "connection_id", "list_databases")?;
     let connection = get_or_connect(state, connection_id)?;
 
-    let databases = connection
-        .list_databases()
-        .map_err(|e| format!("list_databases failed: {e}"))?;
+    let databases = connection.list_databases().map_err(|e| {
+        error_messages::schema_operation_error("list databases", connection_id, None, None, None, e)
+    })?;
 
     let items: Vec<serde_json::Value> = databases
         .iter()
@@ -46,12 +47,20 @@ fn list_schemas(
     args: &serde_json::Value,
     state: &mut ServerState,
 ) -> Result<serde_json::Value, String> {
-    let connection_id = require_str(args, "connection_id")?;
+    let connection_id = require_str(args, "connection_id", "list_schemas")?;
+    let database = optional_str(args, "database");
     let connection = get_or_connect(state, connection_id)?;
 
-    let snapshot = connection
-        .schema()
-        .map_err(|e| format!("list_schemas failed: {e}"))?;
+    let snapshot = connection.schema().map_err(|e| {
+        error_messages::schema_operation_error(
+            "list schemas",
+            connection_id,
+            database,
+            None,
+            None,
+            e,
+        )
+    })?;
 
     let schemas: Vec<serde_json::Value> = match &snapshot.structure {
         DataStructure::Relational(relational) => relational
@@ -74,13 +83,22 @@ fn list_tables(
     args: &serde_json::Value,
     state: &mut ServerState,
 ) -> Result<serde_json::Value, String> {
-    let connection_id = require_str(args, "connection_id")?;
-    let database = optional_str(args, "database").unwrap_or("");
+    let connection_id = require_str(args, "connection_id", "list_tables")?;
+    let database = optional_str(args, "database");
+    let schema = optional_str(args, "schema");
+    let database_str = database.unwrap_or("");
     let connection = get_or_connect(state, connection_id)?;
 
-    let schema_info = connection
-        .schema_for_database(database)
-        .map_err(|e| format!("list_tables failed: {e}"))?;
+    let schema_info = connection.schema_for_database(database_str).map_err(|e| {
+        error_messages::schema_operation_error(
+            "list tables",
+            connection_id,
+            database,
+            schema,
+            None,
+            e,
+        )
+    })?;
 
     let mut tables: Vec<serde_json::Value> = schema_info
         .tables
@@ -115,9 +133,10 @@ fn describe_object(
     args: &serde_json::Value,
     state: &mut ServerState,
 ) -> Result<serde_json::Value, String> {
-    let connection_id = require_str(args, "connection_id")?;
-    let name = require_str(args, "name")?;
+    let connection_id = require_str(args, "connection_id", "describe_object")?;
+    let name = require_str(args, "name", "describe_object")?;
     let schema = optional_str(args, "schema");
+    let database = optional_str(args, "database");
     let connection = get_or_connect(state, connection_id)?;
 
     let table_ref = TableRef {
@@ -126,9 +145,16 @@ fn describe_object(
     };
 
     let request = DescribeRequest::new(table_ref);
-    let result = connection
-        .describe_table(&request)
-        .map_err(|e| format!("describe_object failed: {e}"))?;
+    let result = connection.describe_table(&request).map_err(|e| {
+        error_messages::schema_operation_error(
+            "describe object",
+            connection_id,
+            database,
+            schema,
+            Some(name),
+            e,
+        )
+    })?;
 
     Ok(serialize_query_result(&result))
 }
