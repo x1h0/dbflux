@@ -8,9 +8,9 @@ repository.workspace = true
 homepage.workspace = true
 license.workspace = true
 
-[[bin]]
-name = "dbflux-mcp-server"
-path = "src/main.rs"
+[lib]
+name = "dbflux_mcp_server"
+path = "src/lib.rs"
 
 [features]
 sqlite = ["dbflux_driver_sqlite"]

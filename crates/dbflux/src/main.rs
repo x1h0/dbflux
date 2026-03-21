@@ -9,6 +9,7 @@ mod cli;
 mod hook_executor;
 mod ipc_server;
 mod keymap;
+mod mcp_command;
 mod platform;
 mod proxy;
 mod ui;
@@ -42,6 +43,12 @@ const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+
+    // Handle MCP subcommand
+    if args.get(1).map(|s| s.as_str()) == Some("mcp") {
+        let exit_code = mcp_command::run_mcp_command(&args[2..]);
+        std::process::exit(exit_code);
+    }
 
     if args.get(1).map(|s| s.as_str()) == Some("--gui") {
         run_gui();

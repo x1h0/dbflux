@@ -686,6 +686,7 @@ impl ConnectionManagerWindow {
             .as_ref()
             .and_then(|governance| governance.policy_bindings.first().cloned());
 
+        #[cfg(feature = "mcp")]
         instance.load_mcp_dropdowns(first_binding.as_ref(), window, cx);
 
         instance.selected_proxy_id = profile.proxy_profile_id;
@@ -812,6 +813,7 @@ impl ConnectionManagerWindow {
         self.reset_value_source_selectors(window, cx);
 
         self.load_settings_tab(None, None, None, window, cx);
+        #[cfg(feature = "mcp")]
         self.load_mcp_dropdowns(None, window, cx);
         self.populate_auth_profile_dropdown(cx);
         self.refresh_auth_profile_sessions(cx);
@@ -1304,6 +1306,7 @@ impl ConnectionManagerWindow {
 
     /// Populate the MCP actor/role/policy dropdowns from the global governance state and
     /// optionally pre-select the actor/role/policy from an existing policy binding.
+    #[cfg(feature = "mcp")]
     fn load_mcp_dropdowns(
         &mut self,
         binding: Option<&dbflux_core::ConnectionMcpPolicyBinding>,

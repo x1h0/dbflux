@@ -56,6 +56,7 @@ dbflux_driver_ipc = { path = "crates/dbflux_driver_ipc" }
 dbflux_aws = { path = "crates/dbflux_aws" }
 dbflux_ssm = { path = "crates/dbflux_ssm" }
 dbflux_mcp = { path = "crates/dbflux_mcp" }
+dbflux_mcp_server = { path = "crates/dbflux_mcp_server" }
 dbflux_policy = { path = "crates/dbflux_policy" }
 dbflux_approval = { path = "crates/dbflux_approval" }
 dbflux_audit = { path = "crates/dbflux_audit" }

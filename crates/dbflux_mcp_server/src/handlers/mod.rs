@@ -16,8 +16,8 @@ use crate::bootstrap::ServerState;
 /// Looks up the cached connection first. If not present, finds the profile,
 /// selects the driver, and calls `connect_with_secrets`. The new connection
 /// is inserted into the cache before returning.
-pub fn get_or_connect<'a>(
-    state: &'a mut ServerState,
+pub fn get_or_connect(
+    state: &mut ServerState,
     connection_id: &str,
 ) -> Result<Arc<dyn Connection>, String> {
     if let Some(conn) = state.connection_cache.get(connection_id) {

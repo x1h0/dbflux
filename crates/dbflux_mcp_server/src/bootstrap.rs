@@ -6,8 +6,8 @@ use std::sync::Arc;
 use dbflux_core::DbKind;
 use dbflux_core::{AppConfigStore, ConnectionProfile, DbDriver, ProfileManager};
 use dbflux_mcp::{
-    ConnectionPolicyAssignmentDto, McpRuntime, PolicyRoleDto, ToolPolicyDto, TrustedClientDto,
-    builtin_policies, builtin_roles,
+    builtin_policies, builtin_roles, ConnectionPolicyAssignmentDto, McpRuntime, PolicyRoleDto,
+    ToolPolicyDto, TrustedClientDto,
 };
 
 use crate::connection_cache::ConnectionCache;

@@ -43,6 +43,14 @@ cargo check --workspace              # Fast type checking
 cargo build -p dbflux --features sqlite,postgres,mysql,mongodb,redis,dynamodb,aws  # Debug build
 cargo build -p dbflux --features sqlite,postgres,mysql,mongodb,redis,dynamodb,aws --release  # Release build
 cargo run -p dbflux --features sqlite,postgres,mysql,mongodb,redis,dynamodb,aws    # Run app
+
+# MCP server (AI integration) - included by default
+cargo build -p dbflux  # MCP included in default features
+./target/debug/dbflux mcp --client-id test-client
+
+# Build without MCP support (smaller binary, no AI integration)
+cargo build -p dbflux --no-default-features --features sqlite,postgres,mysql,mongodb,redis,dynamodb,lua,aws
+
 cargo fmt --all                      # Format
 cargo clippy --workspace -- -D warnings  # Lint
 cargo test --workspace               # All tests
@@ -439,9 +447,10 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 - Tool catalog defines canonical MCP tools and deferred tools
 
 **Standalone Server** (`dbflux_mcp_server`):
-- Binary `dbflux-mcp-server --client-id <id>` for AI clients
+- Integrated as subcommand: `dbflux mcp --client-id <id>` for AI clients
 - Communicates via JSON-RPC over stdin/stdout
 - Uses same governance stack as in-app MCP
+- Optional: Can be disabled with `--no-default-features` at build time
 
 **UI Integration**:
 - `McpApprovalsView` document for reviewing pending executions
@@ -550,8 +559,8 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 | `crates/dbflux_mcp/src/runtime.rs`                                | MCP runtime with governance integration             |
 | `crates/dbflux_mcp/src/governance_service.rs`                     | McpGovernanceService trait and DTOs                 |
 | `crates/dbflux_mcp/src/tool_catalog.rs`                           | Canonical MCP tools and deferred tool definitions   |
-| `crates/dbflux_mcp_server/src/main.rs`                            | Standalone MCP server binary entrypoint             |
-| `crates/dbflux_mcp_server/src/server.rs`                          | MCP server request loop                             |
+| `crates/dbflux_mcp_server/src/lib.rs`                             | MCP server library (called by `dbflux mcp`)          |
+| `crates/dbflux/src/mcp_command.rs`                                 | MCP subcommand integration and arg parsing           |
 | `crates/dbflux_policy/src/engine.rs`                              | PolicyEngine, PolicyRole, ToolPolicy                |
 | `crates/dbflux_policy/src/classification.rs`                      | ExecutionClassification enum                        |
 | `crates/dbflux_policy/src/trusted_clients.rs`                     | TrustedClientRegistry                               |

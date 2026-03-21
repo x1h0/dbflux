@@ -99,8 +99,11 @@ pub enum Command {
     OpenSettings,
     OpenLoginModal,
     OpenSsoWizard,
+    #[cfg(feature = "mcp")]
     OpenMcpApprovals,
+    #[cfg(feature = "mcp")]
     OpenMcpAudit,
+    #[cfg(feature = "mcp")]
     RefreshMcpGovernance,
 }
 
@@ -132,12 +135,12 @@ impl Command {
             "open_settings" => Some(Command::OpenSettings),
             "open_login_modal" => Some(Command::OpenLoginModal),
             "open_sso_wizard" => Some(Command::OpenSsoWizard),
+            #[cfg(feature = "mcp")]
             "open_mcp_approvals" => Some(Command::OpenMcpApprovals),
+            #[cfg(feature = "mcp")]
             "open_mcp_audit" => Some(Command::OpenMcpAudit),
+            #[cfg(feature = "mcp")]
             "refresh_mcp_governance" => Some(Command::RefreshMcpGovernance),
-            "open_script_file" => Some(Command::OpenScriptFile),
-            "save_file_as" => Some(Command::SaveFileAs),
-            "open_tab_menu" => Some(Command::OpenTabMenu),
             _ => None,
         }
     }
@@ -228,8 +231,11 @@ impl Command {
             Command::OpenSettings => "Open Settings",
             Command::OpenLoginModal => "Open Login Modal",
             Command::OpenSsoWizard => "Open AWS SSO Wizard",
+            #[cfg(feature = "mcp")]
             Command::OpenMcpApprovals => "Open MCP Approvals",
+            #[cfg(feature = "mcp")]
             Command::OpenMcpAudit => "Open MCP Audit Viewer",
+            #[cfg(feature = "mcp")]
             Command::RefreshMcpGovernance => "Refresh MCP Governance",
         }
     }
@@ -317,10 +323,12 @@ impl Command {
             | Command::TogglePanel
             | Command::OpenSettings
             | Command::OpenLoginModal
-            | Command::OpenSsoWizard
-            | Command::OpenMcpApprovals
-            | Command::OpenMcpAudit
-            | Command::RefreshMcpGovernance => "View",
+            | Command::OpenSsoWizard => "View",
+
+            #[cfg(feature = "mcp")]
+            Command::OpenMcpApprovals | Command::OpenMcpAudit | Command::RefreshMcpGovernance => {
+                "View"
+            }
         }
     }
 
@@ -354,10 +362,21 @@ impl Command {
                 | Command::ToggleSidebar
                 | Command::OpenLoginModal
                 | Command::OpenSsoWizard
-                | Command::OpenMcpApprovals
-                | Command::OpenMcpAudit
-                | Command::RefreshMcpGovernance
-        )
+        ) || {
+            #[cfg(feature = "mcp")]
+            {
+                matches!(
+                    self,
+                    Command::OpenMcpApprovals
+                        | Command::OpenMcpAudit
+                        | Command::RefreshMcpGovernance
+                )
+            }
+            #[cfg(not(feature = "mcp"))]
+            {
+                false
+            }
+        }
     }
 }
 

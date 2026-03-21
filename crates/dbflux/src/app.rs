@@ -9,6 +9,8 @@ use dbflux_core::{
     ToolPolicyConfig, TrustedClientConfig,
 };
 use dbflux_driver_ipc::{IpcDriver, driver::IpcDriverLaunchConfig};
+
+#[cfg(feature = "mcp")]
 use dbflux_mcp::{
     AuditEntry, AuditExportFormat, AuditQuery, ConnectionPolicyAssignmentDto, McpGovernanceService,
     McpRuntime, McpRuntimeEvent, PendingExecutionDetail, PendingExecutionSummary, PolicyRoleDto,
@@ -30,6 +32,8 @@ pub struct AuthProfileCreated {
     pub profile_id: Uuid,
 }
 
+#[cfg(feature = "mcp")]
+#[derive(Clone)]
 pub struct McpRuntimeEventRaised {
     #[allow(dead_code)]
     pub event: McpRuntimeEvent,
@@ -86,6 +90,7 @@ pub struct AppState {
     recent_files: Option<RecentFilesStore>,
     scripts_directory: Option<ScriptsDirectory>,
     session_store: Option<SessionStore>,
+    #[cfg(feature = "mcp")]
     mcp_runtime: McpRuntime,
 }
 
@@ -136,6 +141,7 @@ impl AppState {
                 .register(Arc::new(dbflux_aws::AwsStaticCredentialsAuthProvider::new()));
         }
 
+        #[cfg(feature = "mcp")]
         let mcp_runtime = match dbflux_audit::AuditService::new_sqlite_default() {
             Ok(audit_service) => McpRuntime::new(audit_service),
             Err(error) => {
@@ -168,13 +174,17 @@ impl AppState {
             recent_files,
             scripts_directory,
             session_store,
+            #[cfg(feature = "mcp")]
             mcp_runtime,
         };
 
+        #[cfg(feature = "mcp")]
         state.bootstrap_mcp_runtime_from_persistence();
+
         state
     }
 
+    #[cfg(feature = "mcp")]
     fn bootstrap_mcp_runtime_from_persistence(&mut self) {
         if let Ok(store) = AppConfigStore::new()
             && let Ok(config) = store.load()
@@ -1437,7 +1447,10 @@ impl AppState {
     pub fn set_hook_definitions(&mut self, definitions: HashMap<String, ConnectionHook>) {
         self.hook_definitions = definitions;
     }
+}
 
+#[cfg(feature = "mcp")]
+impl AppState {
     pub fn list_mcp_trusted_clients(&self) -> Result<Vec<TrustedClientDto>, String> {
         dbflux_mcp::McpGovernanceService::list_trusted_clients(&self.mcp_runtime)
             .map_err(|error| error.to_string())
@@ -1694,7 +1707,9 @@ impl AppState {
 
         self.save_profiles();
     }
+}
 
+impl AppState {
     pub fn auth_provider_registry(&self) -> &AuthProviderRegistry {
         &self.auth_provider_registry
     }
@@ -1850,6 +1865,8 @@ impl Default for AppState {
 
 impl EventEmitter<AppStateChanged> for AppState {}
 impl EventEmitter<AuthProfileCreated> for AppState {}
+
+#[cfg(feature = "mcp")]
 impl EventEmitter<McpRuntimeEventRaised> for AppState {}
 
 #[cfg(test)]
@@ -1859,16 +1876,22 @@ mod tests {
         AuthProfile, CancelToken, ConnectionMcpGovernance, ConnectionMcpPolicyBinding, DbDriver,
         DbKind, FormValues, GeneralSettings, RefreshPolicySetting,
     };
+
+    #[cfg(feature = "mcp")]
     use dbflux_mcp::server::authorization::{AuthorizationRequest, authorize_request};
+    #[cfg(feature = "mcp")]
     use dbflux_mcp::server::request_context::RequestIdentity;
+    #[cfg(feature = "mcp")]
     use dbflux_mcp::{
         AuditExportFormat, AuditQuery, ConnectionPolicyAssignmentDto, McpRuntimeEvent,
         TrustedClientDto,
     };
+    #[cfg(feature = "mcp")]
     use dbflux_policy::{
         ConnectionPolicyAssignment, ExecutionClassification, PolicyBindingScope, PolicyEngine,
         ToolPolicy,
     };
+
     use dbflux_test_support::FakeDriver;
     use std::collections::HashMap;
     use std::ffi::OsString;
@@ -2258,6 +2281,7 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "mcp")]
     #[test]
     fn mcp_trusted_client_upsert_emits_runtime_event() {
         with_isolated_user_dirs(|| {
@@ -2286,6 +2310,7 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "mcp")]
     #[test]
     fn mcp_execution_request_updates_pending_queue_event() {
         with_isolated_user_dirs(|| {
@@ -2310,6 +2335,7 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "mcp")]
     #[test]
     fn mcp_ui_workflow_drives_enforcement_and_audit_export() {
         with_isolated_user_dirs(|| {

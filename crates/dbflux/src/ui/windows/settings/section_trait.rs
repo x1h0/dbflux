@@ -1,12 +1,16 @@
 use gpui::prelude::*;
-use gpui::{AnyElement, App, Context, KeyDownEvent, Window, div};
+use gpui::{div, AnyElement, App, Context, KeyDownEvent, Window};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SettingsSectionId {
     General,
+    #[cfg(feature = "mcp")]
     McpClients,
+    #[cfg(feature = "mcp")]
     McpRoles,
+    #[cfg(feature = "mcp")]
     McpPolicies,
+    #[cfg(feature = "mcp")]
     McpAudit,
     Keybindings,
     Proxies,

@@ -3,16 +3,20 @@ mod dispatch;
 pub mod pipeline;
 mod render;
 
-use crate::app::{AppState, AppStateChanged, McpRuntimeEventRaised};
+use crate::app::{AppState, AppStateChanged};
+
+#[cfg(feature = "mcp")]
+use crate::app::McpRuntimeEventRaised;
+
 use crate::keymap::{
     self, Command, CommandDispatcher, ContextId, FocusTarget, KeyChord, KeymapStack, default_keymap,
 };
 use crate::ui::components::toast::{ToastGlobal, ToastHost};
 use crate::ui::dock::{SidebarDock, SidebarDockEvent};
-use crate::ui::document::{
-    CodeDocument, DataDocument, DocumentHandle, McpApprovalsView, McpAuditView, TabBar,
-    TabBarEvent, TabManager,
-};
+use crate::ui::document::{CodeDocument, DataDocument, DocumentHandle, TabBar, TabBarEvent, TabManager};
+
+#[cfg(feature = "mcp")]
+use crate::ui::document::{McpApprovalsView, McpAuditView};
 use crate::ui::icons::AppIcon;
 use crate::ui::overlays::command_palette::{
     CommandExecuted, CommandPalette, CommandPaletteClosed, PaletteCommand,
@@ -80,7 +84,10 @@ pub struct Workspace {
 
     tab_manager: Entity<TabManager>,
     tab_bar: Entity<TabBar>,
+
+    #[cfg(feature = "mcp")]
     mcp_approvals_view: Entity<McpApprovalsView>,
+    #[cfg(feature = "mcp")]
     mcp_audit_view: Entity<McpAuditView>,
 
     tasks_state: PanelState,
@@ -98,9 +105,11 @@ pub struct Workspace {
     keymap: &'static KeymapStack,
     focus_handle: FocusHandle,
 
+    #[cfg(feature = "mcp")]
     active_governance_panel: Option<GovernancePanel>,
 }
 
+#[cfg(feature = "mcp")]
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum GovernancePanel {
     Approvals,
@@ -121,7 +130,10 @@ impl Workspace {
 
         let tab_manager = cx.new(|_cx| TabManager::new());
         let tab_bar = cx.new(|cx| TabBar::new(tab_manager.clone(), cx));
+
+        #[cfg(feature = "mcp")]
         let mcp_approvals_view = cx.new(|_cx| McpApprovalsView::new(app_state.clone()));
+        #[cfg(feature = "mcp")]
         let mcp_audit_view = cx.new(|cx| McpAuditView::new(app_state.clone(), window, cx));
 
         let command_palette = cx.new(|cx| {
@@ -308,6 +320,7 @@ impl Workspace {
         )
         .detach();
 
+        #[cfg(feature = "mcp")]
         cx.subscribe(&app_state, |this, _, _event: &McpRuntimeEventRaised, cx| {
             this.app_state.update(cx, |_state, cx| {
                 cx.emit(AppStateChanged);
@@ -453,7 +466,9 @@ impl Workspace {
             shutdown_overlay,
             tab_manager,
             tab_bar,
+            #[cfg(feature = "mcp")]
             mcp_approvals_view,
+            #[cfg(feature = "mcp")]
             mcp_audit_view,
             tasks_state: PanelState::Collapsed,
             pending_command: None,
@@ -466,6 +481,7 @@ impl Workspace {
             focus_target: FocusTarget::default(),
             keymap: default_keymap(),
             focus_handle,
+            #[cfg(feature = "mcp")]
             active_governance_panel: None,
         };
 

@@ -66,6 +66,7 @@ impl SettingsCoordinator {
                 ),
                 vec![],
             ),
+            #[cfg(feature = "mcp")]
             SettingsSectionId::McpClients => {
                 let section =
                     cx.new(|cx| McpSection::new(app_state, McpSectionVariant::Clients, window, cx));
@@ -77,6 +78,7 @@ impl SettingsCoordinator {
                 });
                 (ActiveSettingsSection::McpClients(section), vec![focus_sub])
             }
+            #[cfg(feature = "mcp")]
             SettingsSectionId::McpRoles => {
                 let section =
                     cx.new(|cx| McpSection::new(app_state, McpSectionVariant::Roles, window, cx));
@@ -88,6 +90,7 @@ impl SettingsCoordinator {
                 });
                 (ActiveSettingsSection::McpRoles(section), vec![focus_sub])
             }
+            #[cfg(feature = "mcp")]
             SettingsSectionId::McpPolicies => {
                 let section = cx
                     .new(|cx| McpSection::new(app_state, McpSectionVariant::Policies, window, cx));
@@ -99,6 +102,7 @@ impl SettingsCoordinator {
                 });
                 (ActiveSettingsSection::McpPolicies(section), vec![focus_sub])
             }
+            #[cfg(feature = "mcp")]
             SettingsSectionId::McpAudit => {
                 let section =
                     cx.new(|cx| McpSection::new(app_state, McpSectionVariant::Audit, window, cx));
@@ -208,6 +212,7 @@ impl SettingsCoordinator {
             .select_by_id(Self::tree_id_for_section(section));
         self.pending_section_confirm = None;
 
+        #[cfg(feature = "mcp")]
         self.app_state.update(cx, |state, cx| {
             state.persist_mcp_governance();
             cx.emit(crate::app::McpRuntimeEventRaised {

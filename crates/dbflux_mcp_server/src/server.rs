@@ -1,16 +1,16 @@
 use std::io::{BufRead, Write};
 
 use dbflux_mcp::{
-    CANONICAL_V1_TOOLS,
     server::{
-        authorization::{AuthorizationRequest, authorize_request},
-        router::{RouteTarget, route_tool},
+        authorization::{authorize_request, AuthorizationRequest},
+        router::{route_tool, RouteTarget},
     },
+    CANONICAL_V1_TOOLS,
 };
 use dbflux_policy::PolicyEngine;
 
 use crate::{
-    bootstrap::{ServerState, is_mcp_enabled_for_connection},
+    bootstrap::{is_mcp_enabled_for_connection, ServerState},
     handlers,
     transport::{codes, error_response, success_response, write_message},
 };
@@ -64,10 +64,10 @@ pub fn run(
 
         let response = dispatch(state, &id, method, message.get("params"));
 
-        if !is_notification {
-            if let Some(resp) = response {
-                write_message(writer, &resp)?;
-            }
+        if !is_notification
+            && let Some(resp) = response
+        {
+            write_message(writer, &resp)?;
         }
     }
 }

@@ -568,19 +568,22 @@ impl Render for Workspace {
             )
             // Shutdown overlay (rendered above everything during shutdown)
             .child(self.shutdown_overlay.clone())
-            .when_some(self.active_governance_panel, |root, panel| {
-                let close_entity = cx.entity().clone();
-                let title = match panel {
-                    super::GovernancePanel::Approvals => "MCP Approvals",
-                    super::GovernancePanel::Audit => "MCP Audit",
-                };
+            .when(cfg!(feature = "mcp"), |root| {
+                #[cfg(feature = "mcp")]
+                {
+                    root.when_some(self.active_governance_panel, |root, panel| {
+                        let close_entity = cx.entity().clone();
+                        let title = match panel {
+                            super::GovernancePanel::Approvals => "MCP Approvals",
+                            super::GovernancePanel::Audit => "MCP Audit",
+                        };
 
-                let content = match panel {
-                    super::GovernancePanel::Approvals => {
-                        self.mcp_approvals_view.clone().into_any_element()
-                    }
-                    super::GovernancePanel::Audit => self.mcp_audit_view.clone().into_any_element(),
-                };
+                        let content = match panel {
+                            super::GovernancePanel::Approvals => {
+                                self.mcp_approvals_view.clone().into_any_element()
+                            }
+                            super::GovernancePanel::Audit => self.mcp_audit_view.clone().into_any_element(),
+                        };
 
                 root.child(
                     div()
@@ -641,7 +644,13 @@ impl Render for Workspace {
                                 )
                                 .child(div().flex_1().min_h_0().child(content)),
                         ),
-                )
+                    )
+                    })
+                }
+                #[cfg(not(feature = "mcp"))]
+                {
+                    root
+                }
             })
             // Context menu rendered at workspace level for proper positioning
             .when_some(self.sidebar.read(cx).context_menu_state(), |this, menu| {

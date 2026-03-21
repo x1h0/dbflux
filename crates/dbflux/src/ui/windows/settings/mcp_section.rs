@@ -1686,10 +1686,10 @@ impl McpSection {
     }
 
     fn handle_audit_nav(&mut self, chord: KeyChord, cx: &mut Context<Self>) {
-        if let ("escape", m) = (chord.key.as_str(), chord.modifiers) {
-            if m == Modifiers::none() {
-                cx.emit(SectionFocusEvent::RequestFocusReturn);
-            }
+        if let ("escape", m) = (chord.key.as_str(), chord.modifiers)
+            && m == Modifiers::none()
+        {
+            cx.emit(SectionFocusEvent::RequestFocusReturn);
         }
     }
 }

@@ -6,13 +6,13 @@ It is intentionally explicit about what is available today and what is still pen
 
 ## 1. Architecture Overview
 
-DBFlux exposes a **standalone headless binary** (`dbflux-mcp-server`) that speaks the Model Context Protocol over stdio. AI clients (Claude Desktop, Cursor, etc.) launch this binary as a subprocess and communicate via JSON-RPC 2.0, newline-delimited.
+DBFlux exposes MCP server functionality via the `dbflux mcp` subcommand that speaks the Model Context Protocol over stdio. AI clients (Claude Desktop, Cursor, etc.) launch this binary as a subprocess and communicate via JSON-RPC 2.0, newline-delimited.
 
 ```
 AI Client (Claude Desktop / Cursor / any MCP client)
         |  stdio  (JSON-RPC 2.0, newline-delimited)
         v
-  dbflux-mcp-server             ← crates/dbflux_mcp_server
+  dbflux mcp                    ← integrated into main dbflux binary
         |
         +--  dbflux_mcp          governance, authorization, tool catalog
         +--  dbflux_core         profiles, config, driver traits
@@ -21,26 +21,29 @@ AI Client (Claude Desktop / Cursor / any MCP client)
         +--  dbflux_audit        audit trail (SQLite)
 ```
 
-The MCP server and the DBFlux GUI app are fully independent processes. They share the same on-disk config files under `~/.config/dbflux/` and the same profile store. Governance configured in the GUI (trusted clients, roles, policies, per-connection settings) is read by the server on startup.
+The MCP server and the DBFlux GUI app are independent processes. They share the same on-disk config files under `~/.config/dbflux/` and the same profile store. Governance configured in the GUI (trusted clients, roles, policies, per-connection settings) is read by the server on startup.
 
 ## 2. Running the MCP Server
 
 ### Build
 
 ```bash
-# All drivers
-cargo build -p dbflux_mcp_server --features sqlite,postgres,mysql,mongodb,redis,dynamodb --release
+# All drivers with MCP support (default)
+cargo build -p dbflux --release
 
-# SQLite only (e.g. for testing)
-cargo build -p dbflux_mcp_server --features sqlite
+# SQLite only with MCP
+cargo build -p dbflux --features sqlite,mcp --release
+
+# Without MCP support (AI integration disabled)
+cargo build -p dbflux --no-default-features --features sqlite,postgres,mysql,mongodb,redis,dynamodb,lua,aws --release
 ```
 
-The binary is `dbflux-mcp-server`.
+The MCP server is integrated into the main `dbflux` binary.
 
 ### Usage
 
 ```
-dbflux-mcp-server --client-id <id> [--config-dir <path>]
+dbflux mcp --client-id <id> [--config-dir <path>]
 ```
 
 | Flag | Description |
@@ -56,14 +59,16 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 {
   "mcpServers": {
     "dbflux": {
-      "command": "/path/to/dbflux-mcp-server",
-      "args": ["--client-id", "claude-desktop"]
+      "command": "/path/to/dbflux",
+      "args": ["mcp", "--client-id", "claude-desktop"]
     }
   }
 }
 ```
 
 The `client-id` value must match a trusted client entry you created in the DBFlux GUI under **Settings → MCP → Clients**.
+
+**Note**: If you built DBFlux without the `mcp` feature (`--no-default-features`), the MCP server will not be available.
 
 ## 3. Governance Model (Core Concepts)
 
@@ -187,7 +192,7 @@ Typical Linux defaults:
 |------|----------|
 | `~/.config/dbflux/config.json` | Global app config — trusted clients, roles, policies, per-driver settings |
 | `~/.config/dbflux/profiles.json` | Connection profiles — includes per-connection MCP governance bindings |
-| `~/.config/dbflux/mcp_audit.sqlite` | MCP server audit store (written by `dbflux-mcp-server`) |
+| `~/.config/dbflux/mcp_audit.sqlite` | MCP server audit store (written by `dbflux mcp`) |
 | `~/.config/dbflux/audit.sqlite` | GUI app audit store (written by DBFlux GUI) |
 | `~/.local/share/dbflux/` | Scripts, sessions, state |
 
@@ -255,7 +260,7 @@ if !outcome.allowed {
 
 Before pointing an AI client at the MCP server:
 
-- [ ] `dbflux-mcp-server` built with the correct driver features
+- [ ] `dbflux` built with MCP support (enabled by default, or with `--features mcp`)
 - [ ] Trusted client registered and active in DBFlux GUI
 - [ ] `--client-id` passed to the binary matches the registered client
 - [ ] Target connection has MCP enabled

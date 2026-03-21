@@ -3,14 +3,14 @@ use crate::ui::icons::AppIcon;
 use crate::ui::tokens::Heights;
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::ActiveTheme;
-use gpui_component::Sizable;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::dialog::Dialog;
+use gpui_component::ActiveTheme;
+use gpui_component::Sizable;
 
 use super::{
-    SETTINGS_SIDEBAR_GRIP_WIDTH, SETTINGS_SIDEBAR_MAX_WIDTH, SETTINGS_SIDEBAR_MIN_WIDTH,
-    SettingsCoordinator, SettingsFocus,
+    SettingsCoordinator, SettingsFocus, SETTINGS_SIDEBAR_GRIP_WIDTH, SETTINGS_SIDEBAR_MAX_WIDTH,
+    SETTINGS_SIDEBAR_MIN_WIDTH,
 };
 
 const INDENT_PX: f32 = 16.0;
@@ -19,9 +19,13 @@ impl SettingsCoordinator {
     fn section_display_name(section: super::SettingsSectionId) -> &'static str {
         match section {
             super::SettingsSectionId::General => "General",
+            #[cfg(feature = "mcp")]
             super::SettingsSectionId::McpClients => "Clients",
+            #[cfg(feature = "mcp")]
             super::SettingsSectionId::McpRoles => "Roles",
+            #[cfg(feature = "mcp")]
             super::SettingsSectionId::McpPolicies => "Policies",
+            #[cfg(feature = "mcp")]
             super::SettingsSectionId::McpAudit => "Audit",
             super::SettingsSectionId::Keybindings => "Keybindings",
             super::SettingsSectionId::Proxies => "Proxy",

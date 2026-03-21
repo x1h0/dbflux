@@ -7,19 +7,26 @@ use std::collections::HashSet;
 impl SettingsCoordinator {
     #[allow(clippy::result_large_err)]
     pub(super) fn build_sidebar_tree() -> TreeNav {
-        let nodes = vec![
-            TreeNavNode::leaf("general", "General", Some(AppIcon::Settings)),
-            TreeNavNode::group(
-                "mcp-governance",
-                "MCP Governance",
-                Some(AppIcon::Lock),
-                vec![
-                    TreeNavNode::leaf("mcp-clients", "Clients", Some(AppIcon::Plug)),
-                    TreeNavNode::leaf("mcp-roles", "Roles", Some(AppIcon::KeyRound)),
-                    TreeNavNode::leaf("mcp-policies", "Policies", Some(AppIcon::ScrollText)),
-                    TreeNavNode::leaf("mcp-audit", "Audit", Some(AppIcon::History)),
-                ],
-            ),
+        let mut nodes = vec![TreeNavNode::leaf(
+            "general",
+            "General",
+            Some(AppIcon::Settings),
+        )];
+
+        #[cfg(feature = "mcp")]
+        nodes.push(TreeNavNode::group(
+            "mcp-governance",
+            "MCP Governance",
+            Some(AppIcon::Lock),
+            vec![
+                TreeNavNode::leaf("mcp-clients", "Clients", Some(AppIcon::Plug)),
+                TreeNavNode::leaf("mcp-roles", "Roles", Some(AppIcon::KeyRound)),
+                TreeNavNode::leaf("mcp-policies", "Policies", Some(AppIcon::ScrollText)),
+                TreeNavNode::leaf("mcp-audit", "Audit", Some(AppIcon::History)),
+            ],
+        ));
+
+        nodes.extend([
             TreeNavNode::leaf("keybindings", "Keybindings", Some(AppIcon::Keyboard)),
             TreeNavNode::group(
                 "security",
@@ -55,9 +62,10 @@ impl SettingsCoordinator {
                 ],
             ),
             TreeNavNode::leaf("about", "About", Some(AppIcon::Info)),
-        ];
+        ]);
 
         let mut expanded = HashSet::new();
+        #[cfg(feature = "mcp")]
         expanded.insert(SharedString::from("mcp-governance"));
         expanded.insert(SharedString::from("security"));
         expanded.insert(SharedString::from("network"));
@@ -69,9 +77,13 @@ impl SettingsCoordinator {
     pub(super) fn section_for_tree_id(id: &str) -> Option<SettingsSectionId> {
         match id {
             "general" => Some(SettingsSectionId::General),
+            #[cfg(feature = "mcp")]
             "mcp-clients" => Some(SettingsSectionId::McpClients),
+            #[cfg(feature = "mcp")]
             "mcp-roles" => Some(SettingsSectionId::McpRoles),
+            #[cfg(feature = "mcp")]
             "mcp-policies" => Some(SettingsSectionId::McpPolicies),
+            #[cfg(feature = "mcp")]
             "mcp-audit" => Some(SettingsSectionId::McpAudit),
             "keybindings" => Some(SettingsSectionId::Keybindings),
             "proxies" => Some(SettingsSectionId::Proxies),
@@ -88,9 +100,13 @@ impl SettingsCoordinator {
     pub(super) fn tree_id_for_section(section: SettingsSectionId) -> &'static str {
         match section {
             SettingsSectionId::General => "general",
+            #[cfg(feature = "mcp")]
             SettingsSectionId::McpClients => "mcp-clients",
+            #[cfg(feature = "mcp")]
             SettingsSectionId::McpRoles => "mcp-roles",
+            #[cfg(feature = "mcp")]
             SettingsSectionId::McpPolicies => "mcp-policies",
+            #[cfg(feature = "mcp")]
             SettingsSectionId::McpAudit => "mcp-audit",
             SettingsSectionId::Keybindings => "keybindings",
             SettingsSectionId::Proxies => "proxies",
@@ -125,14 +141,17 @@ mod tests {
             SettingsCoordinator::section_for_tree_id("proxies"),
             Some(SettingsSectionId::Proxies)
         );
-        assert_eq!(
-            SettingsCoordinator::section_for_tree_id("mcp-clients"),
-            Some(SettingsSectionId::McpClients)
-        );
-        assert_eq!(
-            SettingsCoordinator::section_for_tree_id("mcp-audit"),
-            Some(SettingsSectionId::McpAudit)
-        );
+        #[cfg(feature = "mcp")]
+        {
+            assert_eq!(
+                SettingsCoordinator::section_for_tree_id("mcp-clients"),
+                Some(SettingsSectionId::McpClients)
+            );
+            assert_eq!(
+                SettingsCoordinator::section_for_tree_id("mcp-audit"),
+                Some(SettingsSectionId::McpAudit)
+            );
+        }
     }
 
     #[test]
@@ -146,12 +165,8 @@ mod tests {
 
     #[test]
     fn tree_id_roundtrip_all_sections() {
-        for section in [
+        let mut sections = vec![
             SettingsSectionId::General,
-            SettingsSectionId::McpClients,
-            SettingsSectionId::McpRoles,
-            SettingsSectionId::McpPolicies,
-            SettingsSectionId::McpAudit,
             SettingsSectionId::Keybindings,
             SettingsSectionId::Proxies,
             SettingsSectionId::SshTunnels,
@@ -160,7 +175,19 @@ mod tests {
             SettingsSectionId::Hooks,
             SettingsSectionId::Drivers,
             SettingsSectionId::About,
-        ] {
+        ];
+
+        #[cfg(feature = "mcp")]
+        {
+            sections.extend([
+                SettingsSectionId::McpClients,
+                SettingsSectionId::McpRoles,
+                SettingsSectionId::McpPolicies,
+                SettingsSectionId::McpAudit,
+            ]);
+        }
+
+        for section in sections {
             let id = SettingsCoordinator::tree_id_for_section(section);
             assert_eq!(SettingsCoordinator::section_for_tree_id(id), Some(section));
         }

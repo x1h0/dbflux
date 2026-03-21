@@ -2135,6 +2135,7 @@ dependencies = [
  "dbflux_ipc",
  "dbflux_lua",
  "dbflux_mcp",
+ "dbflux_mcp_server",
  "dbflux_policy",
  "dbflux_proxy",
  "dbflux_ssh",

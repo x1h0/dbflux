@@ -152,6 +152,7 @@ impl Workspace {
         });
     }
 
+    #[cfg(feature = "mcp")]
     pub(super) fn open_mcp_approvals(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         use crate::ui::components::toast::ToastExt;
 
@@ -163,6 +164,7 @@ impl Workspace {
         cx.toast_info("Opened MCP approvals", window);
     }
 
+    #[cfg(feature = "mcp")]
     pub(super) fn open_mcp_audit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         use crate::ui::components::toast::ToastExt;
 
@@ -174,6 +176,7 @@ impl Workspace {
         cx.toast_info("Opened MCP audit viewer", window);
     }
 
+    #[cfg(feature = "mcp")]
     pub(super) fn refresh_mcp_governance(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         use crate::ui::components::toast::ToastExt;
 

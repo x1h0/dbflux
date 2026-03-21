@@ -22,10 +22,11 @@ dbflux_ssh.workspace = true
 dbflux_proxy.workspace = true
 dbflux_ipc.workspace = true
 dbflux_driver_ipc.workspace = true
-dbflux_mcp.workspace = true
-dbflux_policy.workspace = true
-dbflux_approval.workspace = true
-dbflux_audit.workspace = true
+dbflux_mcp = { workspace = true, optional = true }
+dbflux_mcp_server = { workspace = true, optional = true }
+dbflux_policy = { workspace = true, optional = true }
+dbflux_approval = { workspace = true, optional = true }
+dbflux_audit = { workspace = true, optional = true }
 uuid.workspace = true
 log.workspace = true
 env_logger.workspace = true
@@ -77,7 +78,7 @@ workspace = true
 optional = true
 
 [features]
-default = ["sqlite", "postgres", "mysql", "mongodb", "redis", "dynamodb", "lua", "aws"]
+default = ["sqlite", "postgres", "mysql", "mongodb", "redis", "dynamodb", "lua", "aws", "mcp"]
 sqlite = ["dbflux_driver_sqlite"]
 postgres = ["dbflux_driver_postgres"]
 mysql = ["dbflux_driver_mysql"]
@@ -86,6 +87,7 @@ redis = ["dbflux_driver_redis"]
 dynamodb = ["dbflux_driver_dynamodb"]
 lua = ["dbflux_lua"]
 aws = ["dbflux_aws", "dbflux_ssm"]
+mcp = ["dbflux_mcp", "dbflux_mcp_server", "dbflux_policy", "dbflux_approval", "dbflux_audit"]
 vendored-openssl = ["dbflux_ssh/vendored-openssl"]
 
 [dev-dependencies]
