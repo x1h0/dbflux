@@ -198,6 +198,7 @@ in
       ++ (with pkgs; [
         rustup
         rust-analyzer
+        python3
       ]);
 
     inherit buildInputs;
