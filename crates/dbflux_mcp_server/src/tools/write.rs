@@ -251,14 +251,14 @@ impl DbFluxServer {
             inserted_count += result.affected_rows;
 
             // Build return record if RETURNING requested
-            if let Some(return_cols) = returning {
-                if let Some(ref row) = result.returning_row {
-                    let mut return_obj = serde_json::Map::new();
-                    for (col, val) in return_cols.iter().zip(row.iter()) {
-                        return_obj.insert(col.clone(), value_to_json(val));
-                    }
-                    returned_records.push(serde_json::Value::Object(return_obj));
+            if let Some(return_cols) = returning
+                && let Some(ref row) = result.returning_row
+            {
+                let mut return_obj = serde_json::Map::new();
+                for (col, val) in return_cols.iter().zip(row.iter()) {
+                    return_obj.insert(col.clone(), value_to_json(val));
                 }
+                returned_records.push(serde_json::Value::Object(return_obj));
             }
         }
 

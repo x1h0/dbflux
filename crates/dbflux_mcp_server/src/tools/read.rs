@@ -285,6 +285,7 @@ impl DbFluxServer {
             .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn select_data_impl(
         state: ServerState,
         connection_id: &str,
@@ -343,21 +344,21 @@ impl DbFluxServer {
         }
 
         // Add ORDER BY
-        if let Some(order) = order_by {
-            if !order.is_empty() {
-                let order_clauses: Vec<String> = order
-                    .iter()
-                    .map(|o| {
-                        let dir = o
-                            .direction
-                            .as_deref()
-                            .map(|d| d.to_uppercase())
-                            .unwrap_or_else(|| "ASC".to_string());
-                        format!("{} {}", dialect.quote_identifier(&o.column), dir)
-                    })
-                    .collect();
-                sql.push_str(&format!(" ORDER BY {}", order_clauses.join(", ")));
-            }
+        if let Some(order) = order_by
+            && !order.is_empty()
+        {
+            let order_clauses: Vec<String> = order
+                .iter()
+                .map(|o| {
+                    let dir = o
+                        .direction
+                        .as_deref()
+                        .map(|d| d.to_uppercase())
+                        .unwrap_or_else(|| "ASC".to_string());
+                    format!("{} {}", dialect.quote_identifier(&o.column), dir)
+                })
+                .collect();
+            sql.push_str(&format!(" ORDER BY {}", order_clauses.join(", ")));
         }
 
         // Add pagination
@@ -419,6 +420,7 @@ impl DbFluxServer {
         Ok(count)
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn aggregate_data_impl(
         state: ServerState,
         connection_id: &str,
@@ -489,21 +491,21 @@ impl DbFluxServer {
         }
 
         // Add ORDER BY
-        if let Some(order) = order_by {
-            if !order.is_empty() {
-                let order_clauses: Vec<String> = order
-                    .iter()
-                    .map(|o| {
-                        let dir = o
-                            .direction
-                            .as_deref()
-                            .map(|d| d.to_uppercase())
-                            .unwrap_or_else(|| "ASC".to_string());
-                        format!("{} {}", dialect.quote_identifier(&o.column), dir)
-                    })
-                    .collect();
-                sql.push_str(&format!(" ORDER BY {}", order_clauses.join(", ")));
-            }
+        if let Some(order) = order_by
+            && !order.is_empty()
+        {
+            let order_clauses: Vec<String> = order
+                .iter()
+                .map(|o| {
+                    let dir = o
+                        .direction
+                        .as_deref()
+                        .map(|d| d.to_uppercase())
+                        .unwrap_or_else(|| "ASC".to_string());
+                    format!("{} {}", dialect.quote_identifier(&o.column), dir)
+                })
+                .collect();
+            sql.push_str(&format!(" ORDER BY {}", order_clauses.join(", ")));
         }
 
         // Add LIMIT

@@ -2,6 +2,9 @@ use base64::Engine;
 use dbflux_core::{QueryResult, SqlDialect, Value};
 use rmcp::ErrorData;
 
+// Note: These helper functions are used by code generated from the #[tool] macro.
+// Clippy cannot detect this usage, so we suppress dead_code warnings.
+#[allow(dead_code)]
 pub fn json_filter_to_sql(
     filter: &serde_json::Value,
     dialect: &dyn SqlDialect,
@@ -25,6 +28,7 @@ pub fn json_filter_to_sql(
     }
 }
 
+#[allow(dead_code)]
 pub fn parse_condition(
     key: &str,
     value: &serde_json::Value,
@@ -106,6 +110,7 @@ pub fn parse_condition(
     }
 }
 
+#[allow(dead_code)]
 pub fn json_to_sql_literal(value: &serde_json::Value, _dialect: &dyn SqlDialect) -> String {
     match value {
         serde_json::Value::Null => "NULL".to_string(),
@@ -129,6 +134,7 @@ pub fn json_to_sql_literal(value: &serde_json::Value, _dialect: &dyn SqlDialect)
     }
 }
 
+#[allow(dead_code)]
 pub fn json_to_db_value(value: serde_json::Value) -> Value {
     match value {
         serde_json::Value::Null => Value::Null,
@@ -154,6 +160,8 @@ pub fn json_to_db_value(value: serde_json::Value) -> Value {
     }
 }
 
+#[allow(dead_code)]
+#[allow(clippy::only_used_in_recursion)]
 pub fn db_value_to_sql(value: &Value, dialect: &dyn SqlDialect) -> String {
     match value {
         Value::Null => "NULL".to_string(),
@@ -189,6 +197,7 @@ pub fn db_value_to_sql(value: &Value, dialect: &dyn SqlDialect) -> String {
 }
 
 /// Serialize a QueryResult into a JSON value suitable for MCP responses
+#[allow(dead_code)]
 pub fn serialize_query_result(result: &QueryResult) -> serde_json::Value {
     let columns: Vec<&str> = result.columns.iter().map(|c| c.name.as_str()).collect();
 
@@ -211,6 +220,7 @@ pub fn serialize_query_result(result: &QueryResult) -> serde_json::Value {
     })
 }
 
+#[allow(dead_code)]
 pub fn value_to_json(value: &Value) -> serde_json::Value {
     match value {
         Value::Null => serde_json::Value::Null,
@@ -240,6 +250,7 @@ pub fn value_to_json(value: &Value) -> serde_json::Value {
 }
 
 /// Helper trait to convert String errors to ErrorData
+#[allow(dead_code)]
 pub(crate) trait IntoErrorData {
     fn into_error_data(self) -> ErrorData;
 }

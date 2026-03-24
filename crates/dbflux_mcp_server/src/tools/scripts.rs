@@ -72,6 +72,7 @@ pub struct ExecuteScriptParams {
 }
 
 #[derive(Debug, Serialize)]
+#[allow(dead_code)] // Used by list_scripts tool via serde serialization
 struct ScriptEntryDto {
     path: String,
     name: String,
@@ -81,6 +82,7 @@ struct ScriptEntryDto {
 }
 
 #[derive(Debug, Serialize)]
+#[allow(dead_code)] // Used by get_script tool via serde serialization
 struct ScriptContentDto {
     path: String,
     name: String,
@@ -90,12 +92,14 @@ struct ScriptContentDto {
 }
 
 #[derive(Debug, Serialize)]
+#[allow(dead_code)] // Used by create_script tool via serde serialization
 struct ScriptCreatedDto {
     path: String,
     name: String,
 }
 
 #[derive(Debug, Serialize)]
+#[allow(dead_code)] // Used by update_script tool via serde serialization
 struct ScriptUpdatedDto {
     path: String,
     size: usize,
@@ -311,9 +315,12 @@ impl DbFluxServer {
 }
 
 // Implementation methods
+// Note: These implementation methods are called by the #[tool] macro-generated code.
+// Clippy cannot detect this usage, so we suppress dead_code warnings.
 impl DbFluxServer {
+    #[allow(dead_code)]
     async fn list_scripts_impl(
-        state: ServerState,
+        _state: ServerState,
         subfolder: Option<&str>,
     ) -> Result<Vec<ScriptEntryDto>, String> {
         use dbflux_core::ScriptsDirectory;
@@ -367,8 +374,9 @@ impl DbFluxServer {
         Ok(entries)
     }
 
+    #[allow(dead_code)]
     async fn get_script_impl(
-        state: ServerState,
+        _state: ServerState,
         script_path: &str,
     ) -> Result<ScriptContentDto, String> {
         use dbflux_core::ScriptsDirectory;
@@ -414,8 +422,9 @@ impl DbFluxServer {
         })
     }
 
+    #[allow(dead_code)]
     async fn create_script_impl(
-        state: ServerState,
+        _state: ServerState,
         name: &str,
         content: &str,
         extension: &str,
@@ -466,8 +475,9 @@ impl DbFluxServer {
         })
     }
 
+    #[allow(dead_code)]
     async fn update_script_impl(
-        state: ServerState,
+        _state: ServerState,
         script_path: &str,
         content: &str,
     ) -> Result<ScriptUpdatedDto, String> {
@@ -499,7 +509,8 @@ impl DbFluxServer {
         })
     }
 
-    async fn delete_script_impl(state: ServerState, script_path: &str) -> Result<(), String> {
+    #[allow(dead_code)]
+    async fn delete_script_impl(_state: ServerState, script_path: &str) -> Result<(), String> {
         use dbflux_core::ScriptsDirectory;
 
         let mut scripts_dir = ScriptsDirectory::new()
@@ -522,8 +533,9 @@ impl DbFluxServer {
         Ok(())
     }
 
+    #[allow(dead_code)]
     async fn read_script_for_execution(
-        state: &ServerState,
+        _state: &ServerState,
         script_path: &str,
     ) -> Result<(String, QueryLanguage), String> {
         use dbflux_core::ScriptsDirectory;
@@ -550,6 +562,7 @@ impl DbFluxServer {
         Ok((content, language))
     }
 
+    #[allow(dead_code)]
     fn detect_execution_classification(
         content: &str,
         language: &QueryLanguage,
@@ -569,6 +582,7 @@ impl DbFluxServer {
         classify_query_for_governance(language, content)
     }
 
+    #[allow(dead_code)]
     async fn execute_script_impl(
         state: ServerState,
         content: &str,
@@ -595,6 +609,7 @@ impl DbFluxServer {
         }
     }
 
+    #[allow(dead_code)]
     async fn execute_query_content(
         state: ServerState,
         connection_id: &str,

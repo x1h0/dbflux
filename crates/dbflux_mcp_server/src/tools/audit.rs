@@ -81,6 +81,7 @@ pub struct ExportAuditLogsParams {
     pub format: String,
 }
 
+#[allow(dead_code)] // Used by query_audit_logs and export_audit_logs tools
 fn parse_iso8601_to_epoch_ms(date_str: &str) -> Result<i64, String> {
     use chrono::DateTime;
 
@@ -89,6 +90,7 @@ fn parse_iso8601_to_epoch_ms(date_str: &str) -> Result<i64, String> {
         .map_err(|e| format!("Invalid ISO8601 date '{}': {}", date_str, e))
 }
 
+#[allow(dead_code)] // Used by query_audit_logs and export_audit_logs tools
 fn build_audit_filter(
     actor_id: Option<String>,
     tool_id: Option<String>,

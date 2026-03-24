@@ -10,7 +10,9 @@ use crate::{error_messages, governance::GovernanceMiddleware, state::ServerState
 /// Main DBFlux MCP Server
 #[derive(Clone)]
 pub(crate) struct DbFluxServer {
+    #[allow(dead_code)] // Used by governance middleware and tools
     pub(crate) state: ServerState,
+    #[allow(dead_code)] // Used for policy evaluation
     pub(crate) governance: GovernanceMiddleware,
     pub(crate) tool_router: ToolRouter<DbFluxServer>,
 }
@@ -27,6 +29,7 @@ impl DbFluxServer {
     }
 
     /// Classify a query based on its SQL content
+    #[allow(dead_code)] // May be used by future governance features
     fn classify_query(&self, query: &str) -> dbflux_policy::ExecutionClassification {
         use dbflux_policy::ExecutionClassification;
 
@@ -58,6 +61,7 @@ impl DbFluxServer {
     }
 
     /// Get or establish a connection for the given connection_id
+    #[allow(dead_code)] // Used by tool implementations
     pub(crate) async fn get_or_connect(
         state: ServerState,
         connection_id: &str,

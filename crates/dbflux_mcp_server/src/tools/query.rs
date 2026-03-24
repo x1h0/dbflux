@@ -27,6 +27,7 @@ pub struct PreviewMutationParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+#[allow(dead_code)] // Used by explain_query tool via #[tool] macro
 pub(crate) struct ExplainQueryParams {
     #[schemars(description = "Connection ID")]
     pub connection_id: String,
