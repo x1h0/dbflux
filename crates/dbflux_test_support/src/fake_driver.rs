@@ -970,6 +970,7 @@ mod tests {
                 DbKind::Postgres => DbConfig::default_postgres(),
                 DbKind::SQLite => DbConfig::SQLite {
                     path: "/tmp/fake.db".into(),
+                    connection_id: None,
                 },
                 DbKind::MySQL | DbKind::MariaDB => DbConfig::MySQL {
                     use_uri: false,

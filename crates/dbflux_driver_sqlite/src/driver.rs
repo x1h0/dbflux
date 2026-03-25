@@ -287,8 +287,9 @@ impl DbDriver for SqliteDriver {
         let is_memory = path.as_os_str() == ":memory:";
 
         // For in-memory databases, try to reuse pooled connection
+        #[allow(clippy::collapsible_if)]
         if is_memory {
-            if let Some(id) = &connection_id {
+            if let Some(id) = connection_id.as_ref() {
                 let pool_key = format!("{}:{}", profile.id, id);
                 if let Some(conn) = POOL.lock().unwrap().get(&pool_key) {
                     let conn = conn.clone();
@@ -310,6 +311,7 @@ impl DbDriver for SqliteDriver {
         let interrupt_handle = conn.get_interrupt_handle();
 
         // For in-memory databases, pool the connection if connection_id is set
+        #[allow(clippy::collapsible_if)]
         if is_memory {
             if let Some(id) = &connection_id {
                 let pool_key = format!("{}:{}", profile.id, id);
@@ -1835,6 +1837,7 @@ mod tests {
         let driver = SqliteDriver::new();
         let config = DbConfig::SQLite {
             path: "/tmp/dbflux-test.db".into(),
+            connection_id: None,
         };
 
         let values = driver.extract_values(&config);
