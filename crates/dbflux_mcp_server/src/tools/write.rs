@@ -278,39 +278,28 @@ impl DbFluxServer {
         _returning: Option<&[String]>,
     ) -> Result<serde_json::Value, String> {
         let connection = Self::get_or_connect(state, connection_id).await?;
-        let dialect = connection.dialect();
 
-        let table_ref = TableRef::from_qualified(table);
-        let table_quoted = table_ref.quoted_with(dialect);
-
-        // Build SET clause
+        // Build SET clause as Vec<(String, Value)>
         let set_obj = set
             .as_object()
             .ok_or_else(|| "SET must be a JSON object".to_string())?;
 
-        let set_clauses: Vec<String> = set_obj
+        let set_pairs: Vec<(String, Value)> = set_obj
             .iter()
-            .map(|(col, val)| {
-                let db_val = json_to_db_value(val.clone());
-                format!(
-                    "{} = {}",
-                    dialect.quote_identifier(col),
-                    db_value_to_sql(&db_val, dialect)
-                )
-            })
+            .map(|(col, val)| (col.clone(), json_to_db_value(val.clone())))
             .collect();
 
-        // Build WHERE clause
-        let where_clause = json_filter_to_sql(filter, dialect)?;
+        // Convert filter to dbflux_core::Value
+        let db_filter = json_to_db_value(filter.clone());
 
-        let sql = format!(
-            "UPDATE {} SET {} WHERE {}",
-            table_quoted,
-            set_clauses.join(", "),
-            where_clause
-        );
+        // Build SQL using driver abstraction
+        let (sql, params) = connection.build_update_sql(table, &set_pairs, Some(&db_filter));
 
-        let request = QueryRequest::new(&sql);
+        let request = QueryRequest {
+            sql,
+            params,
+            ..Default::default()
+        };
         let result = connection
             .execute(&request)
             .map_err(|e| format!("Update error: {}", e))?;
@@ -330,8 +319,6 @@ impl DbFluxServer {
     ) -> Result<serde_json::Value, String> {
         let connection = Self::get_or_connect(state.clone(), connection_id).await?;
 
-        let table_ref = TableRef::from_qualified(table);
-
         let obj = record
             .as_object()
             .ok_or_else(|| "Record must be a JSON object".to_string())?;
@@ -339,56 +326,44 @@ impl DbFluxServer {
         let columns: Vec<String> = obj.keys().cloned().collect();
         let values: Vec<Value> = obj.values().map(|v| json_to_db_value(v.clone())).collect();
 
-        // For PostgreSQL, try to use ON CONFLICT
-        // For other databases, this is a simplified implementation
-        // that does INSERT and handles the error
+        // Determine update columns (exclude conflict columns if using record itself)
+        let update_columns: Vec<String> = if let Some(update) = update_on_conflict {
+            let update_obj = update
+                .as_object()
+                .ok_or_else(|| "update_on_conflict must be a JSON object".to_string())?;
+            update_obj.keys().cloned().collect()
+        } else {
+            // If not specified, update all columns except conflict columns
+            columns
+                .iter()
+                .filter(|col| !conflict_columns.contains(col))
+                .cloned()
+                .collect()
+        };
 
-        let row_insert = RowInsert::new(
-            table_ref.name.clone(),
-            table_ref.schema.clone(),
-            columns.clone(),
-            values.clone(),
+        // Build upsert SQL using driver abstraction
+        let (sql, params) = connection.build_upsert_sql(
+            table,
+            &columns,
+            &values,
+            conflict_columns,
+            &update_columns,
         );
 
-        match connection.insert_row(&row_insert) {
-            Ok(result) => Ok(serde_json::json!({
-                "upserted": result.affected_rows,
-                "action": "insert",
-            })),
-            Err(_) => {
-                // Try to update existing record
-                // Build filter from conflict columns
-                let filter_map: serde_json::Map<String, serde_json::Value> = conflict_columns
-                    .iter()
-                    .filter_map(|col| obj.get(col).map(|val| (col.clone(), val.clone())))
-                    .collect();
+        let request = QueryRequest {
+            sql,
+            params,
+            ..Default::default()
+        };
 
-                let filter = serde_json::Value::Object(filter_map);
+        let result = connection
+            .execute(&request)
+            .map_err(|e| format!("Upsert error: {}", e))?;
 
-                let update = update_on_conflict.unwrap_or(record);
-
-                // Remove conflict columns from update if using record itself
-                let update_obj = if update_on_conflict.is_some() {
-                    update.clone()
-                } else {
-                    let mut filtered = update.as_object().cloned().unwrap_or_default();
-                    for col in conflict_columns {
-                        filtered.remove(col);
-                    }
-                    serde_json::Value::Object(filtered)
-                };
-
-                Self::update_records_impl(
-                    state.clone(),
-                    connection_id,
-                    table,
-                    &filter,
-                    &update_obj,
-                    None,
-                )
-                .await
-            }
-        }
+        Ok(serde_json::json!({
+            "upserted": result.rows.len() as u64,
+            "action": "upsert",
+        }))
     }
 }
 

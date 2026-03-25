@@ -838,17 +838,9 @@ impl DbFluxServer {
         if_exists: bool,
     ) -> Result<serde_json::Value, String> {
         let connection = Self::get_or_connect(state, connection_id).await?;
-        let dialect = connection.dialect();
 
-        let if_exists_clause = if if_exists { "IF EXISTS " } else { "" };
-        let index_quoted = dialect.quote_identifier(index_name);
-
-        let sql = if let Some(tbl) = table {
-            let table_quoted = dialect.quote_identifier(tbl);
-            format!("DROP INDEX {} ON {}", index_quoted, table_quoted)
-        } else {
-            format!("DROP INDEX {}{}", if_exists_clause, index_quoted)
-        };
+        // Build SQL using driver abstraction
+        let sql = connection.build_drop_index_sql(index_name, table, if_exists);
 
         let request = QueryRequest::new(&sql);
         connection

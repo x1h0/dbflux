@@ -226,17 +226,18 @@ impl DbFluxServer {
         _returning: Option<&[String]>,
     ) -> Result<serde_json::Value, String> {
         let connection = Self::get_or_connect(state, connection_id).await?;
-        let dialect = connection.dialect();
 
-        let table_ref = TableRef::from_qualified(table);
-        let table_quoted = table_ref.quoted_with(dialect);
+        // Convert filter to dbflux_core::Value
+        let db_filter = json_to_db_value(filter.clone());
 
-        // Build WHERE clause
-        let where_clause = json_filter_to_sql(filter, dialect)?;
+        // Build SQL using driver abstraction
+        let (sql, params) = connection.build_delete_sql(table, Some(&db_filter));
 
-        let sql = format!("DELETE FROM {} WHERE {}", table_quoted, where_clause);
-
-        let request = QueryRequest::new(&sql);
+        let request = QueryRequest {
+            sql,
+            params,
+            ..Default::default()
+        };
         let result = connection
             .execute(&request)
             .map_err(|e| format!("Delete error: {}", e))?;
@@ -252,12 +253,9 @@ impl DbFluxServer {
         table: &str,
     ) -> Result<serde_json::Value, String> {
         let connection = Self::get_or_connect(state, connection_id).await?;
-        let dialect = connection.dialect();
 
-        let table_ref = TableRef::from_qualified(table);
-        let table_quoted = table_ref.quoted_with(dialect);
-
-        let sql = format!("TRUNCATE TABLE {}", table_quoted);
+        // Build SQL using driver abstraction
+        let sql = connection.build_truncate_sql(table);
 
         let request = QueryRequest::new(&sql);
         connection

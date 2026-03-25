@@ -183,18 +183,7 @@ impl DbFluxServer {
                     let conn_for_blocking = conn.clone();
 
                     let version_info: Option<String> = tokio::task::spawn_blocking(move || {
-                        use dbflux_core::{DatabaseCategory, DbKind};
-
-                        let version_query = match (category, conn_for_blocking.kind()) {
-                            (DatabaseCategory::Relational, DbKind::Postgres) => "SELECT version()",
-                            (DatabaseCategory::Relational, DbKind::MySQL | DbKind::MariaDB) => {
-                                "SELECT VERSION()"
-                            }
-                            (DatabaseCategory::Relational, DbKind::SQLite) => {
-                                "SELECT sqlite_version()"
-                            }
-                            _ => "SELECT version()",
-                        };
+                        let version_query = conn_for_blocking.version_query();
 
                         conn_for_blocking
                             .execute(&QueryRequest {

@@ -5,7 +5,7 @@
 //! - `count_records`: Count records matching a filter
 //! - `aggregate_data`: Perform aggregations with grouping and having clauses
 
-use dbflux_core::{ColumnRef, QueryRequest, TableRef, Value};
+use dbflux_core::{ColumnRef, OrderByColumn, QueryRequest, SortDirection, TableRef, Value};
 use rmcp::{
     ErrorData,
     handler::server::wrapper::Parameters,
@@ -339,23 +339,8 @@ impl DbFluxServer {
 
         let dialect = connection.dialect();
 
-        // Build column list
-        let column_list = if let Some(cols) = columns {
-            if cols.is_empty() {
-                "*".to_string()
-            } else {
-                cols.iter()
-                    .map(|c| Self::quote_column_reference(c, dialect))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            }
-        } else {
-            "*".to_string()
-        };
-
-        // Build base query
-        // Apply default schema if the driver supports schemas and no schema qualifier is present
-        let table_with_schema = {
+        // Determine the table name (apply default schema if needed)
+        let table_name = {
             let default_schema = connection
                 .metadata()
                 .syntax
@@ -369,12 +354,56 @@ impl DbFluxServer {
                 table.to_string()
             }
         };
-        let table_ref = TableRef::from_qualified(&table_with_schema);
-        let table_quoted = table_ref.quoted_with(dialect);
 
-        let mut sql = format!("SELECT {} FROM {}", column_list, table_quoted);
+        // Build column list
+        let column_list: Vec<String> = if let Some(cols) = columns {
+            if cols.is_empty() {
+                vec!["*".to_string()]
+            } else {
+                cols.iter().cloned().collect()
+            }
+        } else {
+            vec!["*".to_string()]
+        };
 
-        // Add joins if specified
+        // Convert filter to dbflux_core::Value
+        let db_filter: Option<Value> = filter.map(|f| json_to_db_value(f.clone()));
+
+        // Build ORDER BY columns
+        let order_by_columns: Vec<OrderByColumn> = order_by
+            .map(|items| {
+                items
+                    .iter()
+                    .map(|o| {
+                        let direction = o
+                            .direction
+                            .as_deref()
+                            .map(|d| d.to_uppercase() == "DESC")
+                            .unwrap_or(false);
+                        OrderByColumn::from_name(
+                            &o.column,
+                            if direction {
+                                SortDirection::Descending
+                            } else {
+                                SortDirection::Ascending
+                            },
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        // Build SQL using driver abstraction
+        let mut sql = connection.build_select_sql(
+            &table_name,
+            &column_list,
+            db_filter.as_ref(),
+            &order_by_columns,
+            limit,
+            offset,
+        );
+
+        // Add joins if specified (not supported by build_select_sql)
         if let Some(joins_list) = joins {
             for join in joins_list {
                 let join_type = match join.r#type.to_uppercase().as_str() {
@@ -387,36 +416,6 @@ impl DbFluxServer {
                 sql.push_str(&format!(" {} {} ON {}", join_type, join_table, join.on));
             }
         }
-
-        // Add WHERE clause from filter
-        if let Some(f) = filter {
-            let where_clause = json_filter_to_sql(f, dialect)?;
-            if !where_clause.is_empty() {
-                sql.push_str(&format!(" WHERE {}", where_clause));
-            }
-        }
-
-        // Add ORDER BY
-        if let Some(order) = order_by
-            && !order.is_empty()
-        {
-            let order_clauses: Vec<String> = order
-                .iter()
-                .map(|o| {
-                    let dir = o
-                        .direction
-                        .as_deref()
-                        .map(|d| d.to_uppercase())
-                        .unwrap_or_else(|| "ASC".to_string());
-                    let col_ref = ColumnRef::from_qualified(&o.column);
-                    format!("{} {}", col_ref.quoted_with(dialect), dir)
-                })
-                .collect();
-            sql.push_str(&format!(" ORDER BY {}", order_clauses.join(", ")));
-        }
-
-        // Add pagination
-        sql.push_str(&format!(" LIMIT {} OFFSET {}", limit, offset));
 
         let mut request = QueryRequest::new(&sql);
         if let Some(db) = database {
@@ -455,10 +454,8 @@ impl DbFluxServer {
             Self::get_or_connect(state, connection_id).await?
         };
 
-        let dialect = connection.dialect();
-
         // Apply default schema if the driver supports schemas and no schema qualifier is present
-        let table_with_schema = {
+        let table_name = {
             let default_schema = connection
                 .metadata()
                 .syntax
@@ -472,17 +469,12 @@ impl DbFluxServer {
                 table.to_string()
             }
         };
-        let table_ref = TableRef::from_qualified(&table_with_schema);
-        let table_quoted = table_ref.quoted_with(dialect);
 
-        let mut sql = format!("SELECT COUNT(*) FROM {}", table_quoted);
+        // Convert filter to dbflux_core::Value
+        let db_filter: Option<Value> = filter.map(|f| json_to_db_value(f.clone()));
 
-        if let Some(f) = filter {
-            let where_clause = json_filter_to_sql(f, dialect)?;
-            if !where_clause.is_empty() {
-                sql.push_str(&format!(" WHERE {}", where_clause));
-            }
-        }
+        // Build SQL using driver abstraction
+        let sql = connection.build_count_sql(&table_name, db_filter.as_ref());
 
         let mut request = QueryRequest::new(&sql);
         if let Some(db) = database {
