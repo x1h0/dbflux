@@ -620,16 +620,37 @@ fn sqlite_ddl_error_drop_with_dependents() -> Result<(), DbError> {
 
     connection.execute(&QueryRequest::new("PRAGMA foreign_keys = ON"))?;
 
+    // Create parent table
     let parent_table = SqliteFixtures::table_integer_pk();
     connection.execute(&QueryRequest::new(&parent_table.create_sql))?;
 
-    let child_table = SqliteFixtures::table_with_fk();
-    connection.execute(&QueryRequest::new(&child_table.create_sql))?;
+    // Create child table WITHOUT CASCADE - this tests FK enforcement properly
+    // Note: Using a direct CREATE TABLE instead of fixture because the fixture has CASCADE
+    connection.execute(&QueryRequest::new(
+        "CREATE TABLE orders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id),
+            total REAL NOT NULL,
+            status TEXT DEFAULT 'pending'
+        )",
+    ))?;
 
+    // Insert a user first
+    connection.execute(&QueryRequest::new(
+        "INSERT INTO users (username, email) VALUES ('test', 'test@test.com')",
+    ))?;
+
+    // Insert a dependent row into the child table
+    connection.execute(&QueryRequest::new(
+        "INSERT INTO orders (user_id, total, status) VALUES (1, 100.0, 'pending')",
+    ))?;
+
+    // Now DROP TABLE should fail because orders has a dependent row
     let result = connection.execute(&QueryRequest::new("DROP TABLE users"));
     assert!(result.is_err(), "should fail to drop table with dependents");
 
     connection.execute(&QueryRequest::new("PRAGMA foreign_keys = OFF"))?;
+    // With FK checks off, should be able to drop
     let drop_result = connection.execute(&QueryRequest::new("DROP TABLE users"));
     assert!(drop_result.is_ok(), "should succeed with FK checks off");
 

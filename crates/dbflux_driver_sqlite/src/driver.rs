@@ -450,62 +450,96 @@ impl Connection for SqliteConnection {
             }
         };
 
-        let column_count = stmt.column_count();
-        let column_names: Vec<String> = stmt.column_names().iter().map(|s| s.to_string()).collect();
-        let columns: Vec<ColumnMeta> = column_names
-            .into_iter()
-            .map(|name| ColumnMeta {
-                name,
-                type_name: "TEXT".to_string(),
-                nullable: true,
-                is_primary_key: false,
-            })
-            .collect();
+        // Check if this is a SELECT, PRAGMA, or EXPLAIN statement (returns rows) or a DDL/DML statement
+        let sql_trimmed = req.sql.trim().to_uppercase();
+        let is_query = sql_trimmed.starts_with("SELECT")
+            || sql_trimmed.starts_with("PRAGMA")
+            || sql_trimmed.starts_with("EXPLAIN");
 
-        let mut rows: Vec<Row> = Vec::new();
-        let query_result = stmt.query([]);
+        if is_query {
+            // For SELECT statements, use query() to get rows
+            let column_count = stmt.column_count();
+            let column_names: Vec<String> = stmt
+                .column_names()
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+            let columns: Vec<ColumnMeta> = column_names
+                .into_iter()
+                .map(|name| ColumnMeta {
+                    name,
+                    type_name: "TEXT".to_string(),
+                    nullable: true,
+                    is_primary_key: false,
+                })
+                .collect();
 
-        let mut result_rows = match query_result {
-            Ok(r) => r,
-            Err(e) => {
-                if self.cancelled.load(Ordering::SeqCst) {
-                    log::info!("[QUERY] SQLite query was interrupted");
-                    return Err(DbError::Cancelled);
-                }
-                return Err(format_sqlite_query_error(&e));
-            }
-        };
+            let mut rows: Vec<Row> = Vec::new();
+            let query_result = stmt.query([]);
 
-        loop {
-            let next_result = result_rows.next();
-
-            match next_result {
-                Ok(Some(row)) => {
-                    let mut values: Vec<Value> = Vec::with_capacity(column_count);
-                    for i in 0..column_count {
-                        let value = sqlite_value_to_value(row, i);
-                        values.push(value);
-                    }
-                    rows.push(values);
-
-                    if let Some(limit) = req.limit
-                        && rows.len() >= limit as usize
-                    {
-                        break;
-                    }
-                }
-                Ok(None) => break,
+            let mut result_rows = match query_result {
+                Ok(r) => r,
                 Err(e) => {
                     if self.cancelled.load(Ordering::SeqCst) {
-                        log::info!("[QUERY] SQLite query was interrupted during iteration");
+                        log::info!("[QUERY] SQLite query was interrupted");
                         return Err(DbError::Cancelled);
                     }
                     return Err(format_sqlite_query_error(&e));
                 }
-            }
-        }
+            };
 
-        Ok(QueryResult::table(columns, rows, None, start.elapsed()))
+            loop {
+                let next_result = result_rows.next();
+
+                match next_result {
+                    Ok(Some(row)) => {
+                        let mut values: Vec<Value> = Vec::with_capacity(column_count);
+                        for i in 0..column_count {
+                            let value = sqlite_value_to_value(row, i);
+                            values.push(value);
+                        }
+                        rows.push(values);
+
+                        if let Some(limit) = req.limit
+                            && rows.len() >= limit as usize
+                        {
+                            break;
+                        }
+                    }
+                    Ok(None) => break,
+                    Err(e) => {
+                        if self.cancelled.load(Ordering::SeqCst) {
+                            log::info!("[QUERY] SQLite query was interrupted during iteration");
+                            return Err(DbError::Cancelled);
+                        }
+                        return Err(format_sqlite_query_error(&e));
+                    }
+                }
+            }
+
+            Ok(QueryResult::table(columns, rows, None, start.elapsed()))
+        } else {
+            // For DDL/DML statements (CREATE, DROP, INSERT, UPDATE, DELETE, etc.),
+            // use execute() which properly handles non-row-returning statements
+            let affected = stmt
+                .execute([])
+                .map_err(|e| {
+                    if self.cancelled.load(Ordering::SeqCst) {
+                        log::info!("[QUERY] SQLite query was interrupted");
+                        DbError::Cancelled
+                    } else {
+                        format_sqlite_query_error(&e)
+                    }
+                })?;
+
+            // Return empty result for DDL/DML
+            Ok(QueryResult::table(
+                vec![],
+                vec![],
+                Some(affected as u64),
+                start.elapsed(),
+            ))
+        }
     }
 
     fn cancel(&self, _handle: &QueryHandle) -> Result<(), DbError> {
@@ -1111,17 +1145,35 @@ impl SqliteConnection {
         conn: &RusqliteConnection,
         table: &str,
     ) -> Result<Vec<ColumnInfo>, DbError> {
+        // First check if the table exists
+        let table_exists: bool = conn
+            .query_row(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name = ?",
+                [table],
+                |_row| Ok(()),
+            )
+            .is_ok();
+
+        if !table_exists {
+            return Err(DbError::ObjectNotFound(format!("Table '{}' not found", table).into()));
+        }
+
         let mut stmt = conn
             .prepare(&format!("PRAGMA table_info('{}')", table))
             .map_err(|e| format_sqlite_query_error(&e))?;
 
-        let columns = stmt
+        let columns: Vec<ColumnInfo> = stmt
             .query_map([], |row| {
+                let notnull: i32 = row.get(3).unwrap_or(1);
+                let pk: i32 = row.get(5).unwrap_or(0);
                 Ok(ColumnInfo {
                     name: row.get(1)?,
                     type_name: row.get::<_, String>(2).unwrap_or_default(),
-                    nullable: row.get::<_, i32>(3).unwrap_or(1) == 0,
-                    is_primary_key: row.get::<_, i32>(5).unwrap_or(0) == 1,
+                    // SQLite reports notnull=0 for INTEGER PRIMARY KEY columns,
+                    // but they are implicitly NOT NULL. Columns with pk > 0 are NOT NULL.
+                    nullable: notnull == 0 && pk == 0,
+                    // Any column with pk > 0 is part of a primary key (composite PKs have pk=1,2,3,...)
+                    is_primary_key: pk > 0,
                     default_value: row.get::<_, Option<String>>(4).unwrap_or(None),
                     enum_values: None,
                 })
