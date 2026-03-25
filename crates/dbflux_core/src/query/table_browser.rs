@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{DbKind, DefaultSqlDialect, SqlDialect};
+use crate::{DefaultSqlDialect, SqlDialect};
 
 /// Sort direction for ORDER BY clauses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -228,31 +228,6 @@ impl TableRef {
     pub fn quoted_with(&self, dialect: &dyn SqlDialect) -> String {
         dialect.qualified_table(self.schema.as_deref(), &self.name)
     }
-
-    /// Quote identifier using the appropriate syntax for the database kind.
-    /// - PostgreSQL/SQLite: double quotes ("schema"."table")
-    /// - MySQL/MariaDB: backticks (`schema`.`table`)
-    ///
-    /// Escapes quote characters within identifiers by doubling them.
-    pub fn quoted_for_kind(&self, kind: DbKind) -> String {
-        let quote = match kind {
-            DbKind::MySQL | DbKind::MariaDB => '`',
-            _ => '"',
-        };
-
-        let escaped_name = escape_identifier(&self.name, quote);
-
-        match &self.schema {
-            Some(s) => {
-                let escaped_schema = escape_identifier(s, quote);
-                format!(
-                    "{}{}{}.{}{}{}",
-                    quote, escaped_schema, quote, quote, escaped_name, quote
-                )
-            }
-            None => format!("{}{}{}", quote, escaped_name, quote),
-        }
-    }
 }
 
 /// Reference to a column with optional table qualification and alias.
@@ -366,39 +341,6 @@ impl ColumnRef {
         }
     }
 
-    /// Quote identifier using the appropriate syntax for the database kind.
-    /// - PostgreSQL/SQLite: double quotes ("table"."column")
-    /// - MySQL/MariaDB: backticks (`table`.`column`)
-    ///
-    /// Escapes quote characters within identifiers by doubling them.
-    pub fn quoted_for_kind(&self, kind: DbKind) -> String {
-        let quote = match kind {
-            DbKind::MySQL | DbKind::MariaDB => '`',
-            _ => '"',
-        };
-
-        let escaped_name = escape_identifier(&self.name, quote);
-
-        let base = match &self.table {
-            Some(t) => {
-                let escaped_table = escape_identifier(t, quote);
-                format!(
-                    "{}{}{}.{}{}{}",
-                    quote, escaped_table, quote, quote, escaped_name, quote
-                )
-            }
-            None => format!("{}{}{}", quote, escaped_name, quote),
-        };
-
-        match &self.alias {
-            Some(a) => {
-                let escaped_alias = escape_identifier(a, quote);
-                format!("{} AS {}{}{}", base, quote, escaped_alias, quote)
-            }
-            None => base,
-        }
-    }
-
     /// Get the name that will appear in result sets.
     /// Returns alias if present, otherwise the column name.
     pub fn result_name(&self) -> &str {
@@ -484,52 +426,6 @@ impl TableBrowseRequest {
                         SortDirection::Descending => "DESC",
                     };
                     format!("{} {}", col.column.quoted_with(dialect), dir)
-                })
-                .collect();
-            sql.push_str(&quoted_cols.join(", "));
-        }
-
-        sql.push_str(&format!(
-            " LIMIT {} OFFSET {}",
-            self.pagination.limit(),
-            self.pagination.offset()
-        ));
-
-        sql
-    }
-
-    /// Build the SQL query for this browse request (PostgreSQL syntax).
-    ///
-    /// If no ORDER BY columns are specified, the query may return inconsistent
-    /// results across pages. The caller should ensure proper ordering.
-    pub fn build_sql(&self) -> String {
-        self.build_sql_for_kind(DbKind::Postgres)
-    }
-
-    /// Build the SQL query for this browse request using the appropriate syntax
-    /// for the given database kind.
-    pub fn build_sql_for_kind(&self, kind: DbKind) -> String {
-        let mut sql = format!("SELECT * FROM {}", self.table.quoted_for_kind(kind));
-
-        if let Some(ref filter) = self.filter {
-            let trimmed = filter.trim();
-            if !trimmed.is_empty() {
-                sql.push_str(" WHERE ");
-                sql.push_str(trimmed);
-            }
-        }
-
-        if !self.order_by.is_empty() {
-            sql.push_str(" ORDER BY ");
-            let quoted_cols: Vec<String> = self
-                .order_by
-                .iter()
-                .map(|col| {
-                    let dir = match col.direction {
-                        SortDirection::Ascending => "ASC",
-                        SortDirection::Descending => "DESC",
-                    };
-                    format!("{} {}", col.column.quoted_for_kind(kind), dir)
                 })
                 .collect();
             sql.push_str(&quoted_cols.join(", "));
@@ -704,7 +600,7 @@ mod tests {
             .with_order_by(vec![OrderByColumn::asc("id")]);
 
         assert_eq!(
-            req.build_sql(),
+            req.build_sql_with(&DefaultSqlDialect),
             "SELECT * FROM \"public\".\"users\" ORDER BY \"id\" ASC LIMIT 50 OFFSET 100"
         );
     }
@@ -716,7 +612,7 @@ mod tests {
             .with_order_by(vec![OrderByColumn::desc("created_at")]);
 
         assert_eq!(
-            req.build_sql(),
+            req.build_sql_with(&DefaultSqlDialect),
             "SELECT * FROM \"orders\" WHERE status = 'active' ORDER BY \"created_at\" DESC LIMIT 100 OFFSET 0"
         );
     }
@@ -727,19 +623,8 @@ mod tests {
             .with_order_by(vec![OrderByColumn::asc("col\"name")]);
 
         assert_eq!(
-            req.build_sql(),
+            req.build_sql_with(&DefaultSqlDialect),
             "SELECT * FROM \"my\"\"table\" ORDER BY \"col\"\"name\" ASC LIMIT 100 OFFSET 0"
-        );
-    }
-
-    #[test]
-    fn test_mysql_identifier_escaping() {
-        let req = TableBrowseRequest::new(TableRef::new("my`table"))
-            .with_order_by(vec![OrderByColumn::asc("col`name")]);
-
-        assert_eq!(
-            req.build_sql_for_kind(DbKind::MySQL),
-            "SELECT * FROM `my``table` ORDER BY `col``name` ASC LIMIT 100 OFFSET 0"
         );
     }
 
@@ -901,31 +786,6 @@ mod column_ref_tests {
         assert_eq!(col3.quoted_with(&dialect), "\"first_name\" AS \"fname\"");
     }
 
-    #[test]
-    fn test_quoted_for_kind() {
-        // PostgreSQL uses double quotes
-        let col = ColumnRef::with_table("users", "id");
-        assert_eq!(col.quoted_for_kind(DbKind::Postgres), "\"users\".\"id\"");
-
-        // MySQL uses backticks
-        assert_eq!(col.quoted_for_kind(DbKind::MySQL), "`users`.`id`");
-        assert_eq!(col.quoted_for_kind(DbKind::MariaDB), "`users`.`id`");
-
-        // SQLite uses double quotes
-        assert_eq!(col.quoted_for_kind(DbKind::SQLite), "\"users\".\"id\"");
-
-        // With alias
-        let col2 = ColumnRef::new("email").with_alias("user_email");
-        assert_eq!(
-            col2.quoted_for_kind(DbKind::Postgres),
-            "\"email\" AS \"user_email\""
-        );
-        assert_eq!(
-            col2.quoted_for_kind(DbKind::MySQL),
-            "`email` AS `user_email`"
-        );
-    }
-
     // Edge cases
     #[test]
     fn test_names_with_spaces() {
@@ -1059,7 +919,7 @@ mod order_by_tests {
             OrderByColumn::asc("name"),
         ]);
 
-        let sql = req.build_sql();
+        let sql = req.build_sql_with(&DefaultSqlDialect);
         assert!(sql.contains("ORDER BY \"price\" DESC, \"name\" ASC"));
     }
 
@@ -1069,7 +929,7 @@ mod order_by_tests {
         let req = TableBrowseRequest::new(TableRef::new("orders"))
             .with_order_by(vec![OrderByColumn::asc_qualified("orders", "created_at")]);
 
-        let sql = req.build_sql();
+        let sql = req.build_sql_with(&DefaultSqlDialect);
         assert!(sql.contains("ORDER BY \"orders\".\"created_at\" ASC"));
     }
 }
