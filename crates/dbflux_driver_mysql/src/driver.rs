@@ -1340,9 +1340,7 @@ fn plan_mysql_table_count(
     ))
 }
 
-fn plan_mysql_aggregate(
-    request: &dbflux_core::AggregateRequest,
-) -> Result<SemanticPlan, DbError> {
+fn plan_mysql_aggregate(request: &dbflux_core::AggregateRequest) -> Result<SemanticPlan, DbError> {
     let sql = request.build_sql_with(&MYSQL_DIALECT)?;
 
     Ok(SemanticPlan::single_query(
@@ -2776,8 +2774,8 @@ mod tests {
     };
     use dbflux_core::{
         DatabaseCategory, DbConfig, DbDriver, DbError, DbKind, FormValues, MutationRequest,
-        OrderByColumn, QueryLanguage, RowInsert, SemanticRequest, SqlDialect,
-        TableBrowseRequest, TableRef, Value,
+        OrderByColumn, QueryLanguage, RowInsert, SemanticRequest, SqlDialect, TableBrowseRequest,
+        TableRef, Value,
     };
 
     #[test]
@@ -2960,7 +2958,10 @@ mod tests {
 
         assert_eq!(plan.kind, dbflux_core::SemanticPlanKind::Query);
         assert_eq!(plan.queries[0].language, QueryLanguage::Sql);
-        assert_eq!(plan.queries[0].target_database.as_deref(), Some("analytics"));
+        assert_eq!(
+            plan.queries[0].target_database.as_deref(),
+            Some("analytics")
+        );
         assert_eq!(
             plan.queries[0].text,
             "SELECT `customer_id`, COUNT(`id`) AS `order_count` FROM `orders` GROUP BY `customer_id` ORDER BY `order_count` DESC LIMIT 5"

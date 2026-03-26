@@ -104,7 +104,7 @@ impl DbFluxServer {
                 Some(&params.connection_id),
                 ExecutionClassification::Metadata,
                 move || async move {
-                    let _ = Self::get_or_connect(state, &connection_id)
+                    Self::connect_cached(state, &connection_id)
                         .await
                         .map_err(|e| e.into_error_data())?;
 

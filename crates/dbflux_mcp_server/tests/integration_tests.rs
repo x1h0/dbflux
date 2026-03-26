@@ -1,19 +1,96 @@
-//! Integration tests for MCP server tools.
-//!
-//! These tests require Docker to be running and use the `dbflux_test_support`
-//! containers module to spin up real database instances.
-//!
-//! Run with: `cargo test -p dbflux_mcp_server --test integration_tests -- --ignored`
-//!
-//! NOTE: These tests are simplified stubs that demonstrate the structure.
-//! They need to be expanded with actual MCP tool invocations once the
-//! test infrastructure is fully set up.
+//! Integration coverage for stable MCP contracts that can be exercised without
+//! Docker-backed databases.
 
-use dbflux_mcp_server::state::ServerState;
+use dbflux_core::{NoopSecretStore, SecretManager};
+use dbflux_mcp::{
+    ConnectionPolicyAssignmentDto, McpRuntime, TrustedClientDto, builtin_policies, builtin_roles,
+};
+use dbflux_mcp_server::{
+    connection_cache::ConnectionCache,
+    governance::GovernanceMiddleware,
+    state::ServerState,
+    tools::{SelectDataParams, query::PreviewMutationParams},
+};
+use dbflux_policy::{ConnectionPolicyAssignment, ExecutionClassification, PolicyBindingScope};
+use rmcp::{model::CallToolResult, schemars::schema_for};
+use serde_json::Value;
+use std::{collections::HashMap, sync::Arc};
+use tokio::sync::RwLock;
 
 // ---------------------------------------------------------------------------
 // Test setup helpers
 // ---------------------------------------------------------------------------
+
+fn build_runtime_with_role(connection_id: &str, role_id: &str) -> McpRuntime {
+    let audit_path = dbflux_audit::temp_sqlite_path(&format!(
+        "integration_test_{}.sqlite",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock before unix epoch")
+            .as_nanos()
+    ));
+    let audit_service = dbflux_audit::AuditService::new_sqlite(&audit_path)
+        .expect("failed to create test audit service");
+    let mut runtime = McpRuntime::new(audit_service);
+
+    for role in builtin_roles() {
+        let _ = runtime.upsert_role_mut(role);
+    }
+
+    for policy in builtin_policies() {
+        let _ = runtime.upsert_policy_mut(policy);
+    }
+
+    let _ = runtime.upsert_trusted_client_mut(TrustedClientDto {
+        id: "test-client".to_string(),
+        name: "Test Client".to_string(),
+        issuer: None,
+        active: true,
+    });
+
+    let _ = runtime.save_connection_policy_assignment_mut(ConnectionPolicyAssignmentDto {
+        connection_id: connection_id.to_string(),
+        assignments: vec![ConnectionPolicyAssignment {
+            actor_id: "test-client".to_string(),
+            scope: PolicyBindingScope {
+                connection_id: connection_id.to_string(),
+            },
+            role_ids: vec![role_id.to_string()],
+            policy_ids: vec![],
+        }],
+    });
+
+    runtime.drain_events();
+    runtime
+}
+
+fn build_state_with_role(connection_id: &str, role_id: &str) -> ServerState {
+    let mut profile_manager = dbflux_core::ProfileManager::new();
+    let mut profile = dbflux_core::ConnectionProfile::new(
+        "governed-test",
+        dbflux_core::DbConfig::default_postgres(),
+    );
+    profile.id = connection_id
+        .parse()
+        .expect("test connection id should be a valid uuid");
+    profile_manager.add(profile);
+
+    ServerState {
+        client_id: "test-client".to_string(),
+        runtime: Arc::new(RwLock::new(build_runtime_with_role(connection_id, role_id))),
+        profile_manager: Arc::new(RwLock::new(profile_manager)),
+        auth_profile_manager: Arc::new(RwLock::new(dbflux_core::AuthProfileManager::default())),
+        driver_registry: Arc::new(HashMap::new()),
+        auth_provider_registry: Arc::new(HashMap::new()),
+        connection_cache: Arc::new(RwLock::new(ConnectionCache::new())),
+        secret_manager: Arc::new(SecretManager::new(Box::new(NoopSecretStore))),
+        mcp_enabled_by_default: true,
+    }
+}
+
+fn property_schema<'a>(schema: &'a Value, field: &str) -> &'a Value {
+    &schema["properties"][field]
+}
 
 /// Creates a test ServerState with a trusted client and admin role assignment.
 ///
@@ -354,4 +431,95 @@ fn example_connection_retry_pattern() {
 fn test_placeholder() {
     // Placeholder test to ensure the file compiles
     assert!(true);
+}
+
+#[test]
+fn select_data_schema_keeps_shared_filter_and_pagination_contract() {
+    let schema =
+        serde_json::to_value(schema_for!(SelectDataParams)).expect("schema should serialize");
+
+    assert_eq!(
+        property_schema(&schema, "where")["description"],
+        "Filter conditions as JSON object"
+    );
+    assert_eq!(
+        property_schema(&schema, "limit")["description"],
+        "Maximum rows to return (default: 100, max: 10000)"
+    );
+    assert_eq!(
+        property_schema(&schema, "offset")["description"],
+        "Number of rows to skip"
+    );
+    assert_eq!(
+        property_schema(&schema, "database")["description"],
+        "Optional database/schema name"
+    );
+
+    let required = schema["required"]
+        .as_array()
+        .expect("required fields should be an array");
+    assert!(required.contains(&Value::String("connection_id".to_string())));
+    assert!(required.contains(&Value::String("table".to_string())));
+    assert!(!required.contains(&Value::String("where".to_string())));
+}
+
+#[test]
+fn preview_mutation_schema_keeps_mutation_preview_contract() {
+    let schema =
+        serde_json::to_value(schema_for!(PreviewMutationParams)).expect("schema should serialize");
+
+    assert_eq!(
+        property_schema(&schema, "connection_id")["description"],
+        "Connection ID"
+    );
+    assert_eq!(
+        property_schema(&schema, "sql")["description"],
+        "SQL mutation query to preview (INSERT, UPDATE, DELETE, etc.)"
+    );
+    assert_eq!(
+        property_schema(&schema, "database")["description"],
+        "Optional database/schema name"
+    );
+
+    let required = schema["required"]
+        .as_array()
+        .expect("required fields should be an array");
+    assert!(required.contains(&Value::String("connection_id".to_string())));
+    assert!(required.contains(&Value::String("sql".to_string())));
+    assert!(!required.contains(&Value::String("database".to_string())));
+}
+
+#[tokio::test]
+async fn preview_mutation_remains_read_governed_for_readonly_clients() {
+    let connection_id = uuid::Uuid::new_v4().to_string();
+    let middleware =
+        GovernanceMiddleware::new(build_state_with_role(&connection_id, "builtin/read-only"));
+
+    let preview = middleware
+        .authorize_and_execute(
+            "preview_mutation",
+            Some(&connection_id),
+            ExecutionClassification::Read,
+            || async { Ok(CallToolResult::success(vec![])) },
+        )
+        .await;
+
+    assert!(
+        preview.is_ok(),
+        "preview_mutation should stay readable for readonly clients"
+    );
+
+    let delete = middleware
+        .authorize_and_execute(
+            "delete_records",
+            Some(&connection_id),
+            ExecutionClassification::Destructive,
+            || async { Ok(CallToolResult::success(vec![])) },
+        )
+        .await;
+
+    assert!(
+        delete.is_err(),
+        "readonly clients must still be denied destructive tools"
+    );
 }

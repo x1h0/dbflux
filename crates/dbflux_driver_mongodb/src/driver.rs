@@ -2918,4 +2918,15 @@ mod tests {
         assert!(plan.queries[0].text.contains("countDocuments"));
         assert!(plan.queries[0].text.contains("score"));
     }
+
+    #[test]
+    fn semantic_planner_rejects_aggregate_requests_explicitly() {
+        let error = plan_mongo_semantic_request(&SemanticRequest::Aggregate(
+            dbflux_core::AggregateRequest::new(dbflux_core::TableRef::new("users")),
+        ))
+        .expect_err("mongo aggregate planning should stay explicitly unsupported");
+
+        assert!(matches!(error, DbError::NotSupported(_)));
+        assert!(error.to_string().contains("aggregate requests yet"));
+    }
 }

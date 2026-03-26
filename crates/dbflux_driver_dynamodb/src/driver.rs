@@ -5099,5 +5099,17 @@ mod tests {
         );
         assert!(plan.queries[0].text.contains("\"select\": \"COUNT\""));
         assert_eq!(plan.warnings.len(), 1);
+        assert!(plan.warnings[0].contains("scan-shaped envelope"));
+    }
+
+    #[test]
+    fn semantic_planner_rejects_aggregate_requests_explicitly() {
+        let error = plan_dynamo_semantic_request(&SemanticRequest::Aggregate(
+            dbflux_core::AggregateRequest::new(dbflux_core::TableRef::new("users")),
+        ))
+        .expect_err("dynamo aggregate planning should stay explicitly unsupported");
+
+        assert!(matches!(error, DbError::NotSupported(_)));
+        assert!(error.to_string().contains("aggregate requests"));
     }
 }

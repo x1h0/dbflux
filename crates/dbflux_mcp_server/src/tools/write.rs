@@ -7,7 +7,10 @@
 
 use std::collections::BTreeMap;
 
-use dbflux_core::{QueryRequest, RowInsert, TableRef, Value};
+use dbflux_core::{
+    DatabaseCategory, DocumentFilter, DocumentInsert, DocumentUpdate, QueryRequest, RowInsert,
+    TableRef, Value,
+};
 use rmcp::{
     ErrorData,
     handler::server::wrapper::Parameters,
@@ -225,7 +228,25 @@ impl DbFluxServer {
         returning: Option<&[String]>,
     ) -> Result<serde_json::Value, String> {
         let connection = Self::get_or_connect(state, connection_id).await?;
-        let _dialect = connection.dialect();
+
+        if connection.metadata().category == DatabaseCategory::Document {
+            let documents = records
+                .iter()
+                .map(|record| {
+                    serde_json::to_value(record)
+                        .map_err(|e| format!("Failed to serialize document payload: {}", e))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+
+            let result = connection
+                .insert_document(&DocumentInsert::many(table.to_string(), documents))
+                .map_err(|e| format!("Insert error: {}", e))?;
+
+            return Ok(serde_json::json!({
+                "inserted": result.affected_rows,
+                "records": [],
+            }));
+        }
 
         let table_ref = TableRef::from_qualified(table);
 
@@ -280,6 +301,17 @@ impl DbFluxServer {
     ) -> Result<serde_json::Value, String> {
         let connection = Self::get_or_connect(state, connection_id).await?;
 
+        if connection.metadata().category == DatabaseCategory::Document {
+            let update = Self::build_document_update(table, filter, set)?;
+            let result = connection
+                .update_document(&update)
+                .map_err(|e| format!("Update error: {}", e))?;
+
+            return Ok(serde_json::json!({
+                "updated": result.affected_rows,
+            }));
+        }
+
         // Build SET clause as Vec<(String, Value)>
         let set_obj = set
             .as_object()
@@ -308,6 +340,23 @@ impl DbFluxServer {
         Ok(serde_json::json!({
             "updated": result.rows.len() as u64,
         }))
+    }
+
+    fn build_document_update(
+        table: &str,
+        filter: &serde_json::Value,
+        set: &serde_json::Value,
+    ) -> Result<DocumentUpdate, String> {
+        let set_obj = set
+            .as_object()
+            .ok_or_else(|| "SET must be a JSON object".to_string())?;
+
+        Ok(DocumentUpdate::new(
+            table.to_string(),
+            DocumentFilter::new(filter.clone()),
+            serde_json::json!({ "$set": set_obj.clone() }),
+        )
+        .many())
     }
 
     async fn upsert_record_impl(
@@ -413,5 +462,39 @@ mod tests {
         };
 
         assert!(params.validate_where_clause().is_ok());
+    }
+
+    #[test]
+    fn test_build_document_update_wraps_set_fields() {
+        let update = DbFluxServer::build_document_update(
+            "users",
+            &serde_json::json!({"status": "active"}),
+            &serde_json::json!({"name": "Ada", "visits": 3}),
+        )
+        .expect("document update should build");
+
+        assert_eq!(update.collection, "users");
+        assert_eq!(
+            update.filter.filter,
+            serde_json::json!({"status": "active"})
+        );
+        assert_eq!(
+            update.update,
+            serde_json::json!({"$set": {"name": "Ada", "visits": 3}})
+        );
+        assert!(update.many);
+        assert!(!update.upsert);
+    }
+
+    #[test]
+    fn test_build_document_update_rejects_non_object_set() {
+        let error = DbFluxServer::build_document_update(
+            "users",
+            &serde_json::json!({"status": "active"}),
+            &serde_json::json!("invalid"),
+        )
+        .expect_err("non-object set should fail");
+
+        assert_eq!(error, "SET must be a JSON object");
     }
 }

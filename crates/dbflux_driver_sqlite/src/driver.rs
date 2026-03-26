@@ -532,9 +532,7 @@ fn plan_sqlite_table_count(
     ))
 }
 
-fn plan_sqlite_aggregate(
-    request: &dbflux_core::AggregateRequest,
-) -> Result<SemanticPlan, DbError> {
+fn plan_sqlite_aggregate(request: &dbflux_core::AggregateRequest) -> Result<SemanticPlan, DbError> {
     let sql = request.build_sql_with(&SQLITE_DIALECT)?;
 
     Ok(SemanticPlan::single_query(

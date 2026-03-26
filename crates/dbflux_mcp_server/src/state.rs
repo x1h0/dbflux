@@ -5,8 +5,10 @@ use tokio::sync::RwLock;
 
 #[cfg(feature = "mysql")]
 use dbflux_core::DbKind;
+use dbflux_core::auth::DynAuthProvider;
 use dbflux_core::{
-    AppConfigStore, ConnectionProfile, DbDriver, KeyringSecretStore, ProfileManager, SecretManager,
+    AppConfigStore, AuthProfileManager, ConnectionProfile, DbDriver, KeyringSecretStore,
+    ProfileManager, SecretManager,
 };
 use dbflux_mcp::{
     McpGovernanceService, McpRuntime, PolicyRoleDto, ToolPolicyDto, TrustedClientDto,
@@ -23,7 +25,9 @@ pub struct ServerState {
     pub client_id: String,
     pub runtime: Arc<RwLock<McpRuntime>>,
     pub profile_manager: Arc<RwLock<ProfileManager>>,
+    pub auth_profile_manager: Arc<RwLock<AuthProfileManager>>,
     pub driver_registry: Arc<HashMap<String, Arc<dyn DbDriver>>>,
+    pub auth_provider_registry: Arc<HashMap<String, Arc<dyn DynAuthProvider>>>,
     pub connection_cache: Arc<RwLock<ConnectionCache>>,
     pub secret_manager: Arc<SecretManager>,
     pub mcp_enabled_by_default: bool,
@@ -41,14 +45,18 @@ impl ServerState {
         validate_client_id(&runtime, &client_id, config_dir.as_deref())?;
 
         let profile_manager = ProfileManager::new();
+        let auth_profile_manager = AuthProfileManager::default();
         let driver_registry = build_driver_registry();
+        let auth_provider_registry = build_auth_provider_registry();
         let secret_manager = Arc::new(SecretManager::new(Box::new(KeyringSecretStore::new())));
 
         let state = ServerState {
             client_id,
             runtime: Arc::new(RwLock::new(runtime)),
             profile_manager: Arc::new(RwLock::new(profile_manager)),
+            auth_profile_manager: Arc::new(RwLock::new(auth_profile_manager)),
             driver_registry: Arc::new(driver_registry),
+            auth_provider_registry: Arc::new(auth_provider_registry),
             connection_cache: Arc::new(RwLock::new(ConnectionCache::new())),
             secret_manager,
             mcp_enabled_by_default: false,
@@ -373,6 +381,29 @@ fn build_driver_registry() -> HashMap<String, Arc<dyn DbDriver>> {
         registry.insert(
             "dynamodb".to_string(),
             Arc::new(dbflux_driver_dynamodb::DynamoDriver::new()),
+        );
+    }
+
+    registry
+}
+
+fn build_auth_provider_registry() -> HashMap<String, Arc<dyn DynAuthProvider>> {
+    let mut registry: HashMap<String, Arc<dyn DynAuthProvider>> = HashMap::new();
+
+    #[cfg(feature = "aws")]
+    {
+        let sso = Arc::new(dbflux_aws::AwsSsoAuthProvider::new()) as Arc<dyn DynAuthProvider>;
+        registry.insert(sso.provider_id().to_string(), sso);
+
+        let shared = Arc::new(dbflux_aws::AwsSharedCredentialsAuthProvider::new())
+            as Arc<dyn DynAuthProvider>;
+        registry.insert(shared.provider_id().to_string(), shared);
+
+        let static_credentials = Arc::new(dbflux_aws::AwsStaticCredentialsAuthProvider::new())
+            as Arc<dyn DynAuthProvider>;
+        registry.insert(
+            static_credentials.provider_id().to_string(),
+            static_credentials,
         );
     }
 

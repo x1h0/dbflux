@@ -634,16 +634,28 @@ impl DbFluxServer {
         }
 
         let semantic_request = SemanticRequest::Aggregate(request);
-        let target_database = database.map(str::to_string);
-        let conn = connection.clone();
+        let result = Self::execute_aggregate_semantic_request(
+            connection.clone(),
+            semantic_request,
+            database.map(str::to_string),
+        )
+        .await?;
+
+        Ok(serialize_query_result(&result))
+    }
+
+    async fn execute_aggregate_semantic_request(
+        connection: Arc<dyn Connection>,
+        semantic_request: SemanticRequest,
+        target_database: Option<String>,
+    ) -> Result<QueryResult, String> {
         let result = tokio::task::spawn_blocking(move || -> Result<_, String> {
-            let plan = conn
+            let plan = connection
                 .plan_semantic_request(&semantic_request)
                 .map_err(|e| format!("Aggregate planning error: {}", e))?;
-            let planned_query = plan
-                .primary_query()
-                .cloned()
-                .ok_or_else(|| "Aggregate planning error: driver returned no executable query".to_string())?;
+            let planned_query = plan.primary_query().cloned().ok_or_else(|| {
+                "Aggregate planning error: driver returned no executable query".to_string()
+            })?;
 
             let mut request = planned_query.into_query_request();
             if request.database.is_none() {
@@ -651,14 +663,14 @@ impl DbFluxServer {
             }
 
             #[allow(clippy::large_enum_variant)]
-            conn.execute(&request)
+            connection
+                .execute(&request)
                 .map_err(|e| format!("Aggregate error: {}", e))
         })
         .await
         .map_err(|e| format!("Blocking task failed: {}", e))?;
 
-        let result = result?;
-        Ok(serialize_query_result(&result))
+        result
     }
 
     fn aggregate_specs(aggregations: &[AggregationSpec]) -> Result<Vec<CoreAggregateSpec>, String> {
@@ -699,6 +711,88 @@ impl DbFluxServer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use dbflux_core::{
+        DbError, DbKind, DefaultSqlDialect, DriverCapabilities, DriverMetadata,
+        MutationCapabilities, PlaceholderStyle, QueryCapabilities, QueryHandle, QueryLanguage,
+        QueryResult, SchemaLoadingStrategy, SchemaSnapshot, SyntaxInfo, TransactionCapabilities,
+    };
+    use std::sync::LazyLock;
+
+    static TEST_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
+        id: "test".into(),
+        display_name: "Test".into(),
+        description: "Test driver".into(),
+        category: DatabaseCategory::Relational,
+        query_language: QueryLanguage::Sql,
+        capabilities: DriverCapabilities::empty(),
+        default_port: None,
+        uri_scheme: "test".into(),
+        icon: dbflux_core::Icon::Database,
+        syntax: Some(SyntaxInfo {
+            identifier_quote: '"',
+            string_quote: '\'',
+            placeholder_style: PlaceholderStyle::QuestionMark,
+            supports_schemas: true,
+            default_schema: Some("public".into()),
+            case_sensitive_identifiers: true,
+        }),
+        query: Some(QueryCapabilities::default()),
+        mutation: Some(MutationCapabilities::default()),
+        ddl: None,
+        transactions: Some(TransactionCapabilities::default()),
+        limits: None,
+        classification_override: None,
+    });
+
+    struct UnsupportedAggregateConnection;
+
+    impl Connection for UnsupportedAggregateConnection {
+        fn metadata(&self) -> &DriverMetadata {
+            &TEST_METADATA
+        }
+
+        fn ping(&self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn close(&mut self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn execute(&self, _req: &dbflux_core::QueryRequest) -> Result<QueryResult, DbError> {
+            panic!("aggregate execution should not run when planning is unsupported")
+        }
+
+        fn cancel(&self, _handle: &QueryHandle) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn schema(&self) -> Result<SchemaSnapshot, DbError> {
+            Ok(SchemaSnapshot::default())
+        }
+
+        fn kind(&self) -> DbKind {
+            DbKind::Postgres
+        }
+
+        fn schema_loading_strategy(&self) -> SchemaLoadingStrategy {
+            SchemaLoadingStrategy::ConnectionPerDatabase
+        }
+
+        fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
+            &DefaultSqlDialect
+        }
+
+        fn plan_semantic_request(
+            &self,
+            _request: &SemanticRequest,
+        ) -> Result<dbflux_core::SemanticPlan, DbError> {
+            Err(DbError::NotSupported(
+                "aggregate semantics are not supported by this driver".into(),
+            ))
+        }
+    }
 
     #[test]
     fn test_select_data_params_default_limit() {
@@ -765,5 +859,19 @@ mod tests {
     fn test_aggregate_function_rejects_unknown_names() {
         let error = DbFluxServer::aggregate_function("median").unwrap_err();
         assert!(error.contains("Unsupported aggregation function"));
+    }
+
+    #[tokio::test]
+    async fn aggregate_execution_returns_explicit_unsupported_error() {
+        let error = DbFluxServer::execute_aggregate_semantic_request(
+            Arc::new(UnsupportedAggregateConnection),
+            SemanticRequest::Aggregate(AggregateRequest::new(TableRef::new("users"))),
+            None,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(error.contains("Aggregate planning error"));
+        assert!(error.contains("aggregate semantics are not supported by this driver"));
     }
 }

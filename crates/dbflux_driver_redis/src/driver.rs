@@ -2553,4 +2553,15 @@ mod tests {
         assert!(matches!(error, DbError::NotSupported(_)));
         assert!(error.to_string().contains("browse/count"));
     }
+
+    #[test]
+    fn semantic_planner_rejects_explain_requests_explicitly() {
+        let error = plan_redis_semantic_request(&SemanticRequest::Explain(
+            dbflux_core::ExplainRequest::new(TableRef::new("sessions")).with_query("GET sessions"),
+        ))
+        .expect_err("redis should reject explain planning");
+
+        assert!(matches!(error, DbError::NotSupported(_)));
+        assert!(error.to_string().contains("explain or describe"));
+    }
 }

@@ -16,7 +16,7 @@ use crate::{
     helper::{IntoErrorData, *},
     state::ServerState,
 };
-use dbflux_core::{QueryRequest, TableRef};
+use dbflux_core::{AddForeignKeyRequest, DropForeignKeyRequest, QueryRequest, TableRef};
 use rmcp::{
     handler::server::wrapper::Parameters,
     model::{CallToolResult, Content, ErrorData},
@@ -252,6 +252,99 @@ fn classify_alter_column(_op: &AlterOperation) -> dbflux_policy::ExecutionClassi
     ExecutionClassification::Admin
 }
 
+fn normalize_foreign_key_constraint_type(definition: &serde_json::Value) -> Option<String> {
+    definition
+        .get("type")
+        .and_then(|value| value.as_str())
+        .map(|value| value.to_uppercase().replace(' ', "_"))
+}
+
+fn json_array_to_strings(
+    definition: &serde_json::Value,
+    field: &str,
+    error_message: &'static str,
+) -> Result<Vec<String>, String> {
+    let values = definition
+        .get(field)
+        .and_then(|value| value.as_array())
+        .ok_or_else(|| error_message.to_string())?;
+
+    Ok(values
+        .iter()
+        .filter_map(|value| value.as_str())
+        .map(ToOwned::to_owned)
+        .collect())
+}
+
+fn generate_add_foreign_key_sql(
+    code_generator: &dyn dbflux_core::CodeGenerator,
+    table: &TableRef,
+    constraint_name: &str,
+    definition: &serde_json::Value,
+) -> Result<Option<String>, String> {
+    if normalize_foreign_key_constraint_type(definition).as_deref() != Some("FOREIGN_KEY") {
+        return Ok(None);
+    }
+
+    let columns = json_array_to_strings(
+        definition,
+        "columns",
+        "FOREIGN KEY constraint requires columns array",
+    )?;
+
+    let ref_table_raw = definition
+        .get("ref_table")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| "FOREIGN KEY constraint requires ref_table".to_string())?;
+
+    let ref_table = TableRef::from_qualified(ref_table_raw);
+    let ref_columns = json_array_to_strings(
+        definition,
+        "ref_columns",
+        "FOREIGN KEY constraint requires ref_columns array",
+    )?;
+
+    let request = AddForeignKeyRequest {
+        constraint_name,
+        table_name: &table.name,
+        schema_name: table.schema.as_deref(),
+        columns: &columns,
+        ref_table: &ref_table.name,
+        ref_schema: definition
+            .get("ref_schema")
+            .and_then(|value| value.as_str())
+            .or(ref_table.schema.as_deref()),
+        ref_columns: &ref_columns,
+        on_delete: definition.get("on_delete").and_then(|value| value.as_str()),
+        on_update: definition.get("on_update").and_then(|value| value.as_str()),
+    };
+
+    Ok(code_generator.generate_add_foreign_key(&request))
+}
+
+fn generate_drop_foreign_key_sql(
+    code_generator: &dyn dbflux_core::CodeGenerator,
+    table: &TableRef,
+    constraint_name: &str,
+    definition: Option<&serde_json::Value>,
+) -> Option<String> {
+    let Some(definition) = definition else {
+        return None;
+    };
+
+    if normalize_foreign_key_constraint_type(definition).as_deref() != Some("FOREIGN_KEY") {
+        return None;
+    }
+
+    let request = DropForeignKeyRequest {
+        constraint_name,
+        table_name: &table.name,
+        schema_name: table.schema.as_deref(),
+    };
+
+    code_generator.generate_drop_foreign_key(&request)
+}
+
 pub fn validate_drop_table_params(params: &DropTableParams) -> Result<(), ErrorData> {
     if params.confirm != params.table {
         return Err(ErrorData::invalid_params(
@@ -474,9 +567,8 @@ impl DbFluxServer {
         if_not_exists: bool,
     ) -> Result<serde_json::Value, String> {
         let connection = Self::get_or_connect(state, connection_id).await?;
-        let dialect = connection.dialect();
-
         let table_ref = TableRef::from_qualified(table);
+        let dialect = connection.dialect();
         let table_quoted = table_ref.quoted_with(dialect);
 
         let if_not_exists_clause = if if_not_exists { "IF NOT EXISTS " } else { "" };
@@ -553,6 +645,7 @@ impl DbFluxServer {
     ) -> Result<serde_json::Value, String> {
         let connection = Self::get_or_connect(state, connection_id).await?;
         let dialect = connection.dialect();
+        let code_generator = connection.code_generator();
 
         let table_ref = TableRef::from_qualified(table);
         let table_quoted = table_ref.quoted_with(dialect);
@@ -693,41 +786,53 @@ impl DbFluxServer {
                                 format!("UNIQUE ({})", col_names.join(", "))
                             }
                             "FOREIGN_KEY" | "FOREIGN KEY" => {
-                                let columns = def
-                                    .get("columns")
-                                    .and_then(|v| v.as_array())
-                                    .ok_or_else(|| {
-                                        "FOREIGN KEY constraint requires columns array".to_string()
+                                if let Some(sql) = generate_add_foreign_key_sql(
+                                    code_generator,
+                                    &table_ref,
+                                    constraint_name,
+                                    def,
+                                )? {
+                                    sql
+                                } else {
+                                    let columns = def
+                                        .get("columns")
+                                        .and_then(|v| v.as_array())
+                                        .ok_or_else(|| {
+                                            "FOREIGN KEY constraint requires columns array"
+                                                .to_string()
+                                        })?;
+                                    let ref_table = def
+                                        .get("ref_table")
+                                        .and_then(|v| v.as_str())
+                                        .ok_or_else(|| {
+                                        "FOREIGN KEY constraint requires ref_table".to_string()
                                     })?;
-                                let ref_table =
-                                    def.get("ref_table").and_then(|v| v.as_str()).ok_or_else(
-                                        || "FOREIGN KEY constraint requires ref_table".to_string(),
-                                    )?;
-                                let ref_columns = def
-                                    .get("ref_columns")
-                                    .and_then(|v| v.as_array())
-                                    .ok_or_else(|| {
-                                        "FOREIGN KEY constraint requires ref_columns array"
-                                            .to_string()
-                                    })?;
+                                    let ref_columns = def
+                                        .get("ref_columns")
+                                        .and_then(|v| v.as_array())
+                                        .ok_or_else(|| {
+                                            "FOREIGN KEY constraint requires ref_columns array"
+                                                .to_string()
+                                        })?;
 
-                                let col_names: Vec<String> = columns
-                                    .iter()
-                                    .filter_map(|v| v.as_str())
-                                    .map(|c| dialect.quote_identifier(c))
-                                    .collect();
-                                let ref_col_names: Vec<String> = ref_columns
-                                    .iter()
-                                    .filter_map(|v| v.as_str())
-                                    .map(|c| dialect.quote_identifier(c))
-                                    .collect();
+                                    let col_names: Vec<String> = columns
+                                        .iter()
+                                        .filter_map(|v| v.as_str())
+                                        .map(|c| dialect.quote_identifier(c))
+                                        .collect();
+                                    let ref_col_names: Vec<String> = ref_columns
+                                        .iter()
+                                        .filter_map(|v| v.as_str())
+                                        .map(|c| dialect.quote_identifier(c))
+                                        .collect();
 
-                                format!(
-                                    "FOREIGN KEY ({}) REFERENCES {} ({})",
-                                    col_names.join(", "),
-                                    dialect.quote_identifier(ref_table),
-                                    ref_col_names.join(", ")
-                                )
+                                    format!(
+                                        "FOREIGN KEY ({}) REFERENCES {} ({})",
+                                        col_names.join(", "),
+                                        dialect.quote_identifier(ref_table),
+                                        ref_col_names.join(", ")
+                                    )
+                                }
                             }
                             _ => {
                                 return Err(format!(
@@ -751,11 +856,21 @@ impl DbFluxServer {
                     if let Some(ref def) = op.definition {
                         let constraint_name =
                             def.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                        format!(
-                            "ALTER TABLE {} DROP CONSTRAINT {}",
-                            table_quoted,
-                            dialect.quote_identifier(constraint_name)
-                        )
+
+                        if let Some(sql) = generate_drop_foreign_key_sql(
+                            code_generator,
+                            &table_ref,
+                            constraint_name,
+                            Some(def),
+                        ) {
+                            sql
+                        } else {
+                            format!(
+                                "ALTER TABLE {} DROP CONSTRAINT {}",
+                                table_quoted,
+                                dialect.quote_identifier(constraint_name)
+                            )
+                        }
                     } else {
                         return Err("DROP_CONSTRAINT requires definition".to_string());
                     }
@@ -958,6 +1073,38 @@ pub struct PreviewDdlParams {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dbflux_core::{
+        AddForeignKeyRequest, CodeGenCapabilities, CodeGenerator, DropForeignKeyRequest,
+    };
+
+    struct TestForeignKeyCodeGenerator;
+
+    impl CodeGenerator for TestForeignKeyCodeGenerator {
+        fn capabilities(&self) -> CodeGenCapabilities {
+            CodeGenCapabilities::FOREIGN_KEYS
+        }
+
+        fn generate_add_foreign_key(&self, request: &AddForeignKeyRequest) -> Option<String> {
+            Some(format!(
+                "ADD_FK:{}:{}:{}:{}:{}:{}",
+                request.schema_name.unwrap_or(""),
+                request.table_name,
+                request.constraint_name,
+                request.ref_schema.unwrap_or(""),
+                request.ref_table,
+                request.columns.join(",")
+            ))
+        }
+
+        fn generate_drop_foreign_key(&self, request: &DropForeignKeyRequest) -> Option<String> {
+            Some(format!(
+                "DROP_FK:{}:{}:{}",
+                request.schema_name.unwrap_or(""),
+                request.table_name,
+                request.constraint_name,
+            ))
+        }
+    }
 
     #[test]
     fn test_validate_drop_table_success() {
@@ -1005,6 +1152,49 @@ mod tests {
         };
         let result = validate_drop_database_params(&params);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_generate_add_foreign_key_sql_uses_shared_codegen_request() {
+        let generator = TestForeignKeyCodeGenerator;
+        let table = TableRef::from_qualified("public.orders");
+        let definition = serde_json::json!({
+            "type": "foreign_key",
+            "columns": ["customer_id"],
+            "ref_table": "crm.customers",
+            "ref_columns": ["id"],
+            "on_delete": "CASCADE",
+        });
+
+        let sql =
+            generate_add_foreign_key_sql(&generator, &table, "fk_orders_customer", &definition)
+                .unwrap();
+
+        assert_eq!(
+            sql,
+            Some("ADD_FK:public:orders:fk_orders_customer:crm:customers:customer_id".to_string())
+        );
+    }
+
+    #[test]
+    fn test_generate_drop_foreign_key_sql_uses_shared_codegen_request() {
+        let generator = TestForeignKeyCodeGenerator;
+        let table = TableRef::from_qualified("public.orders");
+        let definition = serde_json::json!({
+            "type": "FOREIGN KEY",
+        });
+
+        let sql = generate_drop_foreign_key_sql(
+            &generator,
+            &table,
+            "fk_orders_customer",
+            Some(&definition),
+        );
+
+        assert_eq!(
+            sql,
+            Some("DROP_FK:public:orders:fk_orders_customer".to_string())
+        );
     }
 }
 

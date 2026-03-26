@@ -489,6 +489,71 @@ mod tests {
         }
     }
 
+    struct UnsupportedSemanticPlanConnection {
+        metadata: dbflux_core::DriverMetadata,
+    }
+
+    impl UnsupportedSemanticPlanConnection {
+        fn new() -> Self {
+            Self {
+                metadata: DriverMetadataBuilder::new(
+                    "test",
+                    "Test",
+                    DatabaseCategory::Relational,
+                    QueryLanguage::Sql,
+                )
+                .build(),
+            }
+        }
+    }
+
+    impl Connection for UnsupportedSemanticPlanConnection {
+        fn metadata(&self) -> &dbflux_core::DriverMetadata {
+            &self.metadata
+        }
+
+        fn ping(&self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn close(&mut self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn execute(&self, _req: &QueryRequest) -> Result<QueryResult, DbError> {
+            Err(DbError::NotSupported("execute not used in test".into()))
+        }
+
+        fn cancel(&self, _handle: &dbflux_core::QueryHandle) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn schema(&self) -> Result<SchemaSnapshot, DbError> {
+            Ok(SchemaSnapshot::default())
+        }
+
+        fn schema_loading_strategy(&self) -> SchemaLoadingStrategy {
+            SchemaLoadingStrategy::SingleDatabase
+        }
+
+        fn kind(&self) -> DbKind {
+            DbKind::SQLite
+        }
+
+        fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
+            &DefaultSqlDialect
+        }
+
+        fn plan_semantic_request(
+            &self,
+            _request: &SemanticRequest,
+        ) -> Result<SemanticPlan, DbError> {
+            Err(DbError::NotSupported(
+                "semantic planning is intentionally unsupported".into(),
+            ))
+        }
+    }
+
     #[test]
     fn dispatch_returns_semantic_plan_response() {
         let plan = SemanticPlan::single_query(
@@ -508,6 +573,31 @@ mod tests {
 
         match response {
             DriverResponseBody::SemanticPlan { plan: actual } => assert_eq!(actual, plan),
+            other => panic!("unexpected response: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dispatch_maps_unsupported_semantic_plans_to_rpc_error() {
+        let connection = UnsupportedSemanticPlanConnection::new();
+
+        let response = dispatch(
+            &connection,
+            DriverRequestBody::PlanSemantic {
+                request: SemanticRequest::TableBrowse(TableBrowseRequest::new(TableRef::new(
+                    "users",
+                ))),
+            },
+        );
+
+        match response {
+            DriverResponseBody::Error(error) => {
+                assert_eq!(
+                    error.code,
+                    dbflux_ipc::driver_protocol::DriverRpcErrorCode::UnsupportedMethod
+                );
+                assert!(error.message.contains("intentionally unsupported"));
+            }
             other => panic!("unexpected response: {other:?}"),
         }
     }

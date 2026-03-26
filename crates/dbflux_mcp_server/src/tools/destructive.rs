@@ -10,7 +10,7 @@ use crate::{
     state::ServerState,
     tools::{DropDatabaseParams, DropTableParams},
 };
-use dbflux_core::{QueryRequest, TableRef};
+use dbflux_core::{DatabaseCategory, DocumentDelete, DocumentFilter, QueryRequest, TableRef};
 use rmcp::{
     ErrorData,
     handler::server::wrapper::Parameters,
@@ -226,6 +226,19 @@ impl DbFluxServer {
         _returning: Option<&[String]>,
     ) -> Result<serde_json::Value, String> {
         let connection = Self::get_or_connect(state, connection_id).await?;
+
+        if connection.metadata().category == DatabaseCategory::Document {
+            let result = connection
+                .delete_document(
+                    &DocumentDelete::new(table.to_string(), DocumentFilter::new(filter.clone()))
+                        .many(),
+                )
+                .map_err(|e| format!("Delete error: {}", e))?;
+
+            return Ok(serde_json::json!({
+                "deleted": result.affected_rows,
+            }));
+        }
 
         // Convert filter to dbflux_core::Value
         let db_filter = json_to_db_value(filter.clone());

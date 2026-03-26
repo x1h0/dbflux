@@ -83,7 +83,7 @@ impl RpcClient {
         session_id: Uuid,
         request: dbflux_core::SemanticRequest,
     ) -> Result<dbflux_core::SemanticPlan, RpcError> {
-        if self.selected_version().minor < 1 {
+        if !protocol_supports_semantic_planning(self.selected_version()) {
             return Err(RpcError::UnsupportedMethod(
                 "Driver RPC host does not support semantic planning yet".to_string(),
             ));
@@ -805,5 +805,29 @@ impl RpcClient {
             .map_err(|_| RpcError::Protocol("Request ID mutex poisoned".into()))?;
         *id += 1;
         Ok(*id)
+    }
+}
+
+fn protocol_supports_semantic_planning(version: ProtocolVersion) -> bool {
+    version.major > DRIVER_RPC_VERSION.major
+        || (version.major == DRIVER_RPC_VERSION.major && version.minor >= 1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::protocol_supports_semantic_planning;
+    use dbflux_ipc::ProtocolVersion;
+
+    #[test]
+    fn semantic_planning_requires_driver_rpc_v1_1_or_newer() {
+        assert!(!protocol_supports_semantic_planning(ProtocolVersion::new(
+            1, 0
+        )));
+        assert!(protocol_supports_semantic_planning(ProtocolVersion::new(
+            1, 1
+        )));
+        assert!(protocol_supports_semantic_planning(ProtocolVersion::new(
+            2, 0
+        )));
     }
 }

@@ -2442,10 +2442,12 @@ name = "dbflux_mcp_server"
 version = "0.4.0-dev.10"
 dependencies = [
  "anyhow",
+ "async-trait",
  "base64 0.22.1",
  "chrono",
  "dbflux_approval",
  "dbflux_audit",
+ "dbflux_aws",
  "dbflux_core",
  "dbflux_driver_dynamodb",
  "dbflux_driver_mongodb",
@@ -2455,6 +2457,7 @@ dependencies = [
  "dbflux_driver_sqlite",
  "dbflux_mcp",
  "dbflux_policy",
+ "dbflux_ssm",
  "dbflux_test_support",
  "env_logger",
  "log",

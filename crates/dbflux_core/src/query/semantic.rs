@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     CollectionBrowseRequest, CollectionCountRequest, ColumnRef, DbError, DescribeRequest,
-    ExplainRequest, MutationRequest, OrderByColumn, QueryRequest, SqlDialect,
-    TableBrowseRequest, TableCountRequest, TableRef, Value,
+    ExplainRequest, MutationRequest, OrderByColumn, QueryRequest, SqlDialect, TableBrowseRequest,
+    TableCountRequest, TableRef, Value,
     driver::capabilities::{QueryLanguage, WhereOperator},
 };
 
@@ -814,8 +814,8 @@ mod tests {
         SemanticRequestKind, parse_semantic_filter_json, render_semantic_filter_sql,
     };
     use crate::{
-        CollectionRef, ColumnRef, DefaultSqlDialect, OrderByColumn, QueryLanguage,
-        QueryRequest, TableBrowseRequest, TableRef, Value, WhereOperator,
+        CollectionRef, ColumnRef, DefaultSqlDialect, OrderByColumn, QueryLanguage, QueryRequest,
+        TableBrowseRequest, TableRef, Value, WhereOperator,
     };
 
     #[test]

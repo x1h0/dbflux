@@ -224,7 +224,9 @@ mod tests {
             client_id: "test-client".to_string(),
             runtime: Arc::new(RwLock::new(runtime)),
             profile_manager: Arc::new(RwLock::new(dbflux_core::ProfileManager::new())),
+            auth_profile_manager: Arc::new(RwLock::new(dbflux_core::AuthProfileManager::default())),
             driver_registry: Arc::new(std::collections::HashMap::new()),
+            auth_provider_registry: Arc::new(std::collections::HashMap::new()),
             connection_cache: Arc::new(
                 RwLock::new(crate::connection_cache::ConnectionCache::new()),
             ),
