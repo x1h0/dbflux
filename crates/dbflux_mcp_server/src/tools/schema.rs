@@ -338,45 +338,110 @@ impl DbFluxServer {
 
         use dbflux_core::DataStructure;
 
-        let relational = match schema_snapshot.structure {
-            DataStructure::Relational(r) => r,
-            _ => return Err("Not a relational database".to_string()),
-        };
+        // Use connection metadata to determine how to route, rather than hardcoding Relational checks
+        let category = connection.metadata().category;
 
-        let target_schema = schema_str.unwrap_or_else(|| "public".to_string());
-        let schema_data = relational
-            .schemas
-            .iter()
-            .find(|s| s.name == target_schema.as_str())
-            .ok_or_else(|| format!("Schema '{}' not found", target_schema))?;
+        match category {
+            dbflux_core::DatabaseCategory::Relational => {
+                let relational = match schema_snapshot.structure {
+                    DataStructure::Relational(r) => r,
+                    _ => return Err("Expected relational schema".to_string()),
+                };
 
-        let mut tables: Vec<serde_json::Value> = schema_data
-            .tables
-            .iter()
-            .map(|t| {
-                serde_json::json!({
-                    "name": t.name,
-                    "schema": t.schema,
-                    "kind": "Table",
-                })
-            })
-            .collect();
+                // Only apply default schema if the database supports schemas
+                let supports_schemas = connection
+                    .metadata()
+                    .syntax
+                    .as_ref()
+                    .map(|s| s.supports_schemas)
+                    .unwrap_or(false);
 
-        let views: Vec<serde_json::Value> = schema_data
-            .views
-            .iter()
-            .map(|v| {
-                serde_json::json!({
-                    "name": v.name,
-                    "schema": v.schema,
-                    "kind": "View",
-                })
-            })
-            .collect();
+                let target_schema = if supports_schemas {
+                    schema_str.unwrap_or_else(|| "public".to_string())
+                } else {
+                    // For databases without schema support (SQLite), use the first schema or default
+                    schema_str.unwrap_or_else(|| {
+                        relational.schemas.first().map(|s| s.name.clone()).unwrap_or_default()
+                    })
+                };
 
-        tables.extend(views);
+                let schema_data = relational
+                    .schemas
+                    .iter()
+                    .find(|s| s.name == target_schema.as_str())
+                    .ok_or_else(|| format!("Schema '{}' not found", target_schema))?;
 
-        Ok(serde_json::json!({ "tables": tables }))
+                let mut tables: Vec<serde_json::Value> = schema_data
+                    .tables
+                    .iter()
+                    .map(|t| {
+                        serde_json::json!({
+                            "name": t.name,
+                            "schema": t.schema,
+                            "kind": "Table",
+                        })
+                    })
+                    .collect();
+
+                let views: Vec<serde_json::Value> = schema_data
+                    .views
+                    .iter()
+                    .map(|v| {
+                        serde_json::json!({
+                            "name": v.name,
+                            "schema": v.schema,
+                            "kind": "View",
+                        })
+                    })
+                    .collect();
+
+                tables.extend(views);
+
+                Ok(serde_json::json!({ "tables": tables }))
+            }
+            dbflux_core::DatabaseCategory::Document => {
+                // For document databases (MongoDB), return collections instead of tables
+                let doc = match schema_snapshot.structure {
+                    DataStructure::Document(d) => d,
+                    _ => return Err("Expected document database schema".to_string()),
+                };
+
+                let collections: Vec<serde_json::Value> = doc
+                    .collections
+                    .iter()
+                    .map(|c| {
+                        serde_json::json!({
+                            "name": c.name,
+                            "kind": "Collection",
+                        })
+                    })
+                    .collect();
+
+                Ok(serde_json::json!({ "tables": collections }))
+            }
+            dbflux_core::DatabaseCategory::KeyValue => {
+                // For key-value stores (Redis), return keyspace info
+                let kv = match schema_snapshot.structure {
+                    DataStructure::KeyValue(k) => k,
+                    _ => return Err("Expected key-value schema".to_string()),
+                };
+
+                let patterns: Vec<serde_json::Value> = kv
+                    .keyspaces
+                    .iter()
+                    .map(|k| {
+                        serde_json::json!({
+                            "db_index": k.db_index,
+                            "key_count": k.key_count,
+                            "kind": "Keyspace",
+                        })
+                    })
+                    .collect();
+
+                Ok(serde_json::json!({ "tables": patterns }))
+            }
+            _ => Err(format!("Unsupported database category: {:?}", category)),
+        }
     }
 
     async fn describe_object_impl(
