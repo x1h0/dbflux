@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{DefaultSqlDialect, SqlDialect};
+use crate::{DefaultSqlDialect, SemanticFilter, SqlDialect};
 
 /// Sort direction for ORDER BY clauses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -369,6 +369,8 @@ pub struct TableBrowseRequest {
     pub pagination: Pagination,
     pub order_by: Vec<OrderByColumn>,
     pub filter: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub semantic_filter: Option<SemanticFilter>,
 }
 
 impl TableBrowseRequest {
@@ -378,6 +380,7 @@ impl TableBrowseRequest {
             pagination: Pagination::default(),
             order_by: Vec::new(),
             filter: None,
+            semantic_filter: None,
         }
     }
 
@@ -393,6 +396,11 @@ impl TableBrowseRequest {
 
     pub fn with_filter(mut self, filter: impl Into<String>) -> Self {
         self.filter = Some(filter.into());
+        self
+    }
+
+    pub fn with_semantic_filter(mut self, filter: SemanticFilter) -> Self {
+        self.semantic_filter = Some(filter);
         self
     }
 
@@ -443,6 +451,8 @@ pub struct CollectionBrowseRequest {
     pub collection: CollectionRef,
     pub pagination: Pagination,
     pub filter: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub semantic_filter: Option<SemanticFilter>,
 }
 
 impl CollectionBrowseRequest {
@@ -451,6 +461,7 @@ impl CollectionBrowseRequest {
             collection,
             pagination: Pagination::default(),
             filter: None,
+            semantic_filter: None,
         }
     }
 
@@ -463,6 +474,11 @@ impl CollectionBrowseRequest {
         self.filter = Some(filter);
         self
     }
+
+    pub fn with_semantic_filter(mut self, filter: SemanticFilter) -> Self {
+        self.semantic_filter = Some(filter);
+        self
+    }
 }
 
 /// Request for counting rows in a table with an optional filter.
@@ -470,6 +486,8 @@ impl CollectionBrowseRequest {
 pub struct TableCountRequest {
     pub table: TableRef,
     pub filter: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub semantic_filter: Option<SemanticFilter>,
 }
 
 impl TableCountRequest {
@@ -477,11 +495,17 @@ impl TableCountRequest {
         Self {
             table,
             filter: None,
+            semantic_filter: None,
         }
     }
 
     pub fn with_filter(mut self, filter: impl Into<String>) -> Self {
         self.filter = Some(filter.into());
+        self
+    }
+
+    pub fn with_semantic_filter(mut self, filter: SemanticFilter) -> Self {
+        self.semantic_filter = Some(filter);
         self
     }
 }
@@ -491,6 +515,8 @@ impl TableCountRequest {
 pub struct CollectionCountRequest {
     pub collection: CollectionRef,
     pub filter: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub semantic_filter: Option<SemanticFilter>,
 }
 
 impl CollectionCountRequest {
@@ -498,11 +524,17 @@ impl CollectionCountRequest {
         Self {
             collection,
             filter: None,
+            semantic_filter: None,
         }
     }
 
     pub fn with_filter(mut self, filter: serde_json::Value) -> Self {
         self.filter = Some(filter);
+        self
+    }
+
+    pub fn with_semantic_filter(mut self, filter: SemanticFilter) -> Self {
+        self.semantic_filter = Some(filter);
         self
     }
 }

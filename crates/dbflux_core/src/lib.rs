@@ -83,15 +83,18 @@ pub use driver::{
 pub use facade::{DangerousQuerySuppressions, SessionFacade};
 
 pub use query::{
-    CollectionBrowseRequest, CollectionCountRequest, CollectionRef, ColumnMeta, ColumnRef,
-    DangerousQueryKind, DescribeRequest, Diagnostic, DiagnosticSeverity, EditorDiagnostic,
-    ExplainRequest, GeneratedQuery, LanguageService, MutationCategory, OrderByColumn, Pagination,
-    QueryGenerator, QueryHandle, QueryRequest, QueryResult, QueryResultShape,
-    Row, SortDirection, SqlLanguageService, SqlMutationGenerator, TableBrowseRequest,
-    TableCountRequest, TableRef, TextPosition, TextPositionRange, TextRange, ValidationResult,
-    classify_query_for_governance, classify_query_for_language, classify_sql_execution,
-    detect_dangerous_mongo, detect_dangerous_query, detect_dangerous_redis, detect_dangerous_sql,
-    is_safe_read_query, strip_leading_comments,
+    AggregateFunction, AggregateRequest, AggregateSpec, CollectionBrowseRequest,
+    CollectionCountRequest, CollectionRef, ColumnMeta, ColumnRef, DangerousQueryKind,
+    DescribeRequest, Diagnostic, DiagnosticSeverity, EditorDiagnostic, ExplainRequest,
+    GeneratedQuery, LanguageService, MutationCategory, OrderByColumn, Pagination, PlannedQuery,
+    QueryGenerator, QueryHandle, QueryRequest, QueryResult, QueryResultShape, Row,
+    SemanticFieldRef, SemanticFilter, SemanticPlan, SemanticPlanKind, SemanticPlanner,
+    SemanticPredicate, SemanticRequest, SemanticRequestKind, SortDirection, SqlLanguageService,
+    SqlMutationGenerator, TableBrowseRequest, TableCountRequest, TableRef, TextPosition,
+    TextPositionRange, TextRange, ValidationResult, classify_query_for_governance,
+    classify_query_for_language, classify_sql_execution, detect_dangerous_mongo,
+    detect_dangerous_query, detect_dangerous_redis, detect_dangerous_sql, is_safe_read_query,
+    parse_semantic_filter_json, render_semantic_filter_sql, strip_leading_comments,
 };
 
 pub use schema::node_id as schema_node_id;

@@ -1,11 +1,11 @@
-use crate::envelope::{ProtocolVersion, DRIVER_RPC_VERSION};
+use crate::envelope::{DRIVER_RPC_VERSION, ProtocolVersion};
 use dbflux_core::{
     CodeGenCapabilities, CodeGeneratorInfo, CollectionBrowseRequest, CollectionCountRequest,
     ColumnMeta, CrudResult, CustomTypeInfo, DatabaseInfo, DbSchemaInfo, DescribeRequest,
     DocumentDelete, DocumentInsert, DocumentUpdate, DriverFormDef, DriverMetadata, ExplainRequest,
     QueryRequest, QueryResult, QueryResultShape, RowDelete, RowInsert, RowPatch, SchemaFeatures,
-    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot,
-    TableBrowseRequest, TableCountRequest, TableInfo, Value, ViewInfo,
+    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan,
+    SemanticRequest, TableBrowseRequest, TableCountRequest, TableInfo, Value, ViewInfo,
 };
 use dbflux_core::{
     HashDeleteRequest, HashSetRequest, KeyBulkGetRequest, KeyDeleteRequest, KeyExistsRequest,
@@ -254,6 +254,9 @@ pub enum DriverRequestBody {
     DescribeTable {
         request: DescribeRequest,
     },
+    PlanSemantic {
+        request: SemanticRequest,
+    },
     // === CRUD operations ===
     UpdateRow {
         patch: RowPatch,
@@ -441,6 +444,9 @@ pub enum DriverResponseBody {
     },
     CountResult {
         count: u64,
+    },
+    SemanticPlan {
+        plan: SemanticPlan,
     },
     // === CRUD results ===
     CrudResult {

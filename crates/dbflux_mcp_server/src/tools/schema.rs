@@ -1,4 +1,6 @@
-use dbflux_core::{DataStructure, DescribeRequest, TableRef};
+use std::sync::Arc;
+
+use dbflux_core::{Connection, DataStructure, DescribeRequest, TableRef};
 use rmcp::{
     ErrorData,
     handler::server::wrapper::Parameters,
@@ -295,6 +297,34 @@ impl DbFluxServer {
         Ok(serde_json::json!({ "schemas": schemas }))
     }
 
+    /// Handle list_tables for document databases (MongoDB, DynamoDB)
+    async fn list_tables_document(
+        connection: &Arc<dyn Connection>,
+        database: &str,
+    ) -> Result<serde_json::Value, String> {
+        let conn = connection.clone();
+        let db_name = database.to_string();
+        #[allow(clippy::result_large_err)]
+        let db_schema = tokio::task::spawn_blocking(move || conn.schema_for_database(&db_name))
+            .await
+            .map_err(|e| format!("Blocking task failed: {}", e))?
+            .map_err(|e| format!("Schema error: {}", e))?;
+
+        let collections: Vec<serde_json::Value> = db_schema
+            .tables
+            .iter()
+            .map(|t| {
+                serde_json::json!({
+                    "name": t.name,
+                    "schema": t.schema,
+                    "kind": "Collection",
+                })
+            })
+            .collect();
+
+        Ok(serde_json::json!({ "tables": collections }))
+    }
+
     async fn list_tables_impl(
         state: ServerState,
         connection_id: &str,
@@ -312,6 +342,20 @@ impl DbFluxServer {
         } else {
             Self::get_or_connect(state, connection_id).await?
         };
+
+        let category = connection.metadata().category;
+
+        // For Document databases, we need to call schema_for_database() to get collections
+        // since schema() returns empty collections for MongoDB
+        if matches!(category, dbflux_core::DatabaseCategory::Document) {
+            #[allow(clippy::unnecessary_lazy_evaluations)]
+            let db_name = database.ok_or_else(|| {
+                "Database parameter is required for document databases (MongoDB). \
+                 Use: list_tables(connection_id, database=\"db_name\", ...)"
+            })?;
+
+            return Self::list_tables_document(&connection, db_name).await;
+        }
 
         let conn = connection.clone();
         let connection_id = connection_id.to_string();
@@ -338,9 +382,6 @@ impl DbFluxServer {
 
         use dbflux_core::DataStructure;
 
-        // Use connection metadata to determine how to route, rather than hardcoding Relational checks
-        let category = connection.metadata().category;
-
         match category {
             dbflux_core::DatabaseCategory::Relational => {
                 let relational = match schema_snapshot.structure {
@@ -361,7 +402,11 @@ impl DbFluxServer {
                 } else {
                     // For databases without schema support (SQLite), use the first schema or default
                     schema_str.unwrap_or_else(|| {
-                        relational.schemas.first().map(|s| s.name.clone()).unwrap_or_default()
+                        relational
+                            .schemas
+                            .first()
+                            .map(|s| s.name.clone())
+                            .unwrap_or_default()
                     })
                 };
 
@@ -398,26 +443,6 @@ impl DbFluxServer {
                 tables.extend(views);
 
                 Ok(serde_json::json!({ "tables": tables }))
-            }
-            dbflux_core::DatabaseCategory::Document => {
-                // For document databases (MongoDB), return collections instead of tables
-                let doc = match schema_snapshot.structure {
-                    DataStructure::Document(d) => d,
-                    _ => return Err("Expected document database schema".to_string()),
-                };
-
-                let collections: Vec<serde_json::Value> = doc
-                    .collections
-                    .iter()
-                    .map(|c| {
-                        serde_json::json!({
-                            "name": c.name,
-                            "kind": "Collection",
-                        })
-                    })
-                    .collect();
-
-                Ok(serde_json::json!({ "tables": collections }))
             }
             dbflux_core::DatabaseCategory::KeyValue => {
                 // For key-value stores (Redis), return keyspace info

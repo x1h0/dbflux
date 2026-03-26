@@ -9,23 +9,23 @@ use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
     generate_create_table, generate_delete_template, generate_drop_table, generate_insert_template,
-    generate_select_star, generate_truncate, generate_update_template, sanitize_uri,
-    AddEnumValueRequest, AddForeignKeyRequest, CodeGenCapabilities, CodeGenScope, CodeGenerator,
-    CodeGeneratorInfo, ColumnInfo, ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionExt,
-    ConnectionProfile, ConstraintInfo, ConstraintKind, CreateIndexRequest, CreateTypeRequest,
-    CrudResult, CustomTypeInfo, CustomTypeKind, DatabaseCategory, DatabaseInfo, DbConfig, DbDriver,
-    DbError, DbKind, DbSchemaInfo, DdlCapabilities, DescribeRequest, DocumentConnection,
-    DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata, DropForeignKeyRequest,
-    DropIndexRequest, DropTypeRequest, ErrorLocation, ExplainRequest, ForeignKeyBuilder,
-    ForeignKeyInfo, FormValues, FormattedError, Icon, IndexData, IndexInfo, IsolationLevel,
-    KeyValueConnection, MutationCapabilities, OrderByColumn, PaginationStyle, PlaceholderStyle,
-    QueryCancelHandle, QueryCapabilities, QueryErrorFormatter, QueryGenerator, QueryHandle,
-    QueryLanguage, QueryRequest, QueryResult, ReindexRequest, RelationalConnection,
+    generate_select_star, generate_truncate, generate_update_template, render_semantic_filter_sql,
+    sanitize_uri, AddEnumValueRequest, AddForeignKeyRequest, CodeGenCapabilities, CodeGenScope,
+    CodeGenerator, CodeGeneratorInfo, ColumnInfo, ColumnMeta, Connection, ConnectionErrorFormatter,
+    ConnectionExt, ConnectionProfile, ConstraintInfo, ConstraintKind, CreateIndexRequest,
+    CreateTypeRequest, CrudResult, CustomTypeInfo, CustomTypeKind, DatabaseCategory, DatabaseInfo,
+    DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DdlCapabilities, DescribeRequest,
+    DocumentConnection, DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata,
+    DropForeignKeyRequest, DropIndexRequest, DropTypeRequest, ErrorLocation, ExplainRequest,
+    ForeignKeyBuilder, ForeignKeyInfo, FormValues, FormattedError, Icon, IndexData, IndexInfo,
+    IsolationLevel, KeyValueConnection, MutationCapabilities, OrderByColumn, PaginationStyle,
+    PlaceholderStyle, QueryCancelHandle, QueryCapabilities, QueryErrorFormatter, QueryGenerator,
+    QueryHandle, QueryLanguage, QueryRequest, QueryResult, ReindexRequest, RelationalConnection,
     RelationalSchema, Row, RowDelete, RowInsert, RowPatch, SchemaFeatures, SchemaForeignKeyBuilder,
-    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SortDirection,
-    SqlDialect, SqlMutationGenerator, SqlQueryBuilder, SshTunnelConfig, SslMode, SyntaxInfo,
-    TableInfo, TransactionCapabilities, TypeDefinition, Value, ViewInfo, WhereOperator,
-    POSTGRES_FORM,
+    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan,
+    SemanticPlanKind, SemanticRequest, SortDirection, SqlDialect, SqlMutationGenerator,
+    SqlQueryBuilder, SshTunnelConfig, SslMode, SyntaxInfo, TableInfo, TransactionCapabilities,
+    TypeDefinition, Value, ViewInfo, WhereOperator, POSTGRES_FORM,
 };
 use dbflux_ssh::SshTunnel;
 use native_tls::TlsConnector;
@@ -984,6 +984,167 @@ fn postgres_code_generators() -> Vec<CodeGeneratorInfo> {
     ]
 }
 
+fn plan_postgres_table_browse(
+    request: &dbflux_core::TableBrowseRequest,
+) -> Result<SemanticPlan, DbError> {
+    let sql = if let Some(filter) = request.semantic_filter.as_ref() {
+        let mut sql = format!(
+            "SELECT * FROM {}",
+            request.table.quoted_with(&POSTGRES_DIALECT)
+        );
+        let where_clause = render_semantic_filter_sql(filter, &POSTGRES_DIALECT)?;
+        sql.push_str(" WHERE ");
+        sql.push_str(&where_clause);
+
+        if !request.order_by.is_empty() {
+            let order_by = request
+                .order_by
+                .iter()
+                .map(|column| {
+                    let direction = match column.direction {
+                        SortDirection::Ascending => "ASC",
+                        SortDirection::Descending => "DESC",
+                    };
+                    format!(
+                        "{} {}",
+                        column.column.quoted_with(&POSTGRES_DIALECT),
+                        direction
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            sql.push_str(" ORDER BY ");
+            sql.push_str(&order_by);
+        }
+
+        sql.push_str(&format!(
+            " LIMIT {} OFFSET {}",
+            request.pagination.limit(),
+            request.pagination.offset()
+        ));
+        sql
+    } else {
+        request.build_sql_with(&POSTGRES_DIALECT)
+    };
+
+    Ok(SemanticPlan::single_query(
+        SemanticPlanKind::Query,
+        dbflux_core::PlannedQuery::new(QueryLanguage::Sql, sql),
+    ))
+}
+
+fn plan_postgres_table_count(
+    request: &dbflux_core::TableCountRequest,
+) -> Result<SemanticPlan, DbError> {
+    let quoted_table = request.table.quoted_with(&POSTGRES_DIALECT);
+    let sql = if let Some(filter) = request.semantic_filter.as_ref() {
+        let where_clause = render_semantic_filter_sql(filter, &POSTGRES_DIALECT)?;
+        format!(
+            "SELECT COUNT(*) FROM {} WHERE {}",
+            quoted_table, where_clause
+        )
+    } else {
+        match request.filter.as_deref().map(str::trim) {
+            Some(filter) if !filter.is_empty() => {
+                format!("SELECT COUNT(*) FROM {} WHERE {}", quoted_table, filter)
+            }
+            _ => format!("SELECT COUNT(*) FROM {}", quoted_table),
+        }
+    };
+
+    Ok(SemanticPlan::single_query(
+        SemanticPlanKind::Query,
+        dbflux_core::PlannedQuery::new(QueryLanguage::Sql, sql),
+    ))
+}
+
+fn plan_postgres_aggregate(
+    request: &dbflux_core::AggregateRequest,
+) -> Result<SemanticPlan, DbError> {
+    let sql = request.build_sql_with(&POSTGRES_DIALECT)?;
+
+    Ok(SemanticPlan::single_query(
+        SemanticPlanKind::Query,
+        dbflux_core::PlannedQuery::new(QueryLanguage::Sql, sql)
+            .with_database(request.target_database.clone()),
+    ))
+}
+
+fn plan_postgres_explain(request: &ExplainRequest) -> SemanticPlan {
+    let query = request.query.clone().unwrap_or_else(|| {
+        format!(
+            "SELECT * FROM {} LIMIT 100",
+            request.table.quoted_with(&POSTGRES_DIALECT)
+        )
+    });
+
+    SemanticPlan::single_query(
+        SemanticPlanKind::Query,
+        dbflux_core::PlannedQuery::new(
+            QueryLanguage::Sql,
+            format!("EXPLAIN (FORMAT JSON, ANALYZE) {}", query),
+        ),
+    )
+}
+
+fn plan_postgres_describe(request: &DescribeRequest) -> SemanticPlan {
+    let schema = request.table.schema.as_deref().unwrap_or("public");
+    let escaped_schema = schema.replace('\'', "''");
+    let escaped_table = request.table.name.replace('\'', "''");
+
+    let sql = format!(
+        "SELECT \
+                a.attname AS column_name, \
+                format_type(a.atttypid, a.atttypmod) AS data_type, \
+                CASE WHEN a.attnotnull THEN 'NO' ELSE 'YES' END AS is_nullable, \
+                pg_get_expr(d.adbin, d.adrelid) AS column_default, \
+                CASE WHEN a.atttypmod > 0 AND t.typname IN ('varchar', 'bpchar') \
+                     THEN a.atttypmod - 4 \
+                     ELSE NULL \
+                END AS character_maximum_length \
+            FROM pg_attribute a \
+            JOIN pg_class c ON c.oid = a.attrelid \
+            JOIN pg_namespace n ON n.oid = c.relnamespace \
+            JOIN pg_type t ON t.oid = a.atttypid \
+            LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum \
+            WHERE n.nspname = '{}' \
+              AND c.relname = '{}' \
+              AND a.attnum > 0 \
+              AND NOT a.attisdropped \
+            ORDER BY a.attnum",
+        escaped_schema, escaped_table
+    );
+
+    SemanticPlan::single_query(
+        SemanticPlanKind::Query,
+        dbflux_core::PlannedQuery::new(QueryLanguage::Sql, sql),
+    )
+}
+
+fn plan_postgres_mutation(
+    mutation: &dbflux_core::MutationRequest,
+) -> Result<SemanticPlan, DbError> {
+    static GENERATOR: SqlMutationGenerator = SqlMutationGenerator::new(&POSTGRES_DIALECT);
+
+    GENERATOR.plan_mutation(mutation).ok_or_else(|| {
+        DbError::NotSupported("PostgreSQL semantic planning does not support this mutation".into())
+    })
+}
+
+fn plan_postgres_semantic_request(request: &SemanticRequest) -> Result<SemanticPlan, DbError> {
+    match request {
+        SemanticRequest::TableBrowse(request) => plan_postgres_table_browse(request),
+        SemanticRequest::TableCount(request) => plan_postgres_table_count(request),
+        SemanticRequest::Aggregate(request) => plan_postgres_aggregate(request),
+        SemanticRequest::Explain(request) => Ok(plan_postgres_explain(request)),
+        SemanticRequest::Describe(request) => Ok(plan_postgres_describe(request)),
+        SemanticRequest::Mutation(mutation) => plan_postgres_mutation(mutation),
+        _ => Err(DbError::NotSupported(
+            "PostgreSQL semantic planning does not support this request".into(),
+        )),
+    }
+}
+
 impl Connection for PostgresConnection {
     fn metadata(&self) -> &DriverMetadata {
         &METADATA
@@ -1548,6 +1709,10 @@ impl Connection for PostgresConnection {
     fn query_generator(&self) -> Option<&dyn QueryGenerator> {
         static GENERATOR: SqlMutationGenerator = SqlMutationGenerator::new(&POSTGRES_DIALECT);
         Some(&GENERATOR)
+    }
+
+    fn plan_semantic_request(&self, request: &SemanticRequest) -> Result<SemanticPlan, DbError> {
+        plan_postgres_semantic_request(request)
     }
 
     fn build_select_sql(
@@ -3101,11 +3266,12 @@ fn collect_filter_values(filter: &Value, params: &mut Vec<Value>) {
 #[cfg(test)]
 mod tests {
     use super::{
-        inject_password_into_pg_uri, parse_pg_uri_sslmode, PgUriSslMode, PostgresDialect,
-        PostgresDriver,
+        inject_password_into_pg_uri, parse_pg_uri_sslmode, plan_postgres_semantic_request,
+        PgUriSslMode, PostgresDialect, PostgresDriver,
     };
     use dbflux_core::{
-        DatabaseCategory, DbConfig, DbDriver, DbError, FormValues, QueryLanguage, SqlDialect, Value,
+        DatabaseCategory, DbConfig, DbDriver, DbError, FormValues, MutationRequest, QueryLanguage,
+        RowInsert, SemanticRequest, SqlDialect, TableBrowseRequest, TableRef, Value, WhereOperator,
     };
 
     #[test]
@@ -3259,5 +3425,64 @@ mod tests {
         assert_eq!(metadata.default_port, Some(5432));
         assert_eq!(metadata.uri_scheme, "postgresql");
         assert!(!driver.form_definition().tabs.is_empty());
+    }
+
+    #[test]
+    fn semantic_planner_builds_browse_query_from_legacy_request_fields() {
+        let plan = plan_postgres_semantic_request(&SemanticRequest::TableBrowse(
+            TableBrowseRequest::new(TableRef::with_schema("public", "users"))
+                .with_filter("status = 'active'"),
+        ))
+        .expect("postgres planner should handle table browse");
+
+        assert_eq!(plan.kind, dbflux_core::SemanticPlanKind::Query);
+        assert_eq!(plan.queries[0].language, QueryLanguage::Sql);
+        assert_eq!(
+            plan.queries[0].text,
+            "SELECT * FROM \"public\".\"users\" WHERE status = 'active' LIMIT 100 OFFSET 0"
+        );
+    }
+
+    #[test]
+    fn semantic_planner_wraps_sql_mutation_preview() {
+        let plan = plan_postgres_semantic_request(&SemanticRequest::Mutation(
+            MutationRequest::sql_insert(RowInsert::new(
+                "users".to_string(),
+                Some("public".to_string()),
+                vec!["id".to_string()],
+                vec![Value::Int(1)],
+            )),
+        ))
+        .expect("postgres planner should preview sql mutations");
+
+        assert_eq!(plan.kind, dbflux_core::SemanticPlanKind::MutationPreview);
+        assert!(plan.queries[0].text.contains("INSERT INTO"));
+    }
+
+    #[test]
+    fn semantic_planner_builds_aggregate_query() {
+        let request = dbflux_core::AggregateRequest::new(TableRef::with_schema("public", "orders"))
+            .with_group_by(vec![dbflux_core::ColumnRef::new("customer_id")])
+            .with_aggregations(vec![dbflux_core::AggregateSpec::new(
+                dbflux_core::AggregateFunction::Sum,
+                Some(dbflux_core::ColumnRef::new("amount")),
+                "total_amount",
+            )])
+            .with_having(dbflux_core::SemanticFilter::compare(
+                "total_amount",
+                WhereOperator::Gt,
+                Value::Int(100),
+            ))
+            .with_limit(Some(10));
+
+        let plan = plan_postgres_semantic_request(&SemanticRequest::Aggregate(request))
+            .expect("postgres planner should handle aggregate requests");
+
+        assert_eq!(plan.kind, dbflux_core::SemanticPlanKind::Query);
+        assert_eq!(plan.queries[0].language, QueryLanguage::Sql);
+        assert_eq!(
+            plan.queries[0].text,
+            "SELECT \"customer_id\", SUM(\"amount\") AS \"total_amount\" FROM \"public\".\"orders\" GROUP BY \"customer_id\" HAVING \"total_amount\" > 100 LIMIT 10"
+        );
     }
 }

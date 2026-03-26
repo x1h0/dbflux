@@ -2,7 +2,8 @@ use dbflux_core::{ColumnMeta, DefaultSqlDialect, DriverKey, KeySetRequest};
 use dbflux_core::{
     ConnectionProfile, DbConfig, DbDriver, DbKind, DocumentFilter, DocumentUpdate, GeneratedQuery,
     MutationCategory, MutationRequest, QueryGenerator, QueryLanguage, QueryResult, RowInsert,
-    SqlMutationGenerator, TableCountRequest, TableRef, Value,
+    SemanticFilter, SemanticRequest, SqlMutationGenerator, TableBrowseRequest, TableCountRequest,
+    TableRef, Value, WhereOperator,
 };
 use dbflux_test_support::FakeDriver;
 use std::time::Duration;
@@ -187,5 +188,40 @@ fn settings_schema_defaults_to_none() {
     assert!(
         driver.settings_schema().is_none(),
         "default settings_schema() should return None"
+    );
+}
+
+#[test]
+fn table_browse_request_can_store_semantic_filter_without_losing_legacy_fields() {
+    let request = TableBrowseRequest::new(TableRef::with_schema("public", "users"))
+        .with_filter("status = 'active'")
+        .with_semantic_filter(SemanticFilter::compare(
+            "status",
+            WhereOperator::Eq,
+            Value::Text("active".into()),
+        ));
+
+    assert_eq!(request.filter.as_deref(), Some("status = 'active'"));
+    assert!(request.semantic_filter.is_some());
+}
+
+#[test]
+fn semantic_planning_defaults_to_not_supported_when_connection_has_no_planner() {
+    let driver = FakeDriver::new(DbKind::Postgres);
+    let profile = ConnectionProfile::new("fake", DbConfig::default_postgres());
+    let connection = driver
+        .connect(&profile)
+        .expect("fake driver should connect");
+
+    let error = connection
+        .plan_semantic_request(&SemanticRequest::TableCount(TableCountRequest::new(
+            TableRef::new("users"),
+        )))
+        .expect_err("semantic planning should use the default not-supported path");
+
+    assert!(
+        error
+            .to_string()
+            .contains("Semantic planning not supported")
     );
 }

@@ -15,13 +15,14 @@ use dbflux_core::{
     FormValues, FormattedError, Icon, IndexData, IndexInfo, IsolationLevel, KeyValueConnection,
     MYSQL_FORM, MutationCapabilities, OrderByColumn, PaginationStyle, PlaceholderStyle,
     QueryCancelHandle, QueryCapabilities, QueryErrorFormatter, QueryGenerator, QueryHandle,
-    QueryLanguage, QueryRequest, QueryResult, RecordIdentity, RelationalConnection, RelationalSchema,
-    Row, RowDelete, RowInsert, RowPatch, SchemaForeignKeyBuilder, SchemaForeignKeyInfo,
-    SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SortDirection, SqlDialect,
-    SqlMutationGenerator, SqlQueryBuilder, SshTunnelConfig, SslMode, SyntaxInfo, TableInfo,
-    TransactionCapabilities, Value, ViewInfo, WhereOperator, generate_delete_template,
-    generate_drop_table, generate_insert_template, generate_select_star, generate_truncate,
-    generate_update_template, sanitize_uri,
+    QueryLanguage, QueryRequest, QueryResult, RecordIdentity, RelationalConnection,
+    RelationalSchema, Row, RowDelete, RowInsert, RowPatch, SchemaForeignKeyBuilder,
+    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan,
+    SemanticPlanKind, SemanticRequest, SortDirection, SqlDialect, SqlMutationGenerator,
+    SqlQueryBuilder, SshTunnelConfig, SslMode, SyntaxInfo, TableInfo, TransactionCapabilities,
+    Value, ViewInfo, WhereOperator, generate_delete_template, generate_drop_table,
+    generate_insert_template, generate_select_star, generate_truncate, generate_update_template,
+    render_semantic_filter_sql, sanitize_uri,
 };
 use dbflux_ssh::SshTunnel;
 use mysql::prelude::*;
@@ -1263,6 +1264,145 @@ fn mysql_code_generators() -> Vec<CodeGeneratorInfo> {
     ]
 }
 
+fn plan_mysql_table_browse(
+    request: &dbflux_core::TableBrowseRequest,
+) -> Result<SemanticPlan, DbError> {
+    let sql = if let Some(filter) = request.semantic_filter.as_ref() {
+        let mut sql = format!(
+            "SELECT * FROM {}",
+            request.table.quoted_with(&MYSQL_DIALECT)
+        );
+        let where_clause = render_semantic_filter_sql(filter, &MYSQL_DIALECT)?;
+        sql.push_str(" WHERE ");
+        sql.push_str(&where_clause);
+
+        if !request.order_by.is_empty() {
+            let order_by = request
+                .order_by
+                .iter()
+                .map(|column| {
+                    let direction = match column.direction {
+                        SortDirection::Ascending => "ASC",
+                        SortDirection::Descending => "DESC",
+                    };
+                    format!(
+                        "{} {}",
+                        column.column.quoted_with(&MYSQL_DIALECT),
+                        direction
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            sql.push_str(" ORDER BY ");
+            sql.push_str(&order_by);
+        }
+
+        sql.push_str(&format!(
+            " LIMIT {} OFFSET {}",
+            request.pagination.limit(),
+            request.pagination.offset()
+        ));
+        sql
+    } else {
+        request.build_sql_with(&MYSQL_DIALECT)
+    };
+
+    Ok(SemanticPlan::single_query(
+        SemanticPlanKind::Query,
+        dbflux_core::PlannedQuery::new(QueryLanguage::Sql, sql)
+            .with_database(request.table.schema.clone()),
+    ))
+}
+
+fn plan_mysql_table_count(
+    request: &dbflux_core::TableCountRequest,
+) -> Result<SemanticPlan, DbError> {
+    let quoted_table = request.table.quoted_with(&MYSQL_DIALECT);
+    let sql = if let Some(filter) = request.semantic_filter.as_ref() {
+        let where_clause = render_semantic_filter_sql(filter, &MYSQL_DIALECT)?;
+        format!(
+            "SELECT COUNT(*) FROM {} WHERE {}",
+            quoted_table, where_clause
+        )
+    } else {
+        match request.filter.as_deref().map(str::trim) {
+            Some(filter) if !filter.is_empty() => {
+                format!("SELECT COUNT(*) FROM {} WHERE {}", quoted_table, filter)
+            }
+            _ => format!("SELECT COUNT(*) FROM {}", quoted_table),
+        }
+    };
+
+    Ok(SemanticPlan::single_query(
+        SemanticPlanKind::Query,
+        dbflux_core::PlannedQuery::new(QueryLanguage::Sql, sql)
+            .with_database(request.table.schema.clone()),
+    ))
+}
+
+fn plan_mysql_aggregate(
+    request: &dbflux_core::AggregateRequest,
+) -> Result<SemanticPlan, DbError> {
+    let sql = request.build_sql_with(&MYSQL_DIALECT)?;
+
+    Ok(SemanticPlan::single_query(
+        SemanticPlanKind::Query,
+        dbflux_core::PlannedQuery::new(QueryLanguage::Sql, sql)
+            .with_database(request.target_database.clone()),
+    ))
+}
+
+fn plan_mysql_explain(request: &ExplainRequest) -> SemanticPlan {
+    let query = request.query.clone().unwrap_or_else(|| {
+        format!(
+            "SELECT * FROM {} LIMIT 100",
+            request.table.quoted_with(&MYSQL_DIALECT)
+        )
+    });
+
+    SemanticPlan::single_query(
+        SemanticPlanKind::Query,
+        dbflux_core::PlannedQuery::new(
+            QueryLanguage::Sql,
+            format!("EXPLAIN FORMAT=JSON {}", query),
+        )
+        .with_database(request.table.schema.clone()),
+    )
+}
+
+fn plan_mysql_describe(request: &DescribeRequest) -> SemanticPlan {
+    SemanticPlan::single_query(
+        SemanticPlanKind::Query,
+        dbflux_core::PlannedQuery::new(
+            QueryLanguage::Sql,
+            format!("DESCRIBE {}", request.table.quoted_with(&MYSQL_DIALECT)),
+        )
+        .with_database(request.table.schema.clone()),
+    )
+}
+
+fn plan_mysql_mutation(mutation: &dbflux_core::MutationRequest) -> Result<SemanticPlan, DbError> {
+    static GENERATOR: SqlMutationGenerator = SqlMutationGenerator::new(&MYSQL_DIALECT);
+
+    GENERATOR.plan_mutation(mutation).ok_or_else(|| {
+        DbError::NotSupported("MySQL semantic planning does not support this mutation".into())
+    })
+}
+
+fn plan_mysql_semantic_request(request: &SemanticRequest) -> Result<SemanticPlan, DbError> {
+    match request {
+        SemanticRequest::TableBrowse(request) => plan_mysql_table_browse(request),
+        SemanticRequest::TableCount(request) => plan_mysql_table_count(request),
+        SemanticRequest::Aggregate(request) => plan_mysql_aggregate(request),
+        SemanticRequest::Explain(request) => Ok(plan_mysql_explain(request)),
+        SemanticRequest::Describe(request) => Ok(plan_mysql_describe(request)),
+        SemanticRequest::Mutation(mutation) => plan_mysql_mutation(mutation),
+        _ => Err(DbError::NotSupported(
+            "MySQL semantic planning does not support this request".into(),
+        )),
+    }
+}
+
 impl Connection for MysqlConnection {
     fn metadata(&self) -> &DriverMetadata {
         match self.kind {
@@ -1863,6 +2003,10 @@ impl Connection for MysqlConnection {
         Some(&GENERATOR)
     }
 
+    fn plan_semantic_request(&self, request: &SemanticRequest) -> Result<SemanticPlan, DbError> {
+        plan_mysql_semantic_request(request)
+    }
+
     fn build_select_sql(
         &self,
         table: &str,
@@ -2009,7 +2153,13 @@ impl Connection for MysqlConnection {
 
         let update_parts: Vec<String> = update_columns
             .iter()
-            .map(|col| format!("{} = VALUES({})", MYSQL_DIALECT.quote_identifier(col), MYSQL_DIALECT.quote_identifier(col)))
+            .map(|col| {
+                format!(
+                    "{} = VALUES({})",
+                    MYSQL_DIALECT.quote_identifier(col),
+                    MYSQL_DIALECT.quote_identifier(col)
+                )
+            })
             .collect();
         let update_str = update_parts.join(", ");
 
@@ -2622,10 +2772,12 @@ fn translate_filter_to_sql(filter: &Value) -> (String, Vec<Value>) {
 mod tests {
     use super::{
         MysqlDialect, MysqlDriver, inject_password_into_mysql_uri, normalize_mysql_tcp_host,
+        plan_mysql_semantic_request,
     };
     use dbflux_core::{
-        DatabaseCategory, DbConfig, DbDriver, DbError, DbKind, FormValues, QueryLanguage,
-        SqlDialect, Value,
+        DatabaseCategory, DbConfig, DbDriver, DbError, DbKind, FormValues, MutationRequest,
+        OrderByColumn, QueryLanguage, RowInsert, SemanticRequest, SqlDialect,
+        TableBrowseRequest, TableRef, Value,
     };
 
     #[test]
@@ -2755,6 +2907,63 @@ mod tests {
             driver
                 .parse_uri("postgres://postgres@localhost:5432/app")
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn semantic_planner_sets_target_database_for_table_browse() {
+        let plan = plan_mysql_semantic_request(&SemanticRequest::TableBrowse(
+            TableBrowseRequest::new(TableRef::with_schema("analytics", "users"))
+                .with_filter("status = 'active'"),
+        ))
+        .expect("mysql planner should handle table browse");
+
+        assert_eq!(plan.kind, dbflux_core::SemanticPlanKind::Query);
+        assert_eq!(
+            plan.queries[0].target_database.as_deref(),
+            Some("analytics")
+        );
+        assert!(plan.queries[0].text.contains("FROM `analytics`.`users`"));
+    }
+
+    #[test]
+    fn semantic_planner_wraps_sql_mutation_preview() {
+        let plan = plan_mysql_semantic_request(&SemanticRequest::Mutation(
+            MutationRequest::sql_insert(RowInsert::new(
+                "users".to_string(),
+                Some("analytics".to_string()),
+                vec!["id".to_string()],
+                vec![Value::Int(1)],
+            )),
+        ))
+        .expect("mysql planner should preview sql mutations");
+
+        assert_eq!(plan.kind, dbflux_core::SemanticPlanKind::MutationPreview);
+        assert!(plan.queries[0].text.contains("INSERT INTO"));
+    }
+
+    #[test]
+    fn semantic_planner_builds_aggregate_query() {
+        let request = dbflux_core::AggregateRequest::new(TableRef::new("orders"))
+            .with_group_by(vec![dbflux_core::ColumnRef::new("customer_id")])
+            .with_aggregations(vec![dbflux_core::AggregateSpec::new(
+                dbflux_core::AggregateFunction::Count,
+                Some(dbflux_core::ColumnRef::new("id")),
+                "order_count",
+            )])
+            .with_order_by(vec![OrderByColumn::desc("order_count")])
+            .with_limit(Some(5))
+            .with_target_database(Some("analytics".to_string()));
+
+        let plan = plan_mysql_semantic_request(&SemanticRequest::Aggregate(request))
+            .expect("mysql planner should handle aggregate requests");
+
+        assert_eq!(plan.kind, dbflux_core::SemanticPlanKind::Query);
+        assert_eq!(plan.queries[0].language, QueryLanguage::Sql);
+        assert_eq!(plan.queries[0].target_database.as_deref(), Some("analytics"));
+        assert_eq!(
+            plan.queries[0].text,
+            "SELECT `customer_id`, COUNT(`id`) AS `order_count` FROM `orders` GROUP BY `customer_id` ORDER BY `order_count` DESC LIMIT 5"
         );
     }
 

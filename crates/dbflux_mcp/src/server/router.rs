@@ -1,4 +1,4 @@
-use crate::tool_catalog::{validate_v1_tool, ToolCatalogError};
+use crate::tool_catalog::{ToolCatalogError, validate_v1_tool};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RouteTarget {

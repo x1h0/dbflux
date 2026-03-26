@@ -177,25 +177,17 @@ impl DbFluxServer {
         state: &ServerState,
         profile: &dbflux_core::ConnectionProfile,
     ) -> Result<ResolvedSecrets, String> {
-        let mut password: Option<SecretString> = None;
-        let mut ssh_secret: Option<SecretString> = None;
+        let password = if profile.save_password {
+            state.secret_manager.get_password(profile)
+        } else {
+            None
+        };
 
-        // Try to get password from keyring
-        if let Some(pwd) = state.secret_manager.get_password(profile) {
-            password = Some(pwd);
-        }
-
-        // Resolve SSH secret if needed
-        if password.is_none()
-            && let Some(pwd) = state.secret_manager.get_password(profile)
-        {
-            password = Some(pwd);
-        }
-
-        // Resolve SSH secret if needed
-        if let Some(ssh) = state.secret_manager.get_ssh_password(profile) {
-            ssh_secret = Some(ssh);
-        }
+        let ssh_secret = if profile.config.ssh_tunnel().is_some() {
+            state.secret_manager.get_ssh_password(profile)
+        } else {
+            None
+        };
 
         Ok(ResolvedSecrets {
             password,

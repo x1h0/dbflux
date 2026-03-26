@@ -26,9 +26,11 @@ use dbflux_core::{
     DocumentInsert, DocumentSchema, DocumentUpdate, DriverCapabilities, DriverFormDef,
     DriverLimits, DriverMetadata, FieldInfo, FormValues, FormattedError, Icon, IndexData,
     IndexDirection, KeyValueConnection, LanguageService, MutationCapabilities, OrderByColumn,
-    Pagination, PaginationStyle, QueryCapabilities, QueryErrorFormatter, QueryLanguage, QueryRequest,
-    QueryResult, RelationalConnection, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
-    TableInfo, TransactionCapabilities, ValidationResult, Value, WhereOperator,
+    Pagination, PaginationStyle, QueryCapabilities, QueryErrorFormatter, QueryGenerator,
+    QueryLanguage, QueryRequest, QueryResult, RelationalConnection, SchemaLoadingStrategy,
+    SchemaSnapshot, SemanticFieldRef, SemanticFilter, SemanticPlan, SemanticPlanKind,
+    SemanticRequest, SqlDialect, TableInfo, TransactionCapabilities, ValidationResult, Value,
+    WhereOperator,
 };
 
 use crate::query_generator::DynamoQueryGenerator;
@@ -40,6 +42,203 @@ const DYNAMODB_DEFAULT_DATABASE: &str = "dynamodb";
 const DYNAMODB_BATCH_WRITE_WINDOW: usize = 25;
 const DYNAMODB_BATCH_WRITE_MAX_ATTEMPTS: u32 = 5;
 const DYNAMODB_BATCH_WRITE_BASE_BACKOFF_MS: u64 = 50;
+
+fn dynamo_filter_json_from_request(
+    legacy_filter: Option<&serde_json::Value>,
+    semantic_filter: Option<&SemanticFilter>,
+) -> Result<Option<serde_json::Value>, DbError> {
+    match semantic_filter {
+        Some(filter) => Ok(Some(dynamo_filter_json_from_semantic(filter)?)),
+        None => Ok(legacy_filter.cloned()),
+    }
+}
+
+fn dynamo_filter_json_from_semantic(filter: &SemanticFilter) -> Result<serde_json::Value, DbError> {
+    match filter {
+        SemanticFilter::Predicate(predicate) => {
+            let field_name = dynamo_filter_field_name(&predicate.field)?;
+            let filter_value = match predicate.operator {
+                WhereOperator::Eq => predicate
+                    .value
+                    .as_ref()
+                    .map(Value::to_serde_json)
+                    .ok_or_else(|| {
+                        DbError::query_failed("DynamoDB semantic filter requires a value")
+                    })?,
+                WhereOperator::Null => serde_json::Value::Null,
+                WhereOperator::Ne => dynamo_operator_filter("$ne", predicate.value.as_ref())?,
+                WhereOperator::Gt => dynamo_operator_filter("$gt", predicate.value.as_ref())?,
+                WhereOperator::Gte => dynamo_operator_filter("$gte", predicate.value.as_ref())?,
+                WhereOperator::Lt => dynamo_operator_filter("$lt", predicate.value.as_ref())?,
+                WhereOperator::Lte => dynamo_operator_filter("$lte", predicate.value.as_ref())?,
+                unsupported => {
+                    return Err(DbError::NotSupported(format!(
+                        "DynamoDB semantic filters do not support operator {:?}",
+                        unsupported
+                    )));
+                }
+            };
+
+            let mut object = serde_json::Map::new();
+            object.insert(field_name, filter_value);
+            Ok(serde_json::Value::Object(object))
+        }
+        SemanticFilter::And(filters) => dynamo_logical_filter_json("$and", filters),
+        SemanticFilter::Or(filters) => dynamo_logical_filter_json("$or", filters),
+        SemanticFilter::Not(_) => Err(DbError::NotSupported(
+            "DynamoDB semantic filters do not support NOT expressions".into(),
+        )),
+    }
+}
+
+fn dynamo_logical_filter_json(
+    operator: &str,
+    filters: &[SemanticFilter],
+) -> Result<serde_json::Value, DbError> {
+    if filters.is_empty() {
+        return Err(DbError::query_failed(format!(
+            "DynamoDB semantic filter '{}' requires at least one child expression",
+            operator
+        )));
+    }
+
+    let mut object = serde_json::Map::new();
+    object.insert(
+        operator.to_string(),
+        serde_json::Value::Array(
+            filters
+                .iter()
+                .map(dynamo_filter_json_from_semantic)
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+    );
+    Ok(serde_json::Value::Object(object))
+}
+
+fn dynamo_operator_filter(
+    operator: &str,
+    value: Option<&Value>,
+) -> Result<serde_json::Value, DbError> {
+    let value =
+        value.ok_or_else(|| DbError::query_failed("DynamoDB semantic filter requires a value"))?;
+
+    let mut object = serde_json::Map::new();
+    object.insert(operator.to_string(), Value::to_serde_json(value));
+    Ok(serde_json::Value::Object(object))
+}
+
+fn dynamo_filter_field_name(field: &SemanticFieldRef) -> Result<String, DbError> {
+    match field {
+        SemanticFieldRef::Column(column) => Ok(column.qualified_name()),
+        SemanticFieldRef::Path(segments) => {
+            if segments.is_empty() {
+                return Err(DbError::query_failed(
+                    "DynamoDB semantic filter path must contain at least one segment",
+                ));
+            }
+
+            Ok(segments.join("."))
+        }
+    }
+}
+
+fn dynamo_preview_text(value: &serde_json::Value) -> Result<String, DbError> {
+    serde_json::to_string_pretty(value).map_err(|error| {
+        DbError::query_failed(format!("Failed to render DynamoDB preview: {error}"))
+    })
+}
+
+fn plan_dynamo_collection_browse(
+    request: &CollectionBrowseRequest,
+) -> Result<SemanticPlan, DbError> {
+    let filter =
+        dynamo_filter_json_from_request(request.filter.as_ref(), request.semantic_filter.as_ref())?;
+
+    let mut envelope = serde_json::Map::new();
+    envelope.insert("op".into(), serde_json::Value::String("scan".into()));
+    envelope.insert(
+        "database".into(),
+        serde_json::Value::String(request.collection.database.clone()),
+    );
+    envelope.insert(
+        "table".into(),
+        serde_json::Value::String(request.collection.name.clone()),
+    );
+    envelope.insert(
+        "limit".into(),
+        serde_json::Value::from(request.pagination.limit()),
+    );
+    envelope.insert(
+        "offset".into(),
+        serde_json::Value::from(request.pagination.offset()),
+    );
+
+    if let Some(filter) = filter {
+        envelope.insert("filter".into(), filter);
+    }
+
+    Ok(SemanticPlan::single_query(
+        SemanticPlanKind::Query,
+        dbflux_core::PlannedQuery::new(
+            QueryLanguage::Custom("DynamoDB".into()),
+            dynamo_preview_text(&serde_json::Value::Object(envelope))?,
+        )
+        .with_database(Some(request.collection.database.clone())),
+    ))
+}
+
+fn plan_dynamo_collection_count(request: &CollectionCountRequest) -> Result<SemanticPlan, DbError> {
+    let filter =
+        dynamo_filter_json_from_request(request.filter.as_ref(), request.semantic_filter.as_ref())?;
+
+    let mut envelope = serde_json::Map::new();
+    envelope.insert("op".into(), serde_json::Value::String("scan".into()));
+    envelope.insert(
+        "database".into(),
+        serde_json::Value::String(request.collection.database.clone()),
+    );
+    envelope.insert(
+        "table".into(),
+        serde_json::Value::String(request.collection.name.clone()),
+    );
+    envelope.insert("select".into(), serde_json::Value::String("COUNT".into()));
+
+    if let Some(filter) = filter {
+        envelope.insert("filter".into(), filter);
+    }
+
+    Ok(SemanticPlan::single_query(
+        SemanticPlanKind::Query,
+        dbflux_core::PlannedQuery::new(
+            QueryLanguage::Custom("DynamoDB".into()),
+            dynamo_preview_text(&serde_json::Value::Object(envelope))?,
+        )
+        .with_database(Some(request.collection.database.clone())),
+    )
+    .with_warning("Preview uses a scan-shaped envelope; execution may optimize to Query when the filter matches the table key schema."))
+}
+
+fn plan_dynamo_mutation(mutation: &dbflux_core::MutationRequest) -> Result<SemanticPlan, DbError> {
+    static GENERATOR: DynamoQueryGenerator = DynamoQueryGenerator;
+
+    GENERATOR.plan_mutation(mutation).ok_or_else(|| {
+        DbError::NotSupported("DynamoDB semantic planning does not support this mutation".into())
+    })
+}
+
+fn plan_dynamo_semantic_request(request: &SemanticRequest) -> Result<SemanticPlan, DbError> {
+    match request {
+        SemanticRequest::CollectionBrowse(request) => plan_dynamo_collection_browse(request),
+        SemanticRequest::CollectionCount(request) => plan_dynamo_collection_count(request),
+        SemanticRequest::Aggregate(_) => Err(DbError::NotSupported(
+            "DynamoDB semantic planning does not support aggregate requests".into(),
+        )),
+        SemanticRequest::Mutation(mutation) => plan_dynamo_mutation(mutation),
+        _ => Err(DbError::NotSupported(
+            "DynamoDB semantic planning does not support this request".into(),
+        )),
+    }
+}
 
 pub static DYNAMODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
     id: "dynamodb".into(),
@@ -348,6 +547,7 @@ impl Connection for DynamoConnection {
                     collection: CollectionRef::new(resolved_database, table),
                     pagination,
                     filter,
+                    semantic_filter: None,
                 };
 
                 self.browse_collection_with_read_options(&request, &read_options)?
@@ -527,12 +727,24 @@ impl Connection for DynamoConnection {
 
     fn browse_collection(&self, request: &CollectionBrowseRequest) -> Result<QueryResult, DbError> {
         let read_options = DynamoReadOptions::default();
-        self.browse_collection_with_read_options(request, &read_options)
+        let mut request = request.clone();
+        request.filter = dynamo_filter_json_from_request(
+            request.filter.as_ref(),
+            request.semantic_filter.as_ref(),
+        )?;
+
+        self.browse_collection_with_read_options(&request, &read_options)
     }
 
     fn count_collection(&self, request: &CollectionCountRequest) -> Result<u64, DbError> {
         let read_options = DynamoReadOptions::default();
-        self.count_collection_with_read_options(request, &read_options)
+        let mut request = request.clone();
+        request.filter = dynamo_filter_json_from_request(
+            request.filter.as_ref(),
+            request.semantic_filter.as_ref(),
+        )?;
+
+        self.count_collection_with_read_options(&request, &read_options)
     }
 
     fn insert_document(&self, insert: &DocumentInsert) -> Result<dbflux_core::CrudResult, DbError> {
@@ -793,6 +1005,10 @@ impl Connection for DynamoConnection {
         Some(&GENERATOR)
     }
 
+    fn plan_semantic_request(&self, request: &SemanticRequest) -> Result<SemanticPlan, DbError> {
+        plan_dynamo_semantic_request(request)
+    }
+
     fn kind(&self) -> DbKind {
         DbKind::DynamoDB
     }
@@ -944,15 +1160,23 @@ impl DynamoConnection {
         let _ = page.has_more;
 
         // Serialize LastEvaluatedKey to JSON for next_page_token
-        let next_page_token = page.last_evaluated_key.as_ref().map(|key| {
-            let wrapper = AttributeValue::M(key.clone());
-            let json_value = attribute_value_to_json(&wrapper)?;
-            serde_json::to_string(&json_value).map_err(|e| {
-                DbError::query_failed(format!("Failed to serialize pagination token: {}", e))
+        let next_page_token = page
+            .last_evaluated_key
+            .as_ref()
+            .map(|key| {
+                let wrapper = AttributeValue::M(key.clone());
+                let json_value = attribute_value_to_json(&wrapper)?;
+                serde_json::to_string(&json_value).map_err(|e| {
+                    DbError::query_failed(format!("Failed to serialize pagination token: {}", e))
+                })
             })
-        }).transpose()?;
+            .transpose()?;
 
-        Ok(items_to_query_result(&page.items, &key_schema, next_page_token))
+        Ok(items_to_query_result(
+            &page.items,
+            &key_schema,
+            next_page_token,
+        ))
     }
 
     fn count_collection_with_read_options(
@@ -3823,10 +4047,12 @@ mod tests {
         append_window_items, apply_item_filter, attribute_value_to_value, build_item_batches,
         build_table_info_from_description, build_update_expression_from_json,
         classify_connection_error, classify_query_error, decide_read_strategy,
-        ensure_default_database, ensure_item_contains_required_keys, extract_key_map_from_filter,
+        dynamo_filter_json_from_semantic, ensure_default_database,
+        ensure_item_contains_required_keys, extract_key_map_from_filter,
         extract_non_key_update_attributes, json_value_to_attribute_value, key_components_to_fields,
-        key_components_to_indexes, normalize_table_names, resolve_upsert_key_map,
-        strip_key_fields_from_update_payload, unsupported_operation, validate_read_options,
+        key_components_to_indexes, normalize_table_names, plan_dynamo_semantic_request,
+        resolve_upsert_key_map, strip_key_fields_from_update_payload, unsupported_operation,
+        validate_read_options,
     };
     use crate::query_parser::{DynamoFilterFallback, DynamoReadOptions};
     use aws_sdk_dynamodb::types::{
@@ -3834,8 +4060,10 @@ mod tests {
         TableDescription,
     };
     use dbflux_core::{
-        ConnectionProfile, DangerousQueryKind, DatabaseCategory, DbConfig, DbDriver, DbError,
-        DocumentFilter, DocumentUpdate, DriverCapabilities, FormValues, IndexData, LanguageService,
+        CollectionBrowseRequest, CollectionCountRequest, CollectionRef, ConnectionProfile,
+        DangerousQueryKind, DatabaseCategory, DbConfig, DbDriver, DbError, DocumentFilter,
+        DocumentUpdate, DriverCapabilities, FormValues, IndexData, LanguageService, QueryLanguage,
+        SemanticFilter, SemanticPlanKind, SemanticRequest, Value, WhereOperator,
     };
     use serde_json::json;
     use std::collections::HashMap;
@@ -4808,5 +5036,68 @@ mod tests {
         assert_eq!(delete, Some(DangerousQueryKind::DeleteNoWhere));
         assert_eq!(update, Some(DangerousQueryKind::UpdateNoWhere));
         assert_eq!(put, None);
+    }
+
+    #[test]
+    fn semantic_filter_translates_to_dynamo_json() {
+        let filter = SemanticFilter::and(vec![
+            SemanticFilter::compare("pk", WhereOperator::Eq, Value::Text("USER#1".into())),
+            SemanticFilter::compare("score", WhereOperator::Gte, Value::Int(10)),
+        ]);
+
+        let translated =
+            dynamo_filter_json_from_semantic(&filter).expect("filter should translate to json");
+
+        assert_eq!(
+            translated,
+            json!({
+                "$and": [
+                    {"pk": "USER#1"},
+                    {"score": {"$gte": 10}}
+                ]
+            })
+        );
+    }
+
+    #[test]
+    fn semantic_planner_builds_collection_browse_preview() {
+        let request = CollectionBrowseRequest::new(CollectionRef::new("dynamodb", "users"))
+            .with_semantic_filter(SemanticFilter::compare(
+                "pk",
+                WhereOperator::Eq,
+                Value::Text("USER#1".into()),
+            ));
+
+        let plan = plan_dynamo_semantic_request(&SemanticRequest::CollectionBrowse(request))
+            .expect("browse request should plan");
+
+        assert_eq!(plan.kind, SemanticPlanKind::Query);
+        assert_eq!(
+            plan.queries[0].language,
+            QueryLanguage::Custom("DynamoDB".into())
+        );
+        assert!(plan.queries[0].text.contains("\"op\": \"scan\""));
+        assert!(plan.queries[0].text.contains("\"pk\": \"USER#1\""));
+    }
+
+    #[test]
+    fn semantic_planner_builds_collection_count_preview_with_warning() {
+        let request = CollectionCountRequest::new(CollectionRef::new("dynamodb", "users"))
+            .with_semantic_filter(SemanticFilter::compare(
+                "score",
+                WhereOperator::Gt,
+                Value::Int(5),
+            ));
+
+        let plan = plan_dynamo_semantic_request(&SemanticRequest::CollectionCount(request))
+            .expect("count request should plan");
+
+        assert_eq!(plan.kind, SemanticPlanKind::Query);
+        assert_eq!(
+            plan.queries[0].language,
+            QueryLanguage::Custom("DynamoDB".into())
+        );
+        assert!(plan.queries[0].text.contains("\"select\": \"COUNT\""));
+        assert_eq!(plan.warnings.len(), 1);
     }
 }

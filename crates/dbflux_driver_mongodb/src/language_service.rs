@@ -1,5 +1,5 @@
 use dbflux_core::{
-    detect_dangerous_mongo, DangerousQueryKind, LanguageService, QueryLanguage, ValidationResult,
+    DangerousQueryKind, LanguageService, QueryLanguage, ValidationResult, detect_dangerous_mongo,
 };
 
 /// MongoDB language service with lightweight syntax/language checks.

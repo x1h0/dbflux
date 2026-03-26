@@ -5,7 +5,14 @@
 //! - `count_records`: Count records matching a filter
 //! - `aggregate_data`: Perform aggregations with grouping and having clauses
 
-use dbflux_core::{ColumnRef, OrderByColumn, QueryRequest, SortDirection, TableRef, Value};
+use std::sync::Arc;
+
+use dbflux_core::{
+    AggregateFunction, AggregateRequest, AggregateSpec as CoreAggregateSpec,
+    CollectionBrowseRequest, CollectionCountRequest, CollectionRef, ColumnRef, Connection,
+    DatabaseCategory, OrderByColumn, Pagination, QueryResult, SemanticRequest, SortDirection,
+    TableBrowseRequest, TableCountRequest, TableRef, parse_semantic_filter_json,
+};
 use rmcp::{
     ErrorData,
     handler::server::wrapper::Parameters,
@@ -16,7 +23,7 @@ use rmcp::{
 use serde::Deserialize;
 
 use crate::{
-    helper::{IntoErrorData, *},
+    helper::{IntoErrorData, serialize_query_result},
     server::DbFluxServer,
     state::ServerState,
 };
@@ -296,9 +303,14 @@ impl DbFluxServer {
         order_by: Option<&[OrderByItem]>,
         limit: u32,
         offset: u32,
-        joins: Option<&[JoinSpec]>,
+        _joins: Option<&[JoinSpec]>,
         database: Option<&str>,
     ) -> Result<serde_json::Value, String> {
+        let semantic_filter = filter
+            .map(parse_semantic_filter_json)
+            .transpose()?
+            .flatten();
+
         let connection = if let Some(target_db) = database {
             let current_db = Self::get_current_database(&state, connection_id).await?;
 
@@ -311,104 +323,114 @@ impl DbFluxServer {
             Self::get_or_connect(state, connection_id).await?
         };
 
-        let dialect = connection.dialect();
-
-        // Determine the table name (apply default schema if needed)
-        let table_name = {
-            let default_schema = connection
-                .metadata()
-                .syntax
-                .as_ref()
-                .filter(|s| s.supports_schemas && !table.contains('.'))
-                .and_then(|s| s.default_schema.clone());
-
-            if let Some(schema) = default_schema {
-                format!("{}.{}", schema, table)
-            } else {
-                table.to_string()
+        match connection.metadata().category {
+            DatabaseCategory::Document => {
+                Self::select_data_document(
+                    &connection,
+                    table,
+                    database,
+                    filter,
+                    semantic_filter.as_ref(),
+                    limit,
+                    offset,
+                )
+                .await
             }
-        };
-
-        // Build column list
-        // Pass empty vec to driver so it can properly expand * to all columns
-        // (passing ["*"] causes the asterisk to be quoted as a string literal)
-        let column_list: Vec<String> = if let Some(cols) = columns {
-            if cols.is_empty() {
-                Vec::new()
-            } else {
-                cols.to_vec()
-            }
-        } else {
-            Vec::new()
-        };
-
-        // Convert filter to dbflux_core::Value
-        let db_filter: Option<Value> = filter.map(|f| json_to_db_value(f.clone()));
-
-        // Build ORDER BY columns
-        let order_by_columns: Vec<OrderByColumn> = order_by
-            .map(|items| {
-                items
-                    .iter()
-                    .map(|o| {
-                        let direction = o
-                            .direction
-                            .as_deref()
-                            .map(|d| d.to_uppercase() == "DESC")
-                            .unwrap_or(false);
-                        OrderByColumn::from_name(
-                            &o.column,
-                            if direction {
-                                SortDirection::Descending
-                            } else {
-                                SortDirection::Ascending
-                            },
-                        )
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        // Build SQL using driver abstraction
-        let mut sql = connection.build_select_sql(
-            &table_name,
-            &column_list,
-            db_filter.as_ref(),
-            &order_by_columns,
-            limit,
-            offset,
-        );
-
-        // Add joins if specified (not supported by build_select_sql)
-        if let Some(joins_list) = joins {
-            for join in joins_list {
-                let join_type = match join.r#type.to_uppercase().as_str() {
-                    "LEFT" => "LEFT JOIN",
-                    "RIGHT" => "RIGHT JOIN",
-                    "INNER" => "INNER JOIN",
-                    _ => "JOIN",
-                };
-                let join_table = dialect.quote_identifier(&join.table);
-                sql.push_str(&format!(" {} {} ON {}", join_type, join_table, join.on));
+            DatabaseCategory::Relational
+            | DatabaseCategory::KeyValue
+            | DatabaseCategory::Graph
+            | DatabaseCategory::TimeSeries
+            | DatabaseCategory::WideColumn => {
+                Self::select_data_table(
+                    &connection,
+                    table,
+                    columns,
+                    semantic_filter.as_ref(),
+                    order_by,
+                    limit,
+                    offset,
+                )
+                .await
             }
         }
+    }
 
-        let mut request = QueryRequest::new(&sql);
-        if let Some(db) = database {
-            request = request.with_database(Some(db.to_string()));
+    /// Handle select_data for document databases (MongoDB, DynamoDB)
+    async fn select_data_document(
+        connection: &Arc<dyn Connection>,
+        table: &str,
+        database: Option<&str>,
+        filter: Option<&serde_json::Value>,
+        semantic_filter: Option<&dbflux_core::SemanticFilter>,
+        limit: u32,
+        offset: u32,
+    ) -> Result<serde_json::Value, String> {
+        // For document databases, database parameter is required
+        #[allow(clippy::unnecessary_lazy_evaluations)]
+        let db_name = database.ok_or_else(|| {
+            "Database parameter is required for document databases. \
+             Use: select_data(connection_id, table, database=\"db_name\", ...)"
+        })?;
+
+        let collection_ref = CollectionRef::new(db_name, table);
+        let pagination = Pagination::Offset {
+            limit,
+            offset: offset as u64,
+        };
+
+        let mut request = CollectionBrowseRequest::new(collection_ref).with_pagination(pagination);
+
+        if let Some(f) = filter {
+            request = request.with_filter(f.clone());
+        }
+
+        if let Some(filter) = semantic_filter {
+            request = request.with_semantic_filter(filter.clone());
         }
 
         let conn = connection.clone();
-        let result = tokio::task::spawn_blocking(move || -> Result<_, String> {
-            #[allow(clippy::large_enum_variant)]
-            conn.execute(&request)
-                .map_err(|e| format!("Select error: {}", e))
-        })
-        .await
-        .map_err(|e| format!("Blocking task failed: {}", e))?;
+        #[allow(clippy::result_large_err)]
+        let query_result = tokio::task::spawn_blocking(move || conn.browse_collection(&request))
+            .await
+            .map_err(|e| format!("Blocking task failed: {}", e))?
+            .map_err(|e| format!("Select error: {}", e))?;
 
-        let result = result?;
-        Ok(serialize_query_result(&result))
+        Ok(serialize_query_result(&query_result))
+    }
+
+    /// Handle select_data for drivers that expose table browse semantics.
+    #[allow(clippy::too_many_arguments)]
+    async fn select_data_table(
+        connection: &Arc<dyn Connection>,
+        table: &str,
+        columns: Option<&[String]>,
+        semantic_filter: Option<&dbflux_core::SemanticFilter>,
+        order_by: Option<&[OrderByItem]>,
+        limit: u32,
+        offset: u32,
+    ) -> Result<serde_json::Value, String> {
+        let pagination = Pagination::Offset {
+            limit,
+            offset: offset as u64,
+        };
+
+        let mut request =
+            TableBrowseRequest::new(Self::table_ref_for_connection(connection, table))
+                .with_pagination(pagination)
+                .with_order_by(Self::order_by_columns(order_by));
+
+        if let Some(filter) = semantic_filter {
+            request = request.with_semantic_filter(filter.clone());
+        }
+
+        let conn = connection.clone();
+        #[allow(clippy::result_large_err)]
+        let query_result = tokio::task::spawn_blocking(move || conn.browse_table(&request))
+            .await
+            .map_err(|e| format!("Blocking task failed: {}", e))?
+            .map_err(|e| format!("Select error: {}", e))?;
+
+        Self::serialize_selected_result(&query_result, columns)
     }
 
     async fn count_records_impl(
@@ -418,6 +440,11 @@ impl DbFluxServer {
         filter: Option<&serde_json::Value>,
         database: Option<&str>,
     ) -> Result<u64, String> {
+        let semantic_filter = filter
+            .map(parse_semantic_filter_json)
+            .transpose()?
+            .flatten();
+
         let connection = if let Some(target_db) = database {
             let current_db = Self::get_current_database(&state, connection_id).await?;
 
@@ -430,54 +457,126 @@ impl DbFluxServer {
             Self::get_or_connect(state, connection_id).await?
         };
 
-        // Apply default schema if the driver supports schemas and no schema qualifier is present
-        let table_name = {
-            let default_schema = connection
-                .metadata()
-                .syntax
-                .as_ref()
-                .filter(|s| s.supports_schemas && !table.contains('.'))
-                .and_then(|s| s.default_schema.clone());
+        match connection.metadata().category {
+            DatabaseCategory::Document => {
+                #[allow(clippy::unnecessary_lazy_evaluations)]
+                let db_name = database.ok_or_else(|| {
+                    "Database parameter is required for document databases. Use: count_records(connection_id, table, database=\"db_name\", ...)"
+                })?;
 
-            if let Some(schema) = default_schema {
-                format!("{}.{}", schema, table)
-            } else {
-                table.to_string()
+                let mut request = CollectionCountRequest::new(CollectionRef::new(db_name, table));
+
+                if let Some(filter) = filter {
+                    request = request.with_filter(filter.clone());
+                }
+
+                if let Some(filter) = semantic_filter.as_ref() {
+                    request = request.with_semantic_filter(filter.clone());
+                }
+
+                let conn = connection.clone();
+                tokio::task::spawn_blocking(move || conn.count_collection(&request))
+                    .await
+                    .map_err(|e| format!("Blocking task failed: {}", e))?
+                    .map_err(|e| format!("Count error: {}", e))
             }
+            DatabaseCategory::Relational
+            | DatabaseCategory::KeyValue
+            | DatabaseCategory::Graph
+            | DatabaseCategory::TimeSeries
+            | DatabaseCategory::WideColumn => {
+                let mut request =
+                    TableCountRequest::new(Self::table_ref_for_connection(&connection, table));
+
+                if let Some(filter) = semantic_filter.as_ref() {
+                    request = request.with_semantic_filter(filter.clone());
+                }
+
+                let conn = connection.clone();
+                tokio::task::spawn_blocking(move || conn.count_table(&request))
+                    .await
+                    .map_err(|e| format!("Blocking task failed: {}", e))?
+                    .map_err(|e| format!("Count error: {}", e))
+            }
+        }
+    }
+
+    fn table_ref_for_connection(connection: &Arc<dyn Connection>, table: &str) -> TableRef {
+        let default_schema = connection
+            .metadata()
+            .syntax
+            .as_ref()
+            .filter(|syntax| syntax.supports_schemas && !table.contains('.'))
+            .and_then(|syntax| syntax.default_schema.clone());
+
+        if let Some(schema) = default_schema {
+            TableRef::with_schema(schema, table)
+        } else {
+            TableRef::from_qualified(table)
+        }
+    }
+
+    fn order_by_columns(order_by: Option<&[OrderByItem]>) -> Vec<OrderByColumn> {
+        order_by
+            .unwrap_or_default()
+            .iter()
+            .map(|item| {
+                let direction = match item.direction.as_deref() {
+                    Some(direction) if direction.eq_ignore_ascii_case("desc") => {
+                        SortDirection::Descending
+                    }
+                    _ => SortDirection::Ascending,
+                };
+
+                OrderByColumn::from_name(&item.column, direction)
+            })
+            .collect()
+    }
+
+    fn serialize_selected_result(
+        result: &QueryResult,
+        columns: Option<&[String]>,
+    ) -> Result<serde_json::Value, String> {
+        let Some(columns) = columns else {
+            return Ok(serialize_query_result(result));
         };
 
-        // Convert filter to dbflux_core::Value
-        let db_filter: Option<Value> = filter.map(|f| json_to_db_value(f.clone()));
-
-        // Build SQL using driver abstraction
-        let sql = connection.build_count_sql(&table_name, db_filter.as_ref());
-
-        let mut request = QueryRequest::new(&sql);
-        if let Some(db) = database {
-            request = request.with_database(Some(db.to_string()));
+        if columns.is_empty() {
+            return Ok(serialize_query_result(result));
         }
 
-        let conn = connection.clone();
-        let result = tokio::task::spawn_blocking(move || -> Result<_, String> {
-            #[allow(clippy::large_enum_variant)]
-            conn.execute(&request)
-                .map_err(|e| format!("Count error: {}", e))
-        })
-        .await
-        .map_err(|e| format!("Blocking task failed: {}", e))?;
+        let mut indices = Vec::with_capacity(columns.len());
 
-        let result = result?;
-        let count = result
+        for column in columns {
+            let index = result
+                .columns
+                .iter()
+                .position(|meta| meta.name == *column)
+                .ok_or_else(|| {
+                    format!("Select error: column '{}' not found in result set", column)
+                })?;
+            indices.push(index);
+        }
+
+        let rows = result
             .rows
-            .first()
-            .and_then(|row| row.first())
-            .and_then(|val| match val {
-                Value::Int(i) => Some(*i as u64),
-                _ => None,
-            })
-            .unwrap_or(0);
+            .iter()
+            .map(|row| {
+                let mut object = serde_json::Map::new();
 
-        Ok(count)
+                for (column, index) in columns.iter().zip(indices.iter()) {
+                    object.insert(column.clone(), crate::helper::value_to_json(&row[*index]));
+                }
+
+                serde_json::Value::Object(object)
+            })
+            .collect::<Vec<_>>();
+
+        Ok(serde_json::json!({
+            "columns": columns,
+            "rows": rows,
+            "row_count": result.rows.len(),
+        }))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -493,109 +592,64 @@ impl DbFluxServer {
         limit: Option<u32>,
         database: Option<&str>,
     ) -> Result<serde_json::Value, String> {
-        let connection = Self::get_or_connect(state, connection_id).await?;
-        let dialect = connection.dialect();
+        let semantic_filter = filter
+            .map(parse_semantic_filter_json)
+            .transpose()?
+            .flatten();
+        let semantic_having = having
+            .map(parse_semantic_filter_json)
+            .transpose()?
+            .flatten();
 
-        // Apply default schema if the driver supports schemas and no schema qualifier is present
-        let table_with_schema = {
-            let default_schema = connection
-                .metadata()
-                .syntax
-                .as_ref()
-                .filter(|s| s.supports_schemas && !table.contains('.'))
-                .and_then(|s| s.default_schema.clone());
+        let connection = if let Some(target_db) = database {
+            let current_db = Self::get_current_database(&state, connection_id).await?;
 
-            if let Some(schema) = default_schema {
-                format!("{}.{}", schema, table)
+            if target_db != current_db.as_deref().unwrap_or("") {
+                Self::connect_with_database(state, connection_id, target_db).await?
             } else {
-                table.to_string()
+                Self::get_or_connect(state, connection_id).await?
             }
+        } else {
+            Self::get_or_connect(state, connection_id).await?
         };
-        let table_ref = TableRef::from_qualified(&table_with_schema);
-        let table_quoted = table_ref.quoted_with(dialect);
 
-        // Build aggregation expressions
-        let agg_exprs: Vec<String> = aggregations
-            .iter()
-            .map(|agg| {
-                let func = agg.function.to_uppercase();
-                let col = if agg.column == "*" {
-                    "*".to_string()
-                } else {
-                    dialect.quote_identifier(&agg.column)
-                };
-                format!(
-                    "{}({}) AS {}",
-                    func,
-                    col,
-                    dialect.quote_identifier(&agg.alias)
-                )
-            })
-            .collect();
+        let mut request = AggregateRequest::new(Self::table_ref_for_connection(&connection, table))
+            .with_group_by(
+                group_by
+                    .iter()
+                    .map(|column| ColumnRef::from_qualified(column))
+                    .collect(),
+            )
+            .with_aggregations(Self::aggregate_specs(aggregations)?)
+            .with_order_by(Self::order_by_columns(order_by))
+            .with_limit(limit)
+            .with_target_database(database.map(str::to_string));
 
-        // Build GROUP BY columns
-        let group_cols: Vec<String> = group_by
-            .iter()
-            .map(|c| dialect.quote_identifier(c))
-            .collect();
-
-        let mut sql = format!(
-            "SELECT {}, {} FROM {}",
-            group_cols.join(", "),
-            agg_exprs.join(", "),
-            table_quoted
-        );
-
-        // Add WHERE clause
-        if let Some(f) = filter {
-            let where_clause = json_filter_to_sql(f, dialect)?;
-            if !where_clause.is_empty() {
-                sql.push_str(&format!(" WHERE {}", where_clause));
-            }
+        if let Some(filter) = semantic_filter {
+            request = request.with_filter(filter);
         }
 
-        // Add GROUP BY
-        sql.push_str(&format!(" GROUP BY {}", group_cols.join(", ")));
-
-        // Add HAVING clause
-        if let Some(h) = having {
-            let having_clause = json_filter_to_sql(h, dialect)?;
-            if !having_clause.is_empty() {
-                sql.push_str(&format!(" HAVING {}", having_clause));
-            }
+        if let Some(having) = semantic_having {
+            request = request.with_having(having);
         }
 
-        // Add ORDER BY
-        if let Some(order) = order_by
-            && !order.is_empty()
-        {
-            let order_clauses: Vec<String> = order
-                .iter()
-                .map(|o| {
-                    let dir = o
-                        .direction
-                        .as_deref()
-                        .map(|d| d.to_uppercase())
-                        .unwrap_or_else(|| "ASC".to_string());
-                    let col_ref = ColumnRef::from_qualified(&o.column);
-                    format!("{} {}", col_ref.quoted_with(dialect), dir)
-                })
-                .collect();
-            sql.push_str(&format!(" ORDER BY {}", order_clauses.join(", ")));
-        }
-
-        // Add LIMIT
-        if let Some(lim) = limit {
-            sql.push_str(&format!(" LIMIT {}", lim));
-        }
-
-        let mut request = QueryRequest::new(&sql);
-        if let Some(db) = database {
-            request = request.with_database(Some(db.to_string()));
-        }
-
+        let semantic_request = SemanticRequest::Aggregate(request);
+        let target_database = database.map(str::to_string);
         let conn = connection.clone();
         let result = tokio::task::spawn_blocking(move || -> Result<_, String> {
+            let plan = conn
+                .plan_semantic_request(&semantic_request)
+                .map_err(|e| format!("Aggregate planning error: {}", e))?;
+            let planned_query = plan
+                .primary_query()
+                .cloned()
+                .ok_or_else(|| "Aggregate planning error: driver returned no executable query".to_string())?;
+
+            let mut request = planned_query.into_query_request();
+            if request.database.is_none() {
+                request = request.with_database(target_database);
+            }
+
             #[allow(clippy::large_enum_variant)]
             conn.execute(&request)
                 .map_err(|e| format!("Aggregate error: {}", e))
@@ -605,6 +659,40 @@ impl DbFluxServer {
 
         let result = result?;
         Ok(serialize_query_result(&result))
+    }
+
+    fn aggregate_specs(aggregations: &[AggregationSpec]) -> Result<Vec<CoreAggregateSpec>, String> {
+        aggregations
+            .iter()
+            .map(|aggregation| {
+                let function = Self::aggregate_function(&aggregation.function)?;
+                let column = if aggregation.column == "*" {
+                    None
+                } else {
+                    Some(ColumnRef::from_qualified(&aggregation.column))
+                };
+
+                Ok(CoreAggregateSpec::new(
+                    function,
+                    column,
+                    aggregation.alias.clone(),
+                ))
+            })
+            .collect()
+    }
+
+    fn aggregate_function(function: &str) -> Result<AggregateFunction, String> {
+        match function.trim().to_ascii_lowercase().as_str() {
+            "count" => Ok(AggregateFunction::Count),
+            "sum" => Ok(AggregateFunction::Sum),
+            "avg" => Ok(AggregateFunction::Avg),
+            "min" => Ok(AggregateFunction::Min),
+            "max" => Ok(AggregateFunction::Max),
+            other => Err(format!(
+                "Unsupported aggregation function '{}'. Supported functions: count, sum, avg, min, max",
+                other
+            )),
+        }
     }
 }
 
@@ -663,5 +751,19 @@ mod tests {
 
         assert_eq!(params.effective_limit(), 500);
         assert_eq!(params.effective_offset(), 100);
+    }
+
+    #[test]
+    fn test_aggregate_function_accepts_case_insensitive_names() {
+        assert!(matches!(
+            DbFluxServer::aggregate_function("SuM"),
+            Ok(AggregateFunction::Sum)
+        ));
+    }
+
+    #[test]
+    fn test_aggregate_function_rejects_unknown_names() {
+        let error = DbFluxServer::aggregate_function("median").unwrap_err();
+        assert!(error.contains("Unsupported aggregation function"));
     }
 }

@@ -19,12 +19,39 @@ use dbflux_core::{
     ListEnd, ListPushRequest, ListRemoveRequest, ListSetRequest, MutationCapabilities,
     OrderByColumn, PaginationStyle, QueryCapabilities, QueryErrorFormatter, QueryGenerator,
     QueryHandle, QueryLanguage, QueryRequest, QueryResult, REDIS_FORM, RelationalConnection,
-    SchemaLoadingStrategy, SchemaSnapshot, SetAddRequest, SetCondition, SetRemoveRequest,
-    SqlDialect, SshTunnelConfig, StreamAddRequest, StreamDeleteRequest,
-    StreamEntryId, TextPosition, TextPositionRange, TransactionCapabilities, ValidationResult, Value,
-    ValueRepr, ZSetAddRequest, ZSetRemoveRequest, sanitize_uri,
+    SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan, SemanticRequest, SetAddRequest,
+    SetCondition, SetRemoveRequest, SqlDialect, SshTunnelConfig, StreamAddRequest,
+    StreamDeleteRequest, StreamEntryId, TextPosition, TextPositionRange, TransactionCapabilities,
+    ValidationResult, Value, ValueRepr, ZSetAddRequest, ZSetRemoveRequest, sanitize_uri,
 };
 use dbflux_ssh::SshTunnel;
+
+fn plan_redis_mutation(mutation: &dbflux_core::MutationRequest) -> Result<SemanticPlan, DbError> {
+    static GENERATOR: crate::command_generator::RedisCommandGenerator =
+        crate::command_generator::RedisCommandGenerator;
+
+    GENERATOR.plan_mutation(mutation).ok_or_else(|| {
+        DbError::NotSupported("Redis semantic planning does not support this mutation".into())
+    })
+}
+
+fn plan_redis_semantic_request(request: &SemanticRequest) -> Result<SemanticPlan, DbError> {
+    match request {
+        SemanticRequest::Mutation(mutation) => plan_redis_mutation(mutation),
+        SemanticRequest::TableBrowse(_)
+        | SemanticRequest::TableCount(_)
+        | SemanticRequest::Aggregate(_)
+        | SemanticRequest::CollectionBrowse(_)
+        | SemanticRequest::CollectionCount(_) => Err(DbError::NotSupported(
+            "Redis semantic planning does not support relational or collection browse/count requests"
+                .into(),
+        )),
+        SemanticRequest::Explain(_) | SemanticRequest::Describe(_) => Err(DbError::NotSupported(
+            "Redis semantic planning does not support explain or describe requests".into(),
+        )),
+    }
+}
+
 /// Redis driver metadata.
 pub static REDIS_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
     id: "redis".into(),
@@ -779,6 +806,10 @@ impl Connection for RedisConnection {
         static GENERATOR: crate::command_generator::RedisCommandGenerator =
             crate::command_generator::RedisCommandGenerator;
         Some(&GENERATOR)
+    }
+
+    fn plan_semantic_request(&self, request: &SemanticRequest) -> Result<SemanticPlan, DbError> {
+        plan_redis_semantic_request(request)
     }
 
     fn build_select_sql(
@@ -2235,7 +2266,10 @@ fn redis_first_line_range(query: &str) -> TextPositionRange {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dbflux_core::{DatabaseCategory, DbDriver, QueryLanguage, ValidationResult};
+    use dbflux_core::{
+        DatabaseCategory, DbDriver, KeySetRequest, MutationRequest, QueryLanguage,
+        SemanticPlanKind, SemanticRequest, TableBrowseRequest, TableRef, ValidationResult,
+    };
 
     #[test]
     fn build_config_requires_uri_when_uri_mode_enabled() {
@@ -2458,7 +2492,10 @@ mod tests {
 
     #[test]
     fn test_escape_glob_pattern_no_special_chars() {
-        assert_eq!(escape_redis_glob_pattern("user:session:123"), "user:session:123");
+        assert_eq!(
+            escape_redis_glob_pattern("user:session:123"),
+            "user:session:123"
+        );
     }
 
     #[test]
@@ -2487,7 +2524,33 @@ mod tests {
 
     #[test]
     fn test_escape_glob_pattern_multiple() {
-        assert_eq!(escape_redis_glob_pattern("user:*:session:?"), "user:\\*:session:\\?");
+        assert_eq!(
+            escape_redis_glob_pattern("user:*:session:?"),
+            "user:\\*:session:\\?"
+        );
         assert_eq!(escape_redis_glob_pattern("a[*]b"), "a\\[\\*\\]b");
+    }
+
+    #[test]
+    fn semantic_planner_wraps_key_value_mutation_preview() {
+        let plan = plan_redis_semantic_request(&SemanticRequest::Mutation(
+            MutationRequest::KeyValueSet(KeySetRequest::new("session:1", b"alive".to_vec())),
+        ))
+        .expect("key-value mutation should plan");
+
+        assert_eq!(plan.kind, SemanticPlanKind::MutationPreview);
+        assert_eq!(plan.queries[0].language, QueryLanguage::RedisCommands);
+        assert_eq!(plan.queries[0].text, "SET session:1 alive");
+    }
+
+    #[test]
+    fn semantic_planner_rejects_relational_browse_requests() {
+        let error = plan_redis_semantic_request(&SemanticRequest::TableBrowse(
+            TableBrowseRequest::new(TableRef::new("users")),
+        ))
+        .expect_err("redis should reject relational browse planning");
+
+        assert!(matches!(error, DbError::NotSupported(_)));
+        assert!(error.to_string().contains("browse/count"));
     }
 }

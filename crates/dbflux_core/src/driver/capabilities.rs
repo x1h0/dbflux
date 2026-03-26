@@ -1795,12 +1795,16 @@ mod tests {
         .capabilities(caps)
         .build();
 
-        assert!(metadata
-            .capabilities
-            .contains(DriverCapabilities::RELATIONAL_BASE));
-        assert!(metadata
-            .capabilities
-            .contains(DriverCapabilities::RETURNING));
+        assert!(
+            metadata
+                .capabilities
+                .contains(DriverCapabilities::RELATIONAL_BASE)
+        );
+        assert!(
+            metadata
+                .capabilities
+                .contains(DriverCapabilities::RETURNING)
+        );
     }
 
     #[test]

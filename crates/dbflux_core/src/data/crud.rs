@@ -1,12 +1,12 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    Row, Value,
     data::key_value::{
         HashDeleteRequest, HashSetRequest, KeyDeleteRequest, KeySetRequest, ListPushRequest,
         ListRemoveRequest, ListSetRequest, SetAddRequest, SetRemoveRequest, StreamAddRequest,
         StreamDeleteRequest, ZSetAddRequest, ZSetRemoveRequest,
     },
-    Row, Value,
 };
 
 /// Unique identification of a record for UPDATE/DELETE operations.

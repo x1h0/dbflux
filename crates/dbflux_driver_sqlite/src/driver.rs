@@ -14,12 +14,14 @@ use dbflux_core::{
     DriverFormDef, DriverLimits, DriverMetadata, DropIndexRequest, ExplainRequest, ForeignKeyInfo,
     FormValues, FormattedError, Icon, IndexData, IndexInfo, IsolationLevel, KeyValueConnection,
     MutationCapabilities, OrderByColumn, PaginationStyle, PlaceholderStyle, QueryCancelHandle,
-    QueryCapabilities, QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage, QueryRequest,
-    QueryResult, ReindexRequest, RelationalConnection, RelationalSchema, Row, RowDelete, RowInsert,
-    RowPatch, SQLITE_FORM, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy,
-    SchemaSnapshot, SortDirection, SqlDialect, SqlMutationGenerator, SqlQueryBuilder, SyntaxInfo,
-    TableInfo, TransactionCapabilities, Value, ViewInfo, WhereOperator, generate_delete_template,
+    QueryCapabilities, QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage,
+    QueryRequest, QueryResult, ReindexRequest, RelationalConnection, RelationalSchema, Row,
+    RowDelete, RowInsert, RowPatch, SQLITE_FORM, SchemaForeignKeyInfo, SchemaIndexInfo,
+    SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan, SemanticPlanKind, SemanticRequest,
+    SortDirection, SqlDialect, SqlMutationGenerator, SqlQueryBuilder, SyntaxInfo, TableInfo,
+    TransactionCapabilities, Value, ViewInfo, WhereOperator, generate_delete_template,
     generate_drop_table, generate_insert_template, generate_select_star, generate_update_template,
+    render_semantic_filter_sql,
 };
 use rusqlite::{Connection as RusqliteConnection, InterruptHandle};
 
@@ -276,7 +278,10 @@ impl DbDriver for SqliteDriver {
         _ssh_secret: Option<&SecretString>,
     ) -> Result<Box<dyn Connection>, DbError> {
         let (path, connection_id) = match &profile.config {
-            DbConfig::SQLite { path, connection_id } => (path.clone(), connection_id.clone()),
+            DbConfig::SQLite {
+                path,
+                connection_id,
+            } => (path.clone(), connection_id.clone()),
             _ => {
                 return Err(DbError::InvalidProfile(
                     "Expected SQLite configuration".to_string(),
@@ -453,6 +458,140 @@ fn sqlite_code_generators() -> Vec<CodeGeneratorInfo> {
     ]
 }
 
+fn plan_sqlite_table_browse(
+    request: &dbflux_core::TableBrowseRequest,
+) -> Result<SemanticPlan, DbError> {
+    let sql = if let Some(filter) = request.semantic_filter.as_ref() {
+        let mut sql = format!(
+            "SELECT * FROM {}",
+            request.table.quoted_with(&SQLITE_DIALECT)
+        );
+        let where_clause = render_semantic_filter_sql(filter, &SQLITE_DIALECT)?;
+        sql.push_str(" WHERE ");
+        sql.push_str(&where_clause);
+
+        if !request.order_by.is_empty() {
+            let order_by = request
+                .order_by
+                .iter()
+                .map(|column| {
+                    let direction = match column.direction {
+                        SortDirection::Ascending => "ASC",
+                        SortDirection::Descending => "DESC",
+                    };
+                    format!(
+                        "{} {}",
+                        column.column.quoted_with(&SQLITE_DIALECT),
+                        direction
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            sql.push_str(" ORDER BY ");
+            sql.push_str(&order_by);
+        }
+
+        sql.push_str(&format!(
+            " LIMIT {} OFFSET {}",
+            request.pagination.limit(),
+            request.pagination.offset()
+        ));
+        sql
+    } else {
+        request.build_sql_with(&SQLITE_DIALECT)
+    };
+
+    Ok(SemanticPlan::single_query(
+        SemanticPlanKind::Query,
+        dbflux_core::PlannedQuery::new(QueryLanguage::Sql, sql),
+    ))
+}
+
+fn plan_sqlite_table_count(
+    request: &dbflux_core::TableCountRequest,
+) -> Result<SemanticPlan, DbError> {
+    let quoted_table = request.table.quoted_with(&SQLITE_DIALECT);
+    let sql = if let Some(filter) = request.semantic_filter.as_ref() {
+        let where_clause = render_semantic_filter_sql(filter, &SQLITE_DIALECT)?;
+        format!(
+            "SELECT COUNT(*) FROM {} WHERE {}",
+            quoted_table, where_clause
+        )
+    } else {
+        match request.filter.as_deref().map(str::trim) {
+            Some(filter) if !filter.is_empty() => {
+                format!("SELECT COUNT(*) FROM {} WHERE {}", quoted_table, filter)
+            }
+            _ => format!("SELECT COUNT(*) FROM {}", quoted_table),
+        }
+    };
+
+    Ok(SemanticPlan::single_query(
+        SemanticPlanKind::Query,
+        dbflux_core::PlannedQuery::new(QueryLanguage::Sql, sql),
+    ))
+}
+
+fn plan_sqlite_aggregate(
+    request: &dbflux_core::AggregateRequest,
+) -> Result<SemanticPlan, DbError> {
+    let sql = request.build_sql_with(&SQLITE_DIALECT)?;
+
+    Ok(SemanticPlan::single_query(
+        SemanticPlanKind::Query,
+        dbflux_core::PlannedQuery::new(QueryLanguage::Sql, sql)
+            .with_database(request.target_database.clone()),
+    ))
+}
+
+fn plan_sqlite_explain(request: &ExplainRequest) -> SemanticPlan {
+    let query = request.query.clone().unwrap_or_else(|| {
+        format!(
+            "SELECT * FROM {} LIMIT 100",
+            request.table.quoted_with(&SQLITE_DIALECT)
+        )
+    });
+
+    SemanticPlan::single_query(
+        SemanticPlanKind::Query,
+        dbflux_core::PlannedQuery::new(QueryLanguage::Sql, format!("EXPLAIN QUERY PLAN {}", query)),
+    )
+}
+
+fn plan_sqlite_describe(request: &DescribeRequest) -> SemanticPlan {
+    let sql = format!(
+        "PRAGMA table_info({})",
+        SQLITE_DIALECT.quote_identifier(&request.table.name)
+    );
+
+    SemanticPlan::single_query(
+        SemanticPlanKind::Query,
+        dbflux_core::PlannedQuery::new(QueryLanguage::Sql, sql),
+    )
+}
+
+fn plan_sqlite_mutation(mutation: &dbflux_core::MutationRequest) -> Result<SemanticPlan, DbError> {
+    static GENERATOR: SqlMutationGenerator = SqlMutationGenerator::new(&SQLITE_DIALECT);
+
+    GENERATOR.plan_mutation(mutation).ok_or_else(|| {
+        DbError::NotSupported("SQLite semantic planning does not support this mutation".into())
+    })
+}
+
+fn plan_sqlite_semantic_request(request: &SemanticRequest) -> Result<SemanticPlan, DbError> {
+    match request {
+        SemanticRequest::TableBrowse(request) => plan_sqlite_table_browse(request),
+        SemanticRequest::TableCount(request) => plan_sqlite_table_count(request),
+        SemanticRequest::Aggregate(request) => plan_sqlite_aggregate(request),
+        SemanticRequest::Explain(request) => Ok(plan_sqlite_explain(request)),
+        SemanticRequest::Describe(request) => Ok(plan_sqlite_describe(request)),
+        SemanticRequest::Mutation(mutation) => plan_sqlite_mutation(mutation),
+        _ => Err(DbError::NotSupported(
+            "SQLite semantic planning does not support this request".into(),
+        )),
+    }
+}
+
 impl Connection for SqliteConnection {
     fn metadata(&self) -> &DriverMetadata {
         &METADATA
@@ -502,11 +641,8 @@ impl Connection for SqliteConnection {
         if is_query {
             // For SELECT statements, use query() to get rows
             let column_count = stmt.column_count();
-            let column_names: Vec<String> = stmt
-                .column_names()
-                .iter()
-                .map(|s| s.to_string())
-                .collect();
+            let column_names: Vec<String> =
+                stmt.column_names().iter().map(|s| s.to_string()).collect();
             let columns: Vec<ColumnMeta> = column_names
                 .into_iter()
                 .map(|name| ColumnMeta {
@@ -564,16 +700,14 @@ impl Connection for SqliteConnection {
         } else {
             // For DDL/DML statements (CREATE, DROP, INSERT, UPDATE, DELETE, etc.),
             // use execute() which properly handles non-row-returning statements
-            let affected = stmt
-                .execute([])
-                .map_err(|e| {
-                    if self.cancelled.load(Ordering::SeqCst) {
-                        log::info!("[QUERY] SQLite query was interrupted");
-                        DbError::Cancelled
-                    } else {
-                        format_sqlite_query_error(&e)
-                    }
-                })?;
+            let affected = stmt.execute([]).map_err(|e| {
+                if self.cancelled.load(Ordering::SeqCst) {
+                    log::info!("[QUERY] SQLite query was interrupted");
+                    DbError::Cancelled
+                } else {
+                    format_sqlite_query_error(&e)
+                }
+            })?;
 
             // Return empty result for DDL/DML
             Ok(QueryResult::table(
@@ -926,6 +1060,10 @@ impl Connection for SqliteConnection {
         Some(&GENERATOR)
     }
 
+    fn plan_semantic_request(&self, request: &SemanticRequest) -> Result<SemanticPlan, DbError> {
+        plan_sqlite_semantic_request(request)
+    }
+
     fn build_select_sql(
         &self,
         table: &str,
@@ -1075,12 +1213,7 @@ impl Connection for SqliteConnection {
 
         let update_parts: Vec<String> = update_columns
             .iter()
-            .map(|col| {
-                format!(
-                    "{} = ?",
-                    SQLITE_DIALECT.quote_identifier(col)
-                )
-            })
+            .map(|col| format!("{} = ?", SQLITE_DIALECT.quote_identifier(col)))
             .collect();
         let update_str = update_parts.join(", ");
 
@@ -1198,7 +1331,9 @@ impl SqliteConnection {
             .is_ok();
 
         if !table_exists {
-            return Err(DbError::ObjectNotFound(format!("Table '{}' not found", table).into()));
+            return Err(DbError::ObjectNotFound(
+                format!("Table '{}' not found", table).into(),
+            ));
         }
 
         let mut stmt = conn
@@ -1745,10 +1880,13 @@ fn collect_filter_values(filter: &Value, params: &mut Vec<Value>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{SqliteDialect, SqliteDriver, sqlite_generate_create_table};
+    use super::{
+        SqliteDialect, SqliteDriver, plan_sqlite_semantic_request, sqlite_generate_create_table,
+    };
     use dbflux_core::{
-        ColumnInfo, DatabaseCategory, DbConfig, DbDriver, FormValues, QueryLanguage, SqlDialect,
-        TableInfo, Value,
+        ColumnInfo, DatabaseCategory, DbConfig, DbDriver, FormValues, MutationRequest,
+        QueryLanguage, RowInsert, SemanticRequest, SqlDialect, TableBrowseRequest, TableInfo,
+        TableRef, Value, WhereOperator,
     };
 
     #[test]
@@ -1872,5 +2010,61 @@ mod tests {
         assert_eq!(metadata.default_port, None);
         assert_eq!(metadata.uri_scheme, "sqlite");
         assert!(!driver.form_definition().tabs.is_empty());
+    }
+
+    #[test]
+    fn semantic_planner_builds_table_browse_preview() {
+        let plan = plan_sqlite_semantic_request(&SemanticRequest::TableBrowse(
+            TableBrowseRequest::new(TableRef::new("users")).with_filter("status = 'active'"),
+        ))
+        .expect("sqlite planner should handle table browse");
+
+        assert_eq!(plan.kind, dbflux_core::SemanticPlanKind::Query);
+        assert_eq!(
+            plan.queries[0].text,
+            "SELECT * FROM \"users\" WHERE status = 'active' LIMIT 100 OFFSET 0"
+        );
+    }
+
+    #[test]
+    fn semantic_planner_wraps_sql_mutation_preview() {
+        let plan = plan_sqlite_semantic_request(&SemanticRequest::Mutation(
+            MutationRequest::sql_insert(RowInsert::new(
+                "users".to_string(),
+                None,
+                vec!["id".to_string()],
+                vec![Value::Int(1)],
+            )),
+        ))
+        .expect("sqlite planner should preview sql mutations");
+
+        assert_eq!(plan.kind, dbflux_core::SemanticPlanKind::MutationPreview);
+        assert!(plan.queries[0].text.contains("INSERT INTO"));
+    }
+
+    #[test]
+    fn semantic_planner_builds_aggregate_query() {
+        let request = dbflux_core::AggregateRequest::new(TableRef::new("orders"))
+            .with_group_by(vec![dbflux_core::ColumnRef::new("customer_id")])
+            .with_aggregations(vec![dbflux_core::AggregateSpec::new(
+                dbflux_core::AggregateFunction::Avg,
+                Some(dbflux_core::ColumnRef::new("amount")),
+                "avg_amount",
+            )])
+            .with_having(dbflux_core::SemanticFilter::compare(
+                "avg_amount",
+                WhereOperator::Gt,
+                Value::Int(10),
+            ));
+
+        let plan = plan_sqlite_semantic_request(&SemanticRequest::Aggregate(request))
+            .expect("sqlite planner should handle aggregate requests");
+
+        assert_eq!(plan.kind, dbflux_core::SemanticPlanKind::Query);
+        assert_eq!(plan.queries[0].language, QueryLanguage::Sql);
+        assert_eq!(
+            plan.queries[0].text,
+            "SELECT \"customer_id\", AVG(\"amount\") AS \"avg_amount\" FROM \"orders\" GROUP BY \"customer_id\" HAVING \"avg_amount\" > 10"
+        );
     }
 }

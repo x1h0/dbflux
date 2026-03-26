@@ -18,9 +18,10 @@ use dbflux_core::{
     KeyValueConnection, LanguageService, MONGODB_FORM, MutationCapabilities, OrderByColumn,
     PaginationStyle, PlaceholderStyle, QueryCapabilities, QueryErrorFormatter, QueryGenerator,
     QueryHandle, QueryLanguage, QueryRequest, QueryResult, RelationalConnection, Row,
-    SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SshTunnelConfig, TableInfo,
-    TextPosition, TextPositionRange, TransactionCapabilities, ValidationResult, Value, ViewInfo,
-    WhereOperator, detect_dangerous_mongo, sanitize_uri,
+    SchemaLoadingStrategy, SchemaSnapshot, SemanticFieldRef, SemanticFilter, SemanticPlan,
+    SemanticPlanKind, SemanticRequest, SqlDialect, SshTunnelConfig, TableInfo, TextPosition,
+    TextPositionRange, TransactionCapabilities, ValidationResult, Value, ViewInfo, WhereOperator,
+    detect_dangerous_mongo, sanitize_uri,
 };
 use dbflux_ssh::SshTunnel;
 use mongodb::sync::{Client, Database};
@@ -748,6 +749,204 @@ pub struct MongoConnection {
     ssh_tunnel: Option<SshTunnel>,
 }
 
+fn mongo_filter_json_from_request(
+    legacy_filter: Option<&serde_json::Value>,
+    semantic_filter: Option<&SemanticFilter>,
+) -> Result<Option<serde_json::Value>, DbError> {
+    match semantic_filter {
+        Some(filter) => Ok(Some(mongo_filter_json_from_semantic(filter)?)),
+        None => Ok(legacy_filter.cloned()),
+    }
+}
+
+fn mongo_filter_document_from_request(
+    legacy_filter: Option<&serde_json::Value>,
+    semantic_filter: Option<&SemanticFilter>,
+) -> Result<Document, DbError> {
+    let filter = mongo_filter_json_from_request(legacy_filter, semantic_filter)?;
+
+    filter
+        .map(|value| json_to_bson_doc(&value))
+        .transpose()
+        .map(|value| value.unwrap_or_default())
+}
+
+fn mongo_filter_json_from_semantic(filter: &SemanticFilter) -> Result<serde_json::Value, DbError> {
+    match filter {
+        SemanticFilter::Predicate(predicate) => {
+            let field_name = mongo_filter_field_name(&predicate.field)?;
+
+            let filter_value = match predicate.operator {
+                WhereOperator::Eq => predicate
+                    .value
+                    .as_ref()
+                    .map(Value::to_serde_json)
+                    .ok_or_else(|| {
+                        DbError::query_failed("MongoDB semantic filter requires a value")
+                    })?,
+                WhereOperator::Null => serde_json::Value::Null,
+                WhereOperator::Ne => mongo_operator_filter("$ne", predicate.value.as_ref())?,
+                WhereOperator::Gt => mongo_operator_filter("$gt", predicate.value.as_ref())?,
+                WhereOperator::Gte => mongo_operator_filter("$gte", predicate.value.as_ref())?,
+                WhereOperator::Lt => mongo_operator_filter("$lt", predicate.value.as_ref())?,
+                WhereOperator::Lte => mongo_operator_filter("$lte", predicate.value.as_ref())?,
+                WhereOperator::In => mongo_operator_filter("$in", predicate.value.as_ref())?,
+                WhereOperator::NotIn => mongo_operator_filter("$nin", predicate.value.as_ref())?,
+                WhereOperator::Regex => mongo_operator_filter("$regex", predicate.value.as_ref())?,
+                unsupported => {
+                    return Err(DbError::NotSupported(format!(
+                        "MongoDB semantic filters do not support operator {:?}",
+                        unsupported
+                    )));
+                }
+            };
+
+            let mut object = serde_json::Map::new();
+            object.insert(field_name, filter_value);
+            Ok(serde_json::Value::Object(object))
+        }
+        SemanticFilter::And(filters) => mongo_logical_filter_json("$and", filters),
+        SemanticFilter::Or(filters) => mongo_logical_filter_json("$or", filters),
+        SemanticFilter::Not(filter) => {
+            let inner = mongo_filter_json_from_semantic(filter)?;
+            Ok(serde_json::json!({ "$nor": [inner] }))
+        }
+    }
+}
+
+fn mongo_logical_filter_json(
+    operator: &str,
+    filters: &[SemanticFilter],
+) -> Result<serde_json::Value, DbError> {
+    if filters.is_empty() {
+        return Err(DbError::query_failed(format!(
+            "MongoDB semantic filter '{}' requires at least one child expression",
+            operator
+        )));
+    }
+
+    let mut object = serde_json::Map::new();
+    object.insert(
+        operator.to_string(),
+        serde_json::Value::Array(
+            filters
+                .iter()
+                .map(mongo_filter_json_from_semantic)
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+    );
+    Ok(serde_json::Value::Object(object))
+}
+
+fn mongo_operator_filter(
+    operator: &str,
+    value: Option<&Value>,
+) -> Result<serde_json::Value, DbError> {
+    let value =
+        value.ok_or_else(|| DbError::query_failed("MongoDB semantic filter requires a value"))?;
+
+    let mut object = serde_json::Map::new();
+    object.insert(operator.to_string(), Value::to_serde_json(value));
+    Ok(serde_json::Value::Object(object))
+}
+
+fn mongo_filter_field_name(field: &SemanticFieldRef) -> Result<String, DbError> {
+    match field {
+        SemanticFieldRef::Column(column) => Ok(column.qualified_name()),
+        SemanticFieldRef::Path(segments) => {
+            if segments.is_empty() {
+                return Err(DbError::query_failed(
+                    "MongoDB semantic filter path must contain at least one segment",
+                ));
+            }
+
+            Ok(segments.join("."))
+        }
+    }
+}
+
+fn mongo_collection_shell_prefix(collection: &dbflux_core::CollectionRef) -> String {
+    format!(
+        "db.getSiblingDB({}).getCollection({})",
+        serde_json::to_string(&collection.database)
+            .unwrap_or_else(|_| format!("\"{}\"", collection.database)),
+        serde_json::to_string(&collection.name)
+            .unwrap_or_else(|_| format!("\"{}\"", collection.name)),
+    )
+}
+
+fn plan_mongo_collection_browse(
+    request: &CollectionBrowseRequest,
+) -> Result<SemanticPlan, DbError> {
+    let filter =
+        mongo_filter_json_from_request(request.filter.as_ref(), request.semantic_filter.as_ref())?
+            .unwrap_or_else(|| serde_json::json!({}));
+    let filter_text = serde_json::to_string_pretty(&filter).map_err(|error| {
+        DbError::query_failed(format!("Failed to render MongoDB filter preview: {error}"))
+    })?;
+
+    let mut query = format!(
+        "{}.find({filter_text})",
+        mongo_collection_shell_prefix(&request.collection)
+    );
+
+    let offset = request.pagination.offset();
+    if offset > 0 {
+        query.push_str(&format!(".skip({offset})"));
+    }
+
+    query.push_str(&format!(".limit({})", request.pagination.limit()));
+
+    Ok(SemanticPlan::single_query(
+        SemanticPlanKind::Query,
+        dbflux_core::PlannedQuery::new(QueryLanguage::MongoQuery, query)
+            .with_database(Some(request.collection.database.clone())),
+    ))
+}
+
+fn plan_mongo_collection_count(request: &CollectionCountRequest) -> Result<SemanticPlan, DbError> {
+    let filter =
+        mongo_filter_json_from_request(request.filter.as_ref(), request.semantic_filter.as_ref())?
+            .unwrap_or_else(|| serde_json::json!({}));
+    let filter_text = serde_json::to_string_pretty(&filter).map_err(|error| {
+        DbError::query_failed(format!("Failed to render MongoDB filter preview: {error}"))
+    })?;
+
+    let query = format!(
+        "{}.countDocuments({filter_text})",
+        mongo_collection_shell_prefix(&request.collection)
+    );
+
+    Ok(SemanticPlan::single_query(
+        SemanticPlanKind::Query,
+        dbflux_core::PlannedQuery::new(QueryLanguage::MongoQuery, query)
+            .with_database(Some(request.collection.database.clone())),
+    ))
+}
+
+fn plan_mongo_mutation(mutation: &dbflux_core::MutationRequest) -> Result<SemanticPlan, DbError> {
+    static GENERATOR: crate::query_generator::MongoShellGenerator =
+        crate::query_generator::MongoShellGenerator;
+
+    GENERATOR.plan_mutation(mutation).ok_or_else(|| {
+        DbError::NotSupported("MongoDB semantic planning does not support this mutation".into())
+    })
+}
+
+fn plan_mongo_semantic_request(request: &SemanticRequest) -> Result<SemanticPlan, DbError> {
+    match request {
+        SemanticRequest::CollectionBrowse(request) => plan_mongo_collection_browse(request),
+        SemanticRequest::CollectionCount(request) => plan_mongo_collection_count(request),
+        SemanticRequest::Aggregate(_) => Err(DbError::NotSupported(
+            "MongoDB semantic planning does not support aggregate requests yet".into(),
+        )),
+        SemanticRequest::Mutation(mutation) => plan_mongo_mutation(mutation),
+        _ => Err(DbError::NotSupported(
+            "MongoDB semantic planning does not support this request".into(),
+        )),
+    }
+}
+
 impl Connection for MongoConnection {
     fn metadata(&self) -> &DriverMetadata {
         &MONGODB_METADATA
@@ -1083,12 +1282,10 @@ impl Connection for MongoConnection {
         let db_name = request.collection.database.as_str();
         let db = client.database(db_name);
 
-        let filter = request
-            .filter
-            .as_ref()
-            .map(json_to_bson_doc)
-            .transpose()?
-            .unwrap_or_default();
+        let filter = mongo_filter_document_from_request(
+            request.filter.as_ref(),
+            request.semantic_filter.as_ref(),
+        )?;
 
         let collection = db.collection::<Document>(&request.collection.name);
 
@@ -1129,12 +1326,10 @@ impl Connection for MongoConnection {
         let db = client.database(db_name);
         let collection = db.collection::<Document>(&request.collection.name);
 
-        let filter = request
-            .filter
-            .as_ref()
-            .map(json_to_bson_doc)
-            .transpose()?
-            .unwrap_or_default();
+        let filter = mongo_filter_document_from_request(
+            request.filter.as_ref(),
+            request.semantic_filter.as_ref(),
+        )?;
 
         let count = collection
             .count_documents(filter)
@@ -1158,6 +1353,10 @@ impl Connection for MongoConnection {
         Some(&GENERATOR)
     }
 
+    fn plan_semantic_request(&self, request: &SemanticRequest) -> Result<SemanticPlan, DbError> {
+        plan_mongo_semantic_request(request)
+    }
+
     fn build_select_sql(
         &self,
         _table: &str,
@@ -1178,7 +1377,10 @@ impl Connection for MongoConnection {
         _values: &[Value],
     ) -> (String, Vec<Value>) {
         // MongoDB doesn't use SQL - this is for SQL-based drivers
-        ("INSERT INTO table (columns) VALUES (values)".to_string(), Vec::new())
+        (
+            "INSERT INTO table (columns) VALUES (values)".to_string(),
+            Vec::new(),
+        )
     }
 
     fn build_update_sql(
@@ -1188,7 +1390,10 @@ impl Connection for MongoConnection {
         _filter: Option<&Value>,
     ) -> (String, Vec<Value>) {
         // MongoDB doesn't use SQL - this is for SQL-based drivers
-        ("UPDATE table SET col=val WHERE filter".to_string(), Vec::new())
+        (
+            "UPDATE table SET col=val WHERE filter".to_string(),
+            Vec::new(),
+        )
     }
 
     fn build_delete_sql(&self, _table: &str, _filter: Option<&Value>) -> (String, Vec<Value>) {
@@ -1205,7 +1410,10 @@ impl Connection for MongoConnection {
         _update_columns: &[String],
     ) -> (String, Vec<Value>) {
         // MongoDB doesn't use SQL - this is for SQL-based drivers
-        ("INSERT INTO table VALUES (vals) ON CONFLICT DO UPDATE".to_string(), Vec::new())
+        (
+            "INSERT INTO table VALUES (vals) ON CONFLICT DO UPDATE".to_string(),
+            Vec::new(),
+        )
     }
 
     fn build_count_sql(&self, _table: &str, _filter: Option<&Value>) -> String {
@@ -2426,7 +2634,11 @@ fn bson_type_name(value: &Bson) -> String {
 mod tests {
     use super::*;
     use crate::query_parser::parse_query;
-    use dbflux_core::{DatabaseCategory, DbDriver, DbError, QueryLanguage};
+    use dbflux_core::{
+        CollectionBrowseRequest, CollectionCountRequest, CollectionRef, DatabaseCategory, DbDriver,
+        DbError, QueryLanguage, SemanticFilter, SemanticPlanKind, SemanticRequest, Value,
+        WhereOperator,
+    };
 
     #[test]
     fn build_config_requires_uri_in_uri_mode() {
@@ -2651,5 +2863,59 @@ mod tests {
     fn driver_key_is_builtin_mongodb() {
         let driver = MongoDriver::new();
         assert_eq!(driver.driver_key(), "builtin:mongodb");
+    }
+
+    #[test]
+    fn semantic_filter_translates_to_mongo_json() {
+        let filter = SemanticFilter::and(vec![
+            SemanticFilter::compare("status", WhereOperator::Eq, Value::Text("active".into())),
+            SemanticFilter::compare("score", WhereOperator::Gte, Value::Int(10)),
+        ]);
+
+        let translated = mongo_filter_json_from_semantic(&filter)
+            .expect("filter should translate to mongo json");
+
+        assert_eq!(
+            translated,
+            serde_json::json!({
+                "$and": [
+                    {"status": "active"},
+                    {"score": {"$gte": 10}}
+                ]
+            })
+        );
+    }
+
+    #[test]
+    fn semantic_planner_builds_collection_browse_preview() {
+        let request =
+            CollectionBrowseRequest::new(CollectionRef::new("app", "users")).with_semantic_filter(
+                SemanticFilter::compare("status", WhereOperator::Eq, Value::Text("active".into())),
+            );
+
+        let plan = plan_mongo_semantic_request(&SemanticRequest::CollectionBrowse(request))
+            .expect("browse request should plan");
+
+        assert_eq!(plan.kind, SemanticPlanKind::Query);
+        assert_eq!(plan.queries[0].language, QueryLanguage::MongoQuery);
+        assert_eq!(plan.queries[0].target_database.as_deref(), Some("app"));
+        assert!(plan.queries[0].text.contains("find"));
+        assert!(plan.queries[0].text.contains("status"));
+    }
+
+    #[test]
+    fn semantic_planner_builds_collection_count_preview() {
+        let request =
+            CollectionCountRequest::new(CollectionRef::new("app", "users")).with_semantic_filter(
+                SemanticFilter::compare("score", WhereOperator::Gt, Value::Int(5)),
+            );
+
+        let plan = plan_mongo_semantic_request(&SemanticRequest::CollectionCount(request))
+            .expect("count request should plan");
+
+        assert_eq!(plan.kind, SemanticPlanKind::Query);
+        assert_eq!(plan.queries[0].language, QueryLanguage::MongoQuery);
+        assert!(plan.queries[0].text.contains("countDocuments"));
+        assert!(plan.queries[0].text.contains("score"));
     }
 }

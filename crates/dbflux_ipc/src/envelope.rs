@@ -18,4 +18,4 @@ impl ProtocolVersion {
 }
 
 pub const APP_CONTROL_VERSION: ProtocolVersion = ProtocolVersion::new(1, 0);
-pub const DRIVER_RPC_VERSION: ProtocolVersion = ProtocolVersion::new(1, 0);
+pub const DRIVER_RPC_VERSION: ProtocolVersion = ProtocolVersion::new(1, 1);

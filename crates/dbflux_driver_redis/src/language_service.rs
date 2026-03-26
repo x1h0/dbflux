@@ -1,4 +1,4 @@
-use dbflux_core::{detect_dangerous_redis, DangerousQueryKind, LanguageService, ValidationResult};
+use dbflux_core::{DangerousQueryKind, LanguageService, ValidationResult, detect_dangerous_redis};
 
 /// Redis language service with lightweight syntax/language checks.
 pub struct RedisLanguageService;

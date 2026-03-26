@@ -1,6 +1,7 @@
 use dbflux_mcp::{
-    is_canonical_v1_tool, validate_v1_tool, ToolCatalogError, CANONICAL_V1_TOOLS,
-    DEFERRED_TOOL_V1_ESTIMATE_QUERY_COST, DEFERRED_TOOL_V1_GET_EXECUTION_STATUS,
+    CANONICAL_V1_TOOLS, DEFERRED_TOOL_V1_ESTIMATE_QUERY_COST,
+    DEFERRED_TOOL_V1_GET_EXECUTION_STATUS, ToolCatalogError, is_canonical_v1_tool,
+    validate_v1_tool,
 };
 
 #[test]
@@ -18,12 +19,16 @@ fn canonical_surface_includes_expected_v1_tools() {
         );
     }
 
-    assert!(!CANONICAL_V1_TOOLS
-        .iter()
-        .any(|tool| tool == &DEFERRED_TOOL_V1_ESTIMATE_QUERY_COST));
-    assert!(!CANONICAL_V1_TOOLS
-        .iter()
-        .any(|tool| tool == &DEFERRED_TOOL_V1_GET_EXECUTION_STATUS));
+    assert!(
+        !CANONICAL_V1_TOOLS
+            .iter()
+            .any(|tool| tool == &DEFERRED_TOOL_V1_ESTIMATE_QUERY_COST)
+    );
+    assert!(
+        !CANONICAL_V1_TOOLS
+            .iter()
+            .any(|tool| tool == &DEFERRED_TOOL_V1_GET_EXECUTION_STATUS)
+    );
 }
 
 #[test]

@@ -10,8 +10,9 @@ use dbflux_core::{
     KeyType, KeyTypeRequest, KeyValueApi, LanguageService, ListPushRequest, ListRemoveRequest,
     ListSetRequest, QueryHandle, QueryRequest, QueryResult, RowDelete, RowInsert, RowPatch,
     SchemaFeatures, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot,
-    SetAddRequest, SetRemoveRequest, SqlDialect, StreamAddRequest, StreamDeleteRequest,
-    TableBrowseRequest, TableCountRequest, TableInfo, ViewInfo, ZSetAddRequest, ZSetRemoveRequest,
+    SemanticPlan, SemanticRequest, SetAddRequest, SetRemoveRequest, SqlDialect, StreamAddRequest,
+    StreamDeleteRequest, TableBrowseRequest, TableCountRequest, TableInfo, ViewInfo,
+    ZSetAddRequest, ZSetRemoveRequest,
 };
 use dbflux_ipc::driver_protocol::{DriverRequestBody, DriverResponseBody};
 
@@ -260,6 +261,12 @@ impl Connection for IpcConnection {
     fn describe_table(&self, request: &DescribeRequest) -> Result<QueryResult, DbError> {
         self.client
             .describe_table(self.session_id, request.clone())
+            .map_err(DbError::from)
+    }
+
+    fn plan_semantic_request(&self, request: &SemanticRequest) -> Result<SemanticPlan, DbError> {
+        self.client
+            .plan_semantic_request(self.session_id, request.clone())
             .map_err(DbError::from)
     }
 

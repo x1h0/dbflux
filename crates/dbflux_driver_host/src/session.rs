@@ -176,6 +176,11 @@ pub fn dispatch(conn: &dyn Connection, body: DriverRequestBody) -> DriverRespons
             Err(e) => db_error_to_response(e),
         },
 
+        DriverRequestBody::PlanSemantic { request } => match conn.plan_semantic_request(&request) {
+            Ok(plan) => DriverResponseBody::SemanticPlan { plan },
+            Err(e) => db_error_to_response(e),
+        },
+
         // === CRUD operations ===
         DriverRequestBody::UpdateRow { patch } => match conn.update_row(&patch) {
             Ok(result) => DriverResponseBody::CrudResult { result },
@@ -407,4 +412,103 @@ fn rpc_error(code: DriverRpcErrorCode, message: &str) -> DriverResponseBody {
         message: message.to_string(),
         retriable: false,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::dispatch;
+    use dbflux_core::{
+        Connection, DatabaseCategory, DbError, DbKind, DefaultSqlDialect, DriverMetadataBuilder,
+        QueryLanguage, QueryRequest, QueryResult, SchemaLoadingStrategy, SchemaSnapshot,
+        SemanticPlan, SemanticPlanKind, SemanticRequest, TableBrowseRequest, TableRef,
+    };
+    use dbflux_ipc::driver_protocol::{DriverRequestBody, DriverResponseBody};
+
+    struct SemanticPlanConnection {
+        metadata: dbflux_core::DriverMetadata,
+        plan: SemanticPlan,
+    }
+
+    impl SemanticPlanConnection {
+        fn new(plan: SemanticPlan) -> Self {
+            Self {
+                metadata: DriverMetadataBuilder::new(
+                    "test",
+                    "Test",
+                    DatabaseCategory::Relational,
+                    QueryLanguage::Sql,
+                )
+                .build(),
+                plan,
+            }
+        }
+    }
+
+    impl Connection for SemanticPlanConnection {
+        fn metadata(&self) -> &dbflux_core::DriverMetadata {
+            &self.metadata
+        }
+
+        fn ping(&self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn close(&mut self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn execute(&self, _req: &QueryRequest) -> Result<QueryResult, DbError> {
+            Err(DbError::NotSupported("execute not used in test".into()))
+        }
+
+        fn cancel(&self, _handle: &dbflux_core::QueryHandle) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn schema(&self) -> Result<SchemaSnapshot, DbError> {
+            Ok(SchemaSnapshot::default())
+        }
+
+        fn schema_loading_strategy(&self) -> SchemaLoadingStrategy {
+            SchemaLoadingStrategy::SingleDatabase
+        }
+
+        fn kind(&self) -> DbKind {
+            DbKind::SQLite
+        }
+
+        fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
+            &DefaultSqlDialect
+        }
+
+        fn plan_semantic_request(
+            &self,
+            _request: &SemanticRequest,
+        ) -> Result<SemanticPlan, DbError> {
+            Ok(self.plan.clone())
+        }
+    }
+
+    #[test]
+    fn dispatch_returns_semantic_plan_response() {
+        let plan = SemanticPlan::single_query(
+            SemanticPlanKind::Query,
+            dbflux_core::PlannedQuery::new(QueryLanguage::Sql, "SELECT 1"),
+        );
+        let connection = SemanticPlanConnection::new(plan.clone());
+
+        let response = dispatch(
+            &connection,
+            DriverRequestBody::PlanSemantic {
+                request: SemanticRequest::TableBrowse(TableBrowseRequest::new(TableRef::new(
+                    "users",
+                ))),
+            },
+        );
+
+        match response {
+            DriverResponseBody::SemanticPlan { plan: actual } => assert_eq!(actual, plan),
+            other => panic!("unexpected response: {other:?}"),
+        }
+    }
 }

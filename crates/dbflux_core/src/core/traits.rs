@@ -3,6 +3,14 @@ use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    CodeGenCapabilities, CodeGenerator, CollectionBrowseRequest, CollectionCountRequest,
+    ConnectionProfile, CrudResult, CustomTypeInfo, DatabaseInfo, DbConfig, DbError, DbKind,
+    DbSchemaInfo, DescribeRequest, DocumentDelete, DocumentInsert, DocumentUpdate,
+    DriverCapabilities, DriverFormDef, DriverMetadata, ExplainRequest, FormValues, LanguageService,
+    NoOpCodeGenerator, QueryHandle, QueryRequest, QueryResult, RowDelete, RowInsert, RowPatch,
+    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot, SemanticPlan, SemanticPlanner,
+    SemanticRequest, SqlDialect, SqlGenerationRequest, SqlLanguageService, TableBrowseRequest,
+    TableCountRequest, TableInfo, Value, ViewInfo,
     config::DriverKey,
     data::key_value::{
         HashDeleteRequest, HashSetRequest, KeyBulkGetRequest, KeyDeleteRequest, KeyExistsRequest,
@@ -13,13 +21,7 @@ use crate::{
     },
     query::generator::QueryGenerator,
     query::table_browser::OrderByColumn,
-    CodeGenCapabilities, CodeGenerator, CollectionBrowseRequest, CollectionCountRequest,
-    ConnectionProfile, CrudResult, CustomTypeInfo, DatabaseInfo, DbConfig, DbError, DbKind,
-    DbSchemaInfo, DescribeRequest, DocumentDelete, DocumentInsert, DocumentUpdate,
-    DriverCapabilities, DriverFormDef, DriverMetadata, ExplainRequest, FormValues, LanguageService,
-    NoOpCodeGenerator, QueryHandle, QueryRequest, QueryResult, RowDelete, RowInsert, RowPatch,
-    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot, SqlDialect, SqlGenerationRequest,
-    SqlLanguageService, TableBrowseRequest, TableCountRequest, TableInfo, Value, ViewInfo,
+    render_semantic_filter_sql,
 };
 
 bitflags! {
@@ -650,7 +652,42 @@ pub trait Connection: Send + Sync {
     /// The driver translates the request into its native query syntax.
     /// The default implementation builds SQL using `TableBrowseRequest::build_sql_with`.
     fn browse_table(&self, request: &TableBrowseRequest) -> Result<QueryResult, DbError> {
-        let sql = request.build_sql_with(self.dialect());
+        let sql = if let Some(filter) = request.semantic_filter.as_ref() {
+            let mut sql = format!(
+                "SELECT * FROM {}",
+                request.table.quoted_with(self.dialect())
+            );
+
+            let where_clause = render_semantic_filter_sql(filter, self.dialect())?;
+            sql.push_str(" WHERE ");
+            sql.push_str(&where_clause);
+
+            if !request.order_by.is_empty() {
+                sql.push_str(" ORDER BY ");
+                let quoted_cols: Vec<String> = request
+                    .order_by
+                    .iter()
+                    .map(|col| {
+                        let dir = match col.direction {
+                            crate::SortDirection::Ascending => "ASC",
+                            crate::SortDirection::Descending => "DESC",
+                        };
+                        format!("{} {}", col.column.quoted_with(self.dialect()), dir)
+                    })
+                    .collect();
+                sql.push_str(&quoted_cols.join(", "));
+            }
+
+            sql.push_str(&format!(
+                " LIMIT {} OFFSET {}",
+                request.pagination.limit(),
+                request.pagination.offset()
+            ));
+            sql
+        } else {
+            request.build_sql_with(self.dialect())
+        };
+
         let mut query_request = QueryRequest::new(sql);
 
         if let Some(ref schema) = request.table.schema {
@@ -665,7 +702,13 @@ pub trait Connection: Send + Sync {
     /// The default implementation builds a `SELECT COUNT(*)` query.
     fn count_table(&self, request: &TableCountRequest) -> Result<u64, DbError> {
         let quoted_table = request.table.quoted_with(self.dialect());
-        let sql = if let Some(ref f) = request.filter {
+        let sql = if let Some(filter) = request.semantic_filter.as_ref() {
+            let where_clause = render_semantic_filter_sql(filter, self.dialect())?;
+            format!(
+                "SELECT COUNT(*) FROM {} WHERE {}",
+                quoted_table, where_clause
+            )
+        } else if let Some(ref f) = request.filter {
             let trimmed = f.trim();
             if trimmed.is_empty() {
                 format!("SELECT COUNT(*) FROM {}", quoted_table)
@@ -827,6 +870,23 @@ pub trait Connection: Send + Sync {
 
     fn query_generator(&self) -> Option<&dyn QueryGenerator> {
         None
+    }
+
+    fn semantic_planner(&self) -> Option<&dyn SemanticPlanner> {
+        None
+    }
+
+    fn plan_semantic_request(&self, request: &SemanticRequest) -> Result<SemanticPlan, DbError> {
+        let kind = request.kind();
+
+        self.semantic_planner()
+            .and_then(|planner| planner.plan(request))
+            .ok_or_else(|| {
+                DbError::NotSupported(format!(
+                    "Semantic planning not supported for request kind {:?}",
+                    kind
+                ))
+            })
     }
 
     /// Generate SQL using this connection's dialect.

@@ -1,5 +1,6 @@
 use crate::data::crud::MutationRequest;
 use crate::driver::capabilities::QueryLanguage;
+use crate::query::semantic::{PlannedQuery, SemanticPlan, SemanticPlanKind};
 use crate::sql::dialect::SqlDialect;
 use crate::sql::query_builder::SqlQueryBuilder;
 
@@ -28,6 +29,12 @@ pub struct GeneratedQuery {
     pub text: String,
 }
 
+impl From<GeneratedQuery> for PlannedQuery {
+    fn from(value: GeneratedQuery) -> Self {
+        Self::new(value.language, value.text)
+    }
+}
+
 /// Produces native query/command text from a `MutationRequest`.
 ///
 /// Accessed via `Connection::query_generator()`.
@@ -35,6 +42,12 @@ pub trait QueryGenerator: Send + Sync {
     fn supported_categories(&self) -> &'static [MutationCategory];
 
     fn generate_mutation(&self, mutation: &MutationRequest) -> Option<GeneratedQuery>;
+
+    fn plan_mutation(&self, mutation: &MutationRequest) -> Option<SemanticPlan> {
+        self.generate_mutation(mutation).map(|query| {
+            SemanticPlan::single_query(SemanticPlanKind::MutationPreview, query.into())
+        })
+    }
 }
 
 // =============================================================================
@@ -84,7 +97,7 @@ mod tests {
     use super::{MutationCategory, QueryGenerator, SqlMutationGenerator};
     use crate::{
         DefaultSqlDialect, DocumentFilter, DocumentUpdate, KeySetRequest, MutationRequest,
-        RowDelete, RowIdentity, RowInsert, RowPatch, Value,
+        QueryLanguage, RowDelete, RowIdentity, RowInsert, RowPatch, SemanticPlanKind, Value,
     };
 
     static DIALECT: DefaultSqlDialect = DefaultSqlDialect;
@@ -158,5 +171,25 @@ mod tests {
 
         let doc_query = generator.generate_mutation(&doc);
         assert!(doc_query.is_none());
+    }
+
+    #[test]
+    fn query_generator_plan_mutation_wraps_generated_query() {
+        let generator = SqlMutationGenerator::new(&DIALECT);
+        let insert = MutationRequest::sql_insert(RowInsert::new(
+            "users".to_string(),
+            Some("public".to_string()),
+            vec!["id".to_string()],
+            vec![Value::Int(1)],
+        ));
+
+        let plan = generator
+            .plan_mutation(&insert)
+            .expect("sql mutation should produce a plan");
+
+        assert_eq!(plan.kind, SemanticPlanKind::MutationPreview);
+        assert_eq!(plan.queries.len(), 1);
+        assert_eq!(plan.queries[0].language, QueryLanguage::Sql);
+        assert!(plan.queries[0].text.contains("INSERT"));
     }
 }

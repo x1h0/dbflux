@@ -5,6 +5,8 @@
 //! - `update_records`: Update records matching a filter (requires WHERE clause)
 //! - `upsert_record`: Insert or update on conflict
 
+use std::collections::BTreeMap;
+
 use dbflux_core::{QueryRequest, RowInsert, TableRef, Value};
 use rmcp::{
     ErrorData,
@@ -30,7 +32,7 @@ pub struct InsertRecordParams {
     pub table: String,
 
     #[schemars(description = "Records to insert (array of objects)")]
-    pub records: Vec<serde_json::Value>,
+    pub records: Vec<BTreeMap<String, serde_json::Value>>,
 
     #[schemars(description = "Columns to return from inserted records")]
     pub returning: Option<Vec<String>>,
@@ -219,7 +221,7 @@ impl DbFluxServer {
         state: ServerState,
         connection_id: &str,
         table: &str,
-        records: &[serde_json::Value],
+        records: &[BTreeMap<String, serde_json::Value>],
         returning: Option<&[String]>,
     ) -> Result<serde_json::Value, String> {
         let connection = Self::get_or_connect(state, connection_id).await?;
@@ -231,12 +233,11 @@ impl DbFluxServer {
         let mut returned_records = Vec::new();
 
         for record in records {
-            let obj = record
-                .as_object()
-                .ok_or_else(|| "Each record must be a JSON object".to_string())?;
-
-            let columns: Vec<String> = obj.keys().cloned().collect();
-            let values: Vec<Value> = obj.values().map(|v| json_to_db_value(v.clone())).collect();
+            let columns: Vec<String> = record.keys().cloned().collect();
+            let values: Vec<Value> = record
+                .values()
+                .map(|v| json_to_db_value(v.clone()))
+                .collect();
 
             let row_insert = RowInsert::new(
                 table_ref.name.clone(),

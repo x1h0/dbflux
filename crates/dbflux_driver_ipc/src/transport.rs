@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex};
 
 use dbflux_core::DbError;
 use dbflux_ipc::{
-    DRIVER_RPC_AUTH_TOKEN_ENV, DRIVER_RPC_VERSION,
+    DRIVER_RPC_AUTH_TOKEN_ENV, DRIVER_RPC_VERSION, ProtocolVersion,
     driver_protocol::{
         DriverCapability, DriverHelloRequest, DriverHelloResponse, DriverRequestBody,
         DriverRequestEnvelope, DriverResponseBody, DriverResponseEnvelope,
@@ -30,6 +30,8 @@ pub enum RpcError {
     SessionNotFound,
     #[error("driver error: {0}")]
     Driver(String),
+    #[error("unsupported method: {0}")]
+    UnsupportedMethod(String),
     #[error("timeout")]
     Timeout,
 }
@@ -40,6 +42,7 @@ impl From<RpcError> for DbError {
             RpcError::SessionNotFound => DbError::QueryFailed("Session not found".into()),
             RpcError::Timeout => DbError::Timeout,
             RpcError::Driver(msg) => DbError::QueryFailed(msg.into()),
+            RpcError::UnsupportedMethod(msg) => DbError::NotSupported(msg),
             RpcError::Protocol(msg) => DbError::QueryFailed(msg.into()),
             RpcError::ConnectionFailed(msg) => DbError::ConnectionFailed(msg.into()),
             RpcError::Io(e) => DbError::IoError(e),
@@ -69,6 +72,40 @@ impl RpcClient {
 
     pub fn hello_response(&self) -> &DriverHelloResponse {
         &self.hello
+    }
+
+    pub fn selected_version(&self) -> ProtocolVersion {
+        self.hello.selected_version
+    }
+
+    pub fn plan_semantic_request(
+        &self,
+        session_id: Uuid,
+        request: dbflux_core::SemanticRequest,
+    ) -> Result<dbflux_core::SemanticPlan, RpcError> {
+        if self.selected_version().minor < 1 {
+            return Err(RpcError::UnsupportedMethod(
+                "Driver RPC host does not support semantic planning yet".to_string(),
+            ));
+        }
+
+        let body = self.call(
+            Some(session_id),
+            DriverRequestBody::PlanSemantic { request },
+        )?;
+
+        match body {
+            DriverResponseBody::SemanticPlan { plan } => Ok(plan),
+            DriverResponseBody::Error(error) => match error.code {
+                dbflux_ipc::driver_protocol::DriverRpcErrorCode::UnsupportedMethod => {
+                    Err(RpcError::UnsupportedMethod(error.message))
+                }
+                _ => Err(RpcError::Driver(error.message)),
+            },
+            _ => Err(RpcError::Protocol(
+                "Unexpected response to PlanSemantic".into(),
+            )),
+        }
     }
 
     fn perform_hello(
