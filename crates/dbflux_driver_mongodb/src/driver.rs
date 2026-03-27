@@ -13,6 +13,7 @@ use dbflux_core::{
     DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo,
     DdlCapabilities, Diagnostic, DiagnosticSeverity, DocumentConnection, DocumentDelete,
     DocumentInsert, DocumentSchema, DocumentUpdate, DriverCapabilities, DriverFormDef,
+    DescribeRequest,
     DriverLimits, DriverMetadata, EditorDiagnostic, FieldInfo, FormFieldDef, FormFieldKind,
     FormSection, FormTab, FormValues, FormattedError, Icon, IndexData, IndexDirection,
     KeyValueConnection, LanguageService, MONGODB_FORM, MutationCapabilities, OrderByColumn,
@@ -1348,6 +1349,97 @@ impl Connection for MongoConnection {
             constraints: None,
             sample_fields: Some(sample_fields),
         })
+    }
+
+    fn describe_table(&self, request: &DescribeRequest) -> Result<QueryResult, DbError> {
+        let start = Instant::now();
+
+        let database = request
+            .table
+            .schema
+            .as_deref()
+            .or(self.default_database.as_deref())
+            .ok_or_else(|| DbError::query_failed("No database specified".to_string()))?;
+
+        let details = self.table_details(database, None, &request.table.name)?;
+
+        let index_lookup = details
+            .indexes
+            .as_ref()
+            .and_then(|indexes| match indexes {
+                IndexData::Document(indexes) => Some(build_document_index_lookup(indexes)),
+                IndexData::Relational(_) => None,
+            })
+            .unwrap_or_default();
+
+        let mut flattened_fields = Vec::new();
+        if let Some(fields) = details.sample_fields.as_ref() {
+            flatten_field_infos(fields, None, &mut flattened_fields);
+        }
+
+        let rows = flattened_fields
+            .into_iter()
+            .map(|field| {
+                let index_names = index_lookup.get(&field.name).cloned().unwrap_or_default();
+
+                vec![
+                    Value::Text(field.name),
+                    Value::Text(field.common_type),
+                    field
+                        .occurrence_rate
+                        .map(|rate| Value::Float(rate as f64))
+                        .unwrap_or(Value::Null),
+                    Value::Bool(!index_names.is_empty()),
+                    if index_names.is_empty() {
+                        Value::Null
+                    } else {
+                        Value::Text(index_names.join(", "))
+                    },
+                    Value::Int(field.nested_field_count as i64),
+                ]
+            })
+            .collect();
+
+        let columns = vec![
+            ColumnMeta {
+                name: "field_name".to_string(),
+                type_name: "text".to_string(),
+                nullable: false,
+                is_primary_key: false,
+            },
+            ColumnMeta {
+                name: "common_type".to_string(),
+                type_name: "text".to_string(),
+                nullable: false,
+                is_primary_key: false,
+            },
+            ColumnMeta {
+                name: "occurrence_rate".to_string(),
+                type_name: "float".to_string(),
+                nullable: true,
+                is_primary_key: false,
+            },
+            ColumnMeta {
+                name: "is_indexed".to_string(),
+                type_name: "bool".to_string(),
+                nullable: false,
+                is_primary_key: false,
+            },
+            ColumnMeta {
+                name: "index_names".to_string(),
+                type_name: "text".to_string(),
+                nullable: true,
+                is_primary_key: false,
+            },
+            ColumnMeta {
+                name: "nested_field_count".to_string(),
+                type_name: "int".to_string(),
+                nullable: false,
+                is_primary_key: false,
+            },
+        ];
+
+        Ok(QueryResult::table(columns, rows, None, start.elapsed()))
     }
 
     fn view_details(
@@ -2777,6 +2869,55 @@ fn sample_collection_fields(db: &Database, collection_name: &str) -> Vec<FieldIn
     fields
 }
 
+#[derive(Debug)]
+struct FlattenedFieldInfo {
+    name: String,
+    common_type: String,
+    occurrence_rate: Option<f32>,
+    nested_field_count: usize,
+}
+
+fn flatten_field_infos(
+    fields: &[FieldInfo],
+    prefix: Option<&str>,
+    output: &mut Vec<FlattenedFieldInfo>,
+) {
+    for field in fields {
+        let full_name = match prefix {
+            Some(prefix) => format!("{}.{}", prefix, field.name),
+            None => field.name.clone(),
+        };
+
+        let nested_field_count = field.nested_fields.as_ref().map_or(0, Vec::len);
+
+        output.push(FlattenedFieldInfo {
+            name: full_name.clone(),
+            common_type: field.common_type.clone(),
+            occurrence_rate: field.occurrence_rate,
+            nested_field_count,
+        });
+
+        if let Some(nested_fields) = field.nested_fields.as_ref() {
+            flatten_field_infos(nested_fields, Some(&full_name), output);
+        }
+    }
+}
+
+fn build_document_index_lookup(indexes: &[CollectionIndexInfo]) -> BTreeMap<String, Vec<String>> {
+    let mut lookup = BTreeMap::new();
+
+    for index in indexes {
+        for (field_name, _) in &index.keys {
+            lookup
+                .entry(field_name.clone())
+                .or_insert_with(Vec::new)
+                .push(index.name.clone());
+        }
+    }
+
+    lookup
+}
+
 struct FieldStats {
     occurrence_count: u32,
     type_counts: HashMap<String, u32>,
@@ -3175,5 +3316,56 @@ mod tests {
         assert!(plan.queries[0].text.contains("\"$match\""));
         assert!(plan.queries[0].text.contains("\"$sort\""));
         assert!(plan.queries[0].text.contains("\"$limit\""));
+    }
+
+    #[test]
+    fn flatten_field_infos_uses_dot_paths() {
+        let fields = vec![FieldInfo {
+            name: "profile".to_string(),
+            common_type: "Document".to_string(),
+            occurrence_rate: Some(1.0),
+            nested_fields: Some(vec![FieldInfo {
+                name: "email".to_string(),
+                common_type: "String".to_string(),
+                occurrence_rate: Some(0.5),
+                nested_fields: None,
+            }]),
+        }];
+
+        let mut flattened = Vec::new();
+        flatten_field_infos(&fields, None, &mut flattened);
+
+        assert_eq!(flattened.len(), 2);
+        assert_eq!(flattened[0].name, "profile");
+        assert_eq!(flattened[0].nested_field_count, 1);
+        assert_eq!(flattened[1].name, "profile.email");
+        assert_eq!(flattened[1].nested_field_count, 0);
+    }
+
+    #[test]
+    fn build_document_index_lookup_groups_indexes_per_field() {
+        let indexes = vec![
+            CollectionIndexInfo {
+                name: "email_idx".to_string(),
+                keys: vec![("profile.email".to_string(), IndexDirection::Ascending)],
+                is_unique: true,
+                is_sparse: false,
+                expire_after_seconds: None,
+            },
+            CollectionIndexInfo {
+                name: "email_text_idx".to_string(),
+                keys: vec![("profile.email".to_string(), IndexDirection::Text)],
+                is_unique: false,
+                is_sparse: false,
+                expire_after_seconds: None,
+            },
+        ];
+
+        let lookup = build_document_index_lookup(&indexes);
+
+        assert_eq!(
+            lookup.get("profile.email"),
+            Some(&vec!["email_idx".to_string(), "email_text_idx".to_string()])
+        );
     }
 }

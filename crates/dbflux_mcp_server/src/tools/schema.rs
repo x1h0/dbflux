@@ -77,15 +77,12 @@ impl DbFluxServer {
                 Some(&params.connection_id),
                 ExecutionClassification::Metadata,
                 move || async move {
-                    log::debug!("list_databases handler: before list_databases_impl");
                     let result = Self::list_databases_impl(state, &connection_id)
                         .await
                         .map_err(|e| e.into_error_data())?;
-                    log::debug!("list_databases handler: impl returned, serializing response");
 
                     let json_str = serde_json::to_string_pretty(&result)
                         .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
-                    log::debug!("list_databases handler: serialization complete");
                     Ok(CallToolResult::success(vec![Content::text(json_str)]))
                 },
             )
@@ -214,7 +211,6 @@ impl DbFluxServer {
 
         let conn = connection.clone();
         let connection_id = connection_id.to_string();
-        log::debug!("list_databases_impl: spawning blocking task");
         let databases = tokio::task::spawn_blocking(move || -> Result<_, String> {
             #[allow(clippy::large_enum_variant)]
             conn.list_databases().map_err(|e| {
@@ -232,11 +228,6 @@ impl DbFluxServer {
         .map_err(|e| format!("Blocking task failed: {}", e))?;
 
         let databases = databases?;
-        log::debug!(
-            "list_databases_impl: got {} databases, serializing",
-            databases.len()
-        );
-
         let items: Vec<serde_json::Value> = databases
             .iter()
             .map(|db| {
@@ -247,7 +238,7 @@ impl DbFluxServer {
             })
             .collect();
 
-        log::debug!("list_databases_impl: serialization complete, returning");
+        drop(connection);
         Ok(serde_json::json!({ "databases": items }))
     }
 
@@ -485,7 +476,17 @@ impl DbFluxServer {
         database: Option<&str>,
         schema: Option<&str>,
     ) -> Result<serde_json::Value, String> {
-        let connection = Self::get_or_connect(state, connection_id).await?;
+        let connection = if let Some(target_db) = database {
+            let current_db = Self::get_current_database(&state, connection_id).await?;
+
+            if target_db != current_db.as_deref().unwrap_or("") {
+                Self::connect_with_database(state, connection_id, target_db).await?
+            } else {
+                Self::get_or_connect(state, connection_id).await?
+            }
+        } else {
+            Self::get_or_connect(state, connection_id).await?
+        };
 
         let table_ref = TableRef {
             schema: schema.map(str::to_string),
@@ -493,16 +494,26 @@ impl DbFluxServer {
         };
 
         let request = DescribeRequest::new(table_ref);
-        let result = connection.describe_table(&request).map_err(|e| {
-            error_messages::schema_operation_error(
-                "describe object",
-                connection_id,
-                database,
-                schema,
-                Some(name),
-                e,
-            )
-        })?;
+        let conn = connection.clone();
+        let connection_id = connection_id.to_string();
+        let database = database.map(str::to_string);
+        let schema = schema.map(str::to_string);
+        let name = name.to_string();
+
+        let result = tokio::task::spawn_blocking(move || {
+            conn.describe_table(&request).map_err(|e| {
+                error_messages::schema_operation_error(
+                    "describe object",
+                    &connection_id,
+                    database.as_deref(),
+                    schema.as_deref(),
+                    Some(&name),
+                    e,
+                )
+            })
+        })
+        .await
+        .map_err(|e| format!("Blocking task failed: {}", e))??;
 
         Ok(serialize_query_result(&result))
     }

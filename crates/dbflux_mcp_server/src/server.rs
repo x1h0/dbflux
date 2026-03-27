@@ -495,25 +495,16 @@ impl DbFluxServer {
 
     /// Get or establish a connection for the given connection_id
     ///
-    /// IMPORTANT: This method creates a fresh connection for each request to avoid
-    /// lock contention issues when multiple concurrent requests share the same
-    /// connection object. The underlying drivers (PostgreSQL, SQLite, etc.) manage
-    /// their own internal locking, but sharing connections across concurrent
-    /// async contexts can lead to "poisoned lock" errors when one query panics
-    /// while holding the internal mutex.
-    ///
-    /// Connection caching at this level would require proper connection pooling
-    /// with per-request semantics (like deadpool-postgres), which is not
-    /// currently implemented.
+    /// Reuse cached connections when available to avoid dropping the last driver
+    /// handle at the end of each request. PostgreSQL in particular can block while
+    /// tearing down the final client handle, which prevents the MCP response from
+    /// being sent back to the caller.
     #[allow(dead_code)] // Used by tool implementations
     pub(crate) async fn get_or_connect(
         state: ServerState,
         connection_id: &str,
     ) -> Result<Arc<dyn Connection>, String> {
-        let connection = McpConnectionFactory::new(state)
-            .connect(connection_id, None)
-            .await?;
-        Ok(connection)
+        Self::get_or_connect_cached(state, connection_id, None).await
     }
 
     /// Resolve secrets from a profile using keyring
@@ -609,17 +600,52 @@ impl DbFluxServer {
 
     /// Connect to a different database using the same profile
     ///
-    /// IMPORTANT: Creates a fresh connection for each request to avoid lock
-    /// contention issues (see get_or_connect for details).
+    /// Reuse cached per-database connections for the same reason as `get_or_connect`.
     pub(crate) async fn connect_with_database(
         state: ServerState,
         connection_id: &str,
         database: &str,
     ) -> Result<Arc<dyn Connection>, String> {
-        let connection = McpConnectionFactory::new(state)
-            .connect(connection_id, Some(database))
+        Self::get_or_connect_cached(state, connection_id, Some(database)).await
+    }
+
+    async fn get_or_connect_cached(
+        state: ServerState,
+        connection_id: &str,
+        database: Option<&str>,
+    ) -> Result<Arc<dyn Connection>, String> {
+        let cache_key = database
+            .map(|database| format!("{}:{}", connection_id, database))
+            .unwrap_or_else(|| connection_id.to_string());
+
+        {
+            let cache = state.connection_cache.read().await;
+            if let Some(connection) = cache.get(&cache_key) {
+                return Ok(connection.connection());
+            }
+        }
+
+        let _setup_guard = state.connection_setup_lock.lock().await;
+
+        {
+            let cache = state.connection_cache.read().await;
+            if let Some(connection) = cache.get(&cache_key) {
+                return Ok(connection.connection());
+            }
+        }
+
+        let connection = McpConnectionFactory::new(state.clone())
+            .connect(connection_id, database)
             .await?;
-        Ok(connection)
+        let trait_object = connection.connection();
+
+        let mut cache = state.connection_cache.write().await;
+        if let Some(existing) = cache.get(&cache_key) {
+            return Ok(existing.connection());
+        }
+
+        cache.insert(cache_key, connection);
+        Ok(trait_object)
     }
 
     pub(crate) async fn connect_cached(
@@ -784,6 +810,7 @@ mod tests {
             connection_cache: Arc::new(
                 RwLock::new(crate::connection_cache::ConnectionCache::new()),
             ),
+            connection_setup_lock: Arc::new(tokio::sync::Mutex::new(())),
             secret_manager: Arc::new(dbflux_core::SecretManager::new(Box::new(NoopSecretStore))),
             mcp_enabled_by_default: true,
         }

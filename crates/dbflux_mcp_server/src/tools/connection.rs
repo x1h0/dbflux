@@ -138,7 +138,7 @@ impl DbFluxServer {
                 move || async move {
                     {
                         let mut cache = state.connection_cache.write().await;
-                        cache.remove(&connection_id);
+                        cache.remove_connection_variants(&connection_id);
                     }
 
                     Ok(CallToolResult::success(vec![Content::text(
@@ -163,7 +163,6 @@ impl DbFluxServer {
         use dbflux_core::QueryRequest;
         use dbflux_policy::ExecutionClassification;
 
-        log::debug!("get_connection_info handler: START");
         let state = self.state.clone();
         let connection_id = params.connection_id.clone();
 
@@ -173,21 +172,18 @@ impl DbFluxServer {
                 Some(&params.connection_id),
                 ExecutionClassification::Metadata,
                 move || async move {
-                    log::debug!("get_connection_info handler: inside governance block, about to get_or_connect");
                     let conn = Self::get_or_connect(state.clone(), &connection_id)
                         .await
                         .map_err(|e| e.into_error_data())?;
 
-                    let metadata = conn.metadata();
                     let driver_type = format!("{:?}", conn.kind());
-                    let category = metadata.category;
+                    let category = conn.metadata().category;
                     let current_database = conn.active_database();
                     let conn_for_blocking = conn.clone();
 
-                    log::debug!("get_connection_info handler: about to spawn blocking task for version query");
-                    let blocking_result: Result<Option<String>, tokio::task::JoinError> = tokio::task::spawn_blocking(move || {
+                    let blocking_result: Result<Option<String>, tokio::task::JoinError> =
+                        tokio::task::spawn_blocking(move || {
                         let version_query = conn_for_blocking.version_query();
-                        log::debug!("get_connection_info blocking: got version_query = {}", version_query);
 
                         let result = conn_for_blocking.execute(&QueryRequest {
                             sql: version_query.to_string(),
@@ -197,29 +193,23 @@ impl DbFluxServer {
                             statement_timeout: None,
                             database: None,
                         });
-                        log::debug!("get_connection_info blocking: execute returned, result.is_ok() = {}", result.is_ok());
 
                         result
                             .ok()
                             .and_then(|r| {
-                                log::debug!("get_connection_info blocking: result rows = {}", r.rows.len());
                                 if !r.rows.is_empty() && !r.rows[0].is_empty() {
-                                    let v = format!("{:?}", r.rows[0][0]);
-                                    log::debug!("get_connection_info blocking: version = {}", v);
-                                    Some(v)
+                                    Some(format!("{:?}", r.rows[0][0]))
                                 } else {
-                                    log::debug!("get_connection_info blocking: rows empty or [0] empty");
                                     None
                                 }
                             })
                     })
                     .await;
-                    log::debug!("get_connection_info handler: spawn_blocking .await completed, is_ok = {}", blocking_result.is_ok());
+
                     let version_info = blocking_result
                         .map_err(|e| format!("Blocking task failed: {}", e))
                         .ok()
                         .flatten();
-                    log::debug!("get_connection_info handler: version_info = {:?}", version_info);
 
                     let mut info = serde_json::json!({
                         "connection_id": connection_id,

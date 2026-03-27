@@ -83,6 +83,7 @@ fn build_state_with_role(connection_id: &str, role_id: &str) -> ServerState {
         driver_registry: Arc::new(HashMap::new()),
         auth_provider_registry: Arc::new(HashMap::new()),
         connection_cache: Arc::new(RwLock::new(ConnectionCache::new())),
+        connection_setup_lock: Arc::new(tokio::sync::Mutex::new(())),
         secret_manager: Arc::new(SecretManager::new(Box::new(NoopSecretStore))),
         mcp_enabled_by_default: true,
     }

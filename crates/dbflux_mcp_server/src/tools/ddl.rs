@@ -328,9 +328,7 @@ fn generate_drop_foreign_key_sql(
     constraint_name: &str,
     definition: Option<&serde_json::Value>,
 ) -> Option<String> {
-    let Some(definition) = definition else {
-        return None;
-    };
+    let definition = definition?;
 
     if normalize_foreign_key_constraint_type(definition).as_deref() != Some("FOREIGN_KEY") {
         return None;

@@ -123,7 +123,6 @@ impl GovernanceMiddleware {
             ));
         }
 
-        // Execute the handler
         let result = handler().await;
 
         // Audit the execution (success or failure)
@@ -230,6 +229,7 @@ mod tests {
             connection_cache: Arc::new(
                 RwLock::new(crate::connection_cache::ConnectionCache::new()),
             ),
+            connection_setup_lock: Arc::new(tokio::sync::Mutex::new(())),
             secret_manager: Arc::new(dbflux_core::SecretManager::new(Box::new(
                 dbflux_core::NoopSecretStore,
             ))),

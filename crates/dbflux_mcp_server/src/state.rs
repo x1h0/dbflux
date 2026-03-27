@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 
 #[cfg(feature = "mysql")]
 use dbflux_core::DbKind;
@@ -29,6 +29,7 @@ pub struct ServerState {
     pub driver_registry: Arc<HashMap<String, Arc<dyn DbDriver>>>,
     pub auth_provider_registry: Arc<HashMap<String, Arc<dyn DynAuthProvider>>>,
     pub connection_cache: Arc<RwLock<ConnectionCache>>,
+    pub connection_setup_lock: Arc<Mutex<()>>,
     pub secret_manager: Arc<SecretManager>,
     pub mcp_enabled_by_default: bool,
 }
@@ -58,6 +59,7 @@ impl ServerState {
             driver_registry: Arc::new(driver_registry),
             auth_provider_registry: Arc::new(auth_provider_registry),
             connection_cache: Arc::new(RwLock::new(ConnectionCache::new())),
+            connection_setup_lock: Arc::new(Mutex::new(())),
             secret_manager,
             mcp_enabled_by_default: false,
         };

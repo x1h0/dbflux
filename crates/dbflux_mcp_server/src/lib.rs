@@ -8,7 +8,7 @@ pub mod state;
 pub mod tools;
 
 use rmcp::{ServiceExt, transport::stdio};
-use std::fs::{File, OpenOptions};
+use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
 

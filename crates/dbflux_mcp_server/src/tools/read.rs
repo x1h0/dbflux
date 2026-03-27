@@ -482,10 +482,12 @@ impl DbFluxServer {
                 }
 
                 let conn = connection.clone();
-                tokio::task::spawn_blocking(move || conn.count_collection(&request))
+                tokio::task::spawn_blocking(move || {
+                    conn.count_collection(&request)
+                        .map_err(|e| format!("Count error: {}", e))
+                })
                     .await
                     .map_err(|e| format!("Blocking task failed: {}", e))?
-                    .map_err(|e| format!("Count error: {}", e))
             }
             DatabaseCategory::Relational
             | DatabaseCategory::KeyValue
@@ -500,10 +502,12 @@ impl DbFluxServer {
                 }
 
                 let conn = connection.clone();
-                tokio::task::spawn_blocking(move || conn.count_table(&request))
+                tokio::task::spawn_blocking(move || {
+                    conn.count_table(&request)
+                        .map_err(|e| format!("Count error: {}", e))
+                })
                     .await
                     .map_err(|e| format!("Blocking task failed: {}", e))?
-                    .map_err(|e| format!("Count error: {}", e))
             }
         }
     }
@@ -656,7 +660,7 @@ impl DbFluxServer {
         semantic_request: SemanticRequest,
         target_database: Option<String>,
     ) -> Result<QueryResult, String> {
-        let result = tokio::task::spawn_blocking(move || -> Result<_, String> {
+        tokio::task::spawn_blocking(move || -> Result<_, String> {
             let plan = connection
                 .plan_semantic_request(&semantic_request)
                 .map_err(|e| format!("Aggregate planning error: {}", e))?;
@@ -675,9 +679,7 @@ impl DbFluxServer {
                 .map_err(|e| format!("Aggregate error: {}", e))
         })
         .await
-        .map_err(|e| format!("Blocking task failed: {}", e))?;
-
-        result
+        .map_err(|e| format!("Blocking task failed: {}", e))?
     }
 
     fn aggregate_specs(aggregations: &[AggregationSpec]) -> Result<Vec<CoreAggregateSpec>, String> {

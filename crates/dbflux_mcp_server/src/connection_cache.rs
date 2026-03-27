@@ -358,6 +358,17 @@ impl ConnectionCache {
     pub fn remove(&mut self, connection_id: &str) -> bool {
         self.inner.remove(connection_id).is_some()
     }
+
+    /// Removes the base connection entry and any per-database variants.
+    pub fn remove_connection_variants(&mut self, connection_id: &str) -> usize {
+        let prefix = format!("{}:", connection_id);
+        let original_len = self.inner.len();
+
+        self.inner
+            .retain(|key, _| key != connection_id && !key.starts_with(&prefix));
+
+        original_len.saturating_sub(self.inner.len())
+    }
 }
 
 #[cfg(test)]
