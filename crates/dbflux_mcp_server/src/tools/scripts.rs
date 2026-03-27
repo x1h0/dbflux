@@ -629,9 +629,12 @@ impl DbFluxServer {
             database: None,
         };
 
-        let result = conn
-            .execute(&request)
-            .map_err(|e| format!("Query execution failed: {}", e))?;
+        let result = Self::execute_connection_blocking(conn.clone(), move |connection| {
+            connection
+                .execute(&request)
+                .map_err(|e| format!("Query execution failed: {}", e))
+        })
+        .await?;
 
         Ok(serialize_query_result(&result))
     }

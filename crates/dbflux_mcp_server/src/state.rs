@@ -7,8 +7,8 @@ use tokio::sync::{Mutex, RwLock};
 use dbflux_core::DbKind;
 use dbflux_core::auth::DynAuthProvider;
 use dbflux_core::{
-    AppConfigStore, AuthProfileManager, ConnectionProfile, DbDriver, KeyringSecretStore,
-    ProfileManager, SecretManager,
+    AppConfigStore, AuthProfileManager, ConnectionProfile, DbDriver, DriverKey, FormValues,
+    KeyringSecretStore, ProfileManager, SecretManager,
 };
 use dbflux_mcp::{
     McpGovernanceService, McpRuntime, PolicyRoleDto, ToolPolicyDto, TrustedClientDto,
@@ -28,6 +28,7 @@ pub struct ServerState {
     pub auth_profile_manager: Arc<RwLock<AuthProfileManager>>,
     pub driver_registry: Arc<HashMap<String, Arc<dyn DbDriver>>>,
     pub auth_provider_registry: Arc<HashMap<String, Arc<dyn DynAuthProvider>>>,
+    pub driver_settings: Arc<HashMap<DriverKey, FormValues>>,
     pub connection_cache: Arc<RwLock<ConnectionCache>>,
     pub connection_setup_lock: Arc<Mutex<()>>,
     pub secret_manager: Arc<SecretManager>,
@@ -49,6 +50,7 @@ impl ServerState {
         let auth_profile_manager = AuthProfileManager::default();
         let driver_registry = build_driver_registry();
         let auth_provider_registry = build_auth_provider_registry();
+        let driver_settings = Arc::new(load_driver_settings(config_dir.as_deref())?);
         let secret_manager = Arc::new(SecretManager::new(Box::new(KeyringSecretStore::new())));
 
         let state = ServerState {
@@ -58,6 +60,7 @@ impl ServerState {
             auth_profile_manager: Arc::new(RwLock::new(auth_profile_manager)),
             driver_registry: Arc::new(driver_registry),
             auth_provider_registry: Arc::new(auth_provider_registry),
+            driver_settings,
             connection_cache: Arc::new(RwLock::new(ConnectionCache::new())),
             connection_setup_lock: Arc::new(Mutex::new(())),
             secret_manager,
@@ -75,6 +78,23 @@ impl ServerState {
 
         Ok(state)
     }
+}
+
+fn load_driver_settings(
+    config_dir: Option<&std::path::Path>,
+) -> Result<HashMap<DriverKey, FormValues>, String> {
+    let config_store = match config_dir {
+        Some(dir) => AppConfigStore::from_dir(dir)
+            .map_err(|e| error_messages::config_error("open config store", Some(dir), e))?,
+        None => AppConfigStore::new()
+            .map_err(|e| error_messages::config_error("open config store", None, e))?,
+    };
+
+    let config = config_store
+        .load()
+        .map_err(|e| error_messages::config_error("load config", None, e))?;
+
+    Ok(config.driver_settings)
 }
 
 fn build_runtime(config_dir: Option<&std::path::Path>) -> Result<McpRuntime, String> {

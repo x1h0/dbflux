@@ -188,6 +188,20 @@ impl McpConnectionFactory {
                 .ok_or_else(|| error_messages::connection_not_found(connection_id))?
         };
 
+        if let Some(driver_defaults) = self.state.driver_settings.get(&profile.driver_id()) {
+            let mut merged_settings = driver_defaults.clone();
+
+            if let Some(connection_settings) = profile.connection_settings.take() {
+                merged_settings.extend(connection_settings);
+            }
+
+            profile.connection_settings = if merged_settings.is_empty() {
+                None
+            } else {
+                Some(merged_settings)
+            };
+        }
+
         if let Some(database) = database {
             profile.config = profile.config.clone().with_database(database)?;
         }
@@ -391,9 +405,7 @@ impl McpConnectionFactory {
     }
 
     async fn connect_and_cache(&self, connection_id: &str) -> Result<(), String> {
-        let connection = self.connect(connection_id, None).await?;
-        let mut cache = self.state.connection_cache.write().await;
-        cache.insert(connection_id.to_string(), connection);
+        DbFluxServer::get_or_connect(self.state.clone(), connection_id).await?;
         Ok(())
     }
 }
@@ -444,11 +456,16 @@ impl DbFluxServer {
             ExecutionClassification::Read
         } else if query_upper.starts_with("INSERT") || query_upper.starts_with("UPDATE") {
             ExecutionClassification::Write
-        } else if query_upper.starts_with("DELETE")
-            || query_upper.starts_with("DROP")
-            || query_upper.starts_with("TRUNCATE")
-        {
+        } else if query_upper.starts_with("DELETE") || query_upper.starts_with("TRUNCATE") {
             ExecutionClassification::Destructive
+        } else if query_upper.starts_with("CREATE INDEX") || query_upper.starts_with("CREATE TABLE")
+        {
+            ExecutionClassification::AdminSafe
+        } else if query_upper.starts_with("DROP TABLE")
+            || query_upper.starts_with("DROP DATABASE")
+            || query_upper.contains(" DROP COLUMN")
+        {
+            ExecutionClassification::AdminDestructive
         } else if query_upper.starts_with("CREATE")
             || query_upper.starts_with("ALTER")
             || query_upper.starts_with("GRANT")
@@ -488,6 +505,19 @@ impl DbFluxServer {
     {
         let connection = Self::get_or_connect(state, connection_id).await?;
 
+        tokio::task::spawn_blocking(move || f(connection))
+            .await
+            .map_err(|e| format!("Blocking task failed: {}", e))?
+    }
+
+    pub(crate) async fn execute_connection_blocking<F, T>(
+        connection: Arc<dyn Connection>,
+        f: F,
+    ) -> Result<T, String>
+    where
+        F: FnOnce(Arc<dyn Connection>) -> Result<T, String> + Send + 'static,
+        T: Send + 'static,
+    {
         tokio::task::spawn_blocking(move || f(connection))
             .await
             .map_err(|e| format!("Blocking task failed: {}", e))?
@@ -807,6 +837,7 @@ mod tests {
             auth_profile_manager: Arc::new(RwLock::new(dbflux_core::AuthProfileManager::default())),
             driver_registry: Arc::new(HashMap::from([(driver_id.to_string(), driver)])),
             auth_provider_registry: Arc::new(HashMap::new()),
+            driver_settings: Arc::new(HashMap::new()),
             connection_cache: Arc::new(
                 RwLock::new(crate::connection_cache::ConnectionCache::new()),
             ),

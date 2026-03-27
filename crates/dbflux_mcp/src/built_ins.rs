@@ -120,7 +120,9 @@ pub fn builtin_policies() -> Vec<ToolPolicyDto> {
                 "read".to_string(),
                 "write".to_string(),
                 "destructive".to_string(),
+                "admin_safe".to_string(),
                 "admin".to_string(),
+                "admin_destructive".to_string(),
             ],
         },
     ]
@@ -153,4 +155,30 @@ pub fn builtin_roles() -> Vec<PolicyRoleDto> {
             policy_ids: vec!["builtin/admin".to_string()],
         },
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::builtin_policies;
+
+    #[test]
+    fn admin_policy_covers_safe_and_destructive_admin_classes() {
+        let admin = builtin_policies()
+            .into_iter()
+            .find(|policy| policy.id == "builtin/admin")
+            .expect("admin policy should exist");
+
+        assert!(
+            admin
+                .allowed_classes
+                .iter()
+                .any(|class| class == "admin_safe")
+        );
+        assert!(
+            admin
+                .allowed_classes
+                .iter()
+                .any(|class| class == "admin_destructive")
+        );
+    }
 }

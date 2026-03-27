@@ -231,12 +231,14 @@ impl DbFluxServer {
         let connection = Self::get_or_connect(state, connection_id).await?;
 
         if connection.metadata().category == DatabaseCategory::Document {
-            let result = connection
-                .delete_document(
-                    &DocumentDelete::new(table.to_string(), DocumentFilter::new(filter.clone()))
-                        .many(),
-                )
-                .map_err(|e| format!("Delete error: {}", e))?;
+            let delete =
+                DocumentDelete::new(table.to_string(), DocumentFilter::new(filter.clone())).many();
+            let result = Self::execute_connection_blocking(connection.clone(), move |connection| {
+                connection
+                    .delete_document(&delete)
+                    .map_err(|e| format!("Delete error: {}", e))
+            })
+            .await?;
 
             return Ok(serde_json::json!({
                 "deleted": result.affected_rows,
@@ -244,9 +246,12 @@ impl DbFluxServer {
         }
 
         let mutation = Self::build_relational_delete_mutation(table, filter, returning)?;
-        let result = connection
-            .execute_semantic_request(&SemanticRequest::Mutation(mutation))
-            .map_err(|e| format!("Delete error: {}", e))?;
+        let result = Self::execute_connection_blocking(connection.clone(), move |connection| {
+            connection
+                .execute_semantic_request(&SemanticRequest::Mutation(mutation))
+                .map_err(|e| format!("Delete error: {}", e))
+        })
+        .await?;
 
         Ok(serialize_mutation_result(
             &result,
@@ -287,9 +292,13 @@ impl DbFluxServer {
         let sql = connection.build_truncate_sql(table);
 
         let request = QueryRequest::new(&sql);
-        connection
-            .execute(&request)
-            .map_err(|e| format!("Truncate error: {}", e))?;
+        Self::execute_connection_blocking(connection.clone(), move |connection| {
+            connection
+                .execute(&request)
+                .map_err(|e| format!("Truncate error: {}", e))
+                .map(|_| ())
+        })
+        .await?;
 
         Ok(serde_json::json!({
             "truncated": true,
@@ -319,9 +328,13 @@ impl DbFluxServer {
         );
 
         let request = QueryRequest::new(&sql);
-        connection
-            .execute(&request)
-            .map_err(|e| format!("Drop table error: {}", e))?;
+        Self::execute_connection_blocking(connection.clone(), move |connection| {
+            connection
+                .execute(&request)
+                .map_err(|e| format!("Drop table error: {}", e))
+                .map(|_| ())
+        })
+        .await?;
 
         Ok(serde_json::json!({
             "dropped": true,
@@ -344,9 +357,13 @@ impl DbFluxServer {
         let sql = format!("DROP DATABASE {}{}", if_exists_clause, db_quoted);
 
         let request = QueryRequest::new(&sql);
-        connection
-            .execute(&request)
-            .map_err(|e| format!("Drop database error: {}", e))?;
+        Self::execute_connection_blocking(connection.clone(), move |connection| {
+            connection
+                .execute(&request)
+                .map_err(|e| format!("Drop database error: {}", e))
+                .map(|_| ())
+        })
+        .await?;
 
         Ok(serde_json::json!({
             "dropped": true,

@@ -239,9 +239,13 @@ impl DbFluxServer {
                 })
                 .collect::<Result<Vec<_>, _>>()?;
 
-            let result = connection
-                .insert_document(&DocumentInsert::many(table.to_string(), documents))
-                .map_err(|e| format!("Insert error: {}", e))?;
+            let insert = DocumentInsert::many(table.to_string(), documents);
+            let result = Self::execute_connection_blocking(connection.clone(), move |connection| {
+                connection
+                    .insert_document(&insert)
+                    .map_err(|e| format!("Insert error: {}", e))
+            })
+            .await?;
 
             return Ok(serde_json::json!({
                 "inserted": result.affected_rows,
@@ -268,9 +272,12 @@ impl DbFluxServer {
                 values,
             );
 
-            let result = connection
-                .insert_row(&row_insert)
-                .map_err(|e| format!("Insert error: {}", e))?;
+            let result = Self::execute_connection_blocking(connection.clone(), move |connection| {
+                connection
+                    .insert_row(&row_insert)
+                    .map_err(|e| format!("Insert error: {}", e))
+            })
+            .await?;
 
             inserted_count += result.affected_rows;
 
@@ -304,9 +311,12 @@ impl DbFluxServer {
 
         if connection.metadata().category == DatabaseCategory::Document {
             let update = Self::build_document_update(table, filter, set)?;
-            let result = connection
-                .update_document(&update)
-                .map_err(|e| format!("Update error: {}", e))?;
+            let result = Self::execute_connection_blocking(connection.clone(), move |connection| {
+                connection
+                    .update_document(&update)
+                    .map_err(|e| format!("Update error: {}", e))
+            })
+            .await?;
 
             return Ok(serde_json::json!({
                 "updated": result.affected_rows,
@@ -314,9 +324,12 @@ impl DbFluxServer {
         }
 
         let mutation = Self::build_relational_update_mutation(table, filter, set, returning)?;
-        let result = connection
-            .execute_semantic_request(&SemanticRequest::Mutation(mutation))
-            .map_err(|e| format!("Update error: {}", e))?;
+        let result = Self::execute_connection_blocking(connection.clone(), move |connection| {
+            connection
+                .execute_semantic_request(&SemanticRequest::Mutation(mutation))
+                .map_err(|e| format!("Update error: {}", e))
+        })
+        .await?;
 
         Ok(serialize_mutation_result(
             &result,
@@ -418,9 +431,12 @@ impl DbFluxServer {
             }
         };
 
-        let result = connection
-            .execute_semantic_request(&SemanticRequest::Mutation(mutation))
-            .map_err(|e| format!("Upsert error: {}", e))?;
+        let result = Self::execute_connection_blocking(connection.clone(), move |connection| {
+            connection
+                .execute_semantic_request(&SemanticRequest::Mutation(mutation))
+                .map_err(|e| format!("Upsert error: {}", e))
+        })
+        .await?;
 
         Ok(serialize_mutation_result(&result, "upserted", false))
     }

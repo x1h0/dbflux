@@ -178,33 +178,36 @@ impl DbFluxServer {
 
                     let driver_type = format!("{:?}", conn.kind());
                     let category = conn.metadata().category;
-                    let current_database = conn.active_database();
+                    let current_database =
+                        Self::execute_connection_blocking(conn.clone(), move |connection| {
+                            Ok(connection.active_database())
+                        })
+                        .await
+                        .map_err(|e| e.into_error_data())?;
                     let conn_for_blocking = conn.clone();
 
                     let blocking_result: Result<Option<String>, tokio::task::JoinError> =
                         tokio::task::spawn_blocking(move || {
-                        let version_query = conn_for_blocking.version_query();
+                            let version_query = conn_for_blocking.version_query();
 
-                        let result = conn_for_blocking.execute(&QueryRequest {
-                            sql: version_query.to_string(),
-                            params: Vec::new(),
-                            limit: Some(1),
-                            offset: None,
-                            statement_timeout: None,
-                            database: None,
-                        });
+                            let result = conn_for_blocking.execute(&QueryRequest {
+                                sql: version_query.to_string(),
+                                params: Vec::new(),
+                                limit: Some(1),
+                                offset: None,
+                                statement_timeout: None,
+                                database: None,
+                            });
 
-                        result
-                            .ok()
-                            .and_then(|r| {
+                            result.ok().and_then(|r| {
                                 if !r.rows.is_empty() && !r.rows[0].is_empty() {
                                     Some(format!("{:?}", r.rows[0][0]))
                                 } else {
                                     None
                                 }
                             })
-                    })
-                    .await;
+                        })
+                        .await;
 
                     let version_info = blocking_result
                         .map_err(|e| format!("Blocking task failed: {}", e))

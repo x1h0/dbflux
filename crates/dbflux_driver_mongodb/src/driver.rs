@@ -11,15 +11,14 @@ use dbflux_core::{
     CollectionBrowseRequest, CollectionCountRequest, CollectionIndexInfo, ColumnMeta, Connection,
     ConnectionErrorFormatter, ConnectionExt, ConnectionProfile, CrudResult, DangerousQueryKind,
     DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo,
-    DdlCapabilities, Diagnostic, DiagnosticSeverity, DocumentConnection, DocumentDelete,
-    DocumentInsert, DocumentSchema, DocumentUpdate, DriverCapabilities, DriverFormDef,
-    DescribeRequest,
-    DriverLimits, DriverMetadata, EditorDiagnostic, FieldInfo, FormFieldDef, FormFieldKind,
-    FormSection, FormTab, FormValues, FormattedError, Icon, IndexData, IndexDirection,
-    KeyValueConnection, LanguageService, MONGODB_FORM, MutationCapabilities, OrderByColumn,
-    PaginationStyle, PlaceholderStyle, QueryCapabilities, QueryErrorFormatter, QueryGenerator,
-    QueryHandle, QueryLanguage, QueryRequest, QueryResult, RelationalConnection, Row,
-    SchemaLoadingStrategy, SchemaSnapshot, SemanticFieldRef, SemanticFilter, SemanticPlan,
+    DdlCapabilities, DescribeRequest, Diagnostic, DiagnosticSeverity, DocumentConnection,
+    DocumentDelete, DocumentInsert, DocumentSchema, DocumentUpdate, DriverCapabilities,
+    DriverFormDef, DriverLimits, DriverMetadata, EditorDiagnostic, FieldInfo, FormFieldDef,
+    FormFieldKind, FormSection, FormTab, FormValues, FormattedError, Icon, IndexData,
+    IndexDirection, KeyValueConnection, LanguageService, MONGODB_FORM, MutationCapabilities,
+    OrderByColumn, PaginationStyle, PlaceholderStyle, QueryCapabilities, QueryErrorFormatter,
+    QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult, RelationalConnection,
+    Row, SchemaLoadingStrategy, SchemaSnapshot, SemanticFieldRef, SemanticFilter, SemanticPlan,
     SemanticPlanKind, SemanticRequest, SqlDialect, SshTunnelConfig, TableInfo, TextPosition,
     TextPositionRange, TransactionCapabilities, ValidationResult, Value, ViewInfo, WhereOperator,
     detect_dangerous_mongo, sanitize_uri,
@@ -384,6 +383,7 @@ impl DbDriver for MongoDriver {
         ssh_secret: Option<&SecretString>,
     ) -> Result<Box<dyn Connection>, DbError> {
         let config = extract_mongodb_config(&profile.config)?;
+        let schema_settings = Self::schema_settings(profile);
 
         let password = password.map(|value| value.expose_secret());
         let ssh_secret = ssh_secret.map(|value| value.expose_secret());
@@ -394,6 +394,7 @@ impl DbDriver for MongoDriver {
                 config.user.as_deref(),
                 password,
                 config.database,
+                schema_settings,
             )
         } else if let Some(tunnel_config) = &config.ssh_tunnel {
             self.connect_via_ssh_tunnel(
@@ -405,6 +406,7 @@ impl DbDriver for MongoDriver {
                 config.database.clone(),
                 config.auth_database.as_deref(),
                 password,
+                schema_settings,
             )
         } else {
             self.connect_direct(
@@ -414,6 +416,7 @@ impl DbDriver for MongoDriver {
                 config.database,
                 config.auth_database.as_deref(),
                 password,
+                schema_settings,
             )
         }
     }
@@ -425,12 +428,33 @@ impl DbDriver for MongoDriver {
 }
 
 impl MongoDriver {
+    fn schema_settings(profile: &ConnectionProfile) -> MongoSchemaSettings {
+        let settings = profile.connection_settings.as_ref();
+
+        let schema_sample_size = settings
+            .and_then(|values| values.get("schema_sample_size"))
+            .and_then(|value| value.parse::<i32>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(DEFAULT_SAMPLE_SIZE);
+
+        let show_system_databases = settings
+            .and_then(|values| values.get("show_system_databases"))
+            .map(|value| value == "true")
+            .unwrap_or(false);
+
+        MongoSchemaSettings {
+            schema_sample_size,
+            show_system_databases,
+        }
+    }
+
     fn connect_with_uri(
         &self,
         base_uri: &str,
         user: Option<&str>,
         password: Option<&str>,
         database: Option<String>,
+        schema_settings: MongoSchemaSettings,
     ) -> Result<Box<dyn Connection>, DbError> {
         let uri = inject_credentials_into_uri(base_uri, user, password);
 
@@ -449,10 +473,12 @@ impl MongoDriver {
         Ok(Box::new(MongoConnection {
             client: Mutex::new(client),
             default_database: database,
+            schema_settings,
             ssh_tunnel: None,
         }))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn connect_direct(
         &self,
         host: &str,
@@ -461,6 +487,7 @@ impl MongoDriver {
         database: Option<String>,
         auth_database: Option<&str>,
         password: Option<&str>,
+        schema_settings: MongoSchemaSettings,
     ) -> Result<Box<dyn Connection>, DbError> {
         let uri = build_mongodb_uri(host, port, user, password, auth_database);
 
@@ -478,6 +505,7 @@ impl MongoDriver {
         Ok(Box::new(MongoConnection {
             client: Mutex::new(client),
             default_database: database,
+            schema_settings,
             ssh_tunnel: None,
         }))
     }
@@ -493,6 +521,7 @@ impl MongoDriver {
         database: Option<String>,
         auth_database: Option<&str>,
         password: Option<&str>,
+        schema_settings: MongoSchemaSettings,
     ) -> Result<Box<dyn Connection>, DbError> {
         let total_start = Instant::now();
 
@@ -552,9 +581,16 @@ impl MongoDriver {
         Ok(Box::new(MongoConnection {
             client: Mutex::new(client),
             default_database: database,
+            schema_settings,
             ssh_tunnel: Some(tunnel),
         }))
     }
+}
+
+#[derive(Clone, Copy)]
+struct MongoSchemaSettings {
+    schema_sample_size: i32,
+    show_system_databases: bool,
 }
 
 struct ExtractedMongoConfig {
@@ -746,6 +782,7 @@ fn format_mongo_query_error(e: &mongodb::error::Error) -> DbError {
 pub struct MongoConnection {
     client: Mutex<Client>,
     default_database: Option<String>,
+    schema_settings: MongoSchemaSettings,
     #[allow(dead_code)]
     ssh_tunnel: Option<SshTunnel>,
 }
@@ -1264,7 +1301,10 @@ impl Connection for MongoConnection {
 
         Ok(db_names
             .into_iter()
-            .filter(|name| name != "admin" && name != "config" && name != "local")
+            .filter(|name| {
+                self.schema_settings.show_system_databases
+                    || (name != "admin" && name != "config" && name != "local")
+            })
             .map(|name| {
                 let is_current = self.default_database.as_ref() == Some(&name);
                 DatabaseInfo { name, is_current }
@@ -1338,7 +1378,8 @@ impl Connection for MongoConnection {
         let db = client.database(database);
         let indexes = fetch_collection_indexes(&db, collection).map(IndexData::Document);
 
-        let sample_fields = sample_collection_fields(&db, collection);
+        let sample_fields =
+            sample_collection_fields(&db, collection, self.schema_settings.schema_sample_size);
 
         Ok(TableInfo {
             name: collection.to_string(),
@@ -2800,12 +2841,16 @@ fn bson_to_index_direction(value: &Bson) -> IndexDirection {
     }
 }
 
-const SAMPLE_SIZE: i32 = 100;
+const DEFAULT_SAMPLE_SIZE: i32 = 100;
 
-fn sample_collection_fields(db: &Database, collection_name: &str) -> Vec<FieldInfo> {
+fn sample_collection_fields(
+    db: &Database,
+    collection_name: &str,
+    sample_size: i32,
+) -> Vec<FieldInfo> {
     let collection = db.collection::<Document>(collection_name);
 
-    let pipeline = vec![doc! { "$sample": { "size": SAMPLE_SIZE } }];
+    let pipeline = vec![doc! { "$sample": { "size": sample_size } }];
     let cursor = match collection.aggregate(pipeline).run() {
         Ok(c) => c,
         Err(e) => {
@@ -2815,7 +2860,7 @@ fn sample_collection_fields(db: &Database, collection_name: &str) -> Vec<FieldIn
                 e
             );
 
-            match collection.find(doc! {}).limit(SAMPLE_SIZE as i64).run() {
+            match collection.find(doc! {}).limit(sample_size as i64).run() {
                 Ok(c) => c,
                 Err(find_error) => {
                     log::warn!(
@@ -2939,6 +2984,17 @@ fn collect_field_stats(doc: &Document, stats: &mut BTreeMap<String, FieldStats>)
         if let Bson::Document(nested_doc) = value {
             let nested = entry.nested_stats.get_or_insert_with(BTreeMap::new);
             collect_field_stats(nested_doc, nested);
+            continue;
+        }
+
+        if let Bson::Array(items) = value {
+            let nested = entry.nested_stats.get_or_insert_with(BTreeMap::new);
+
+            for item in items {
+                if let Bson::Document(nested_doc) = item {
+                    collect_field_stats(nested_doc, nested);
+                }
+            }
         }
     }
 }
@@ -3367,5 +3423,28 @@ mod tests {
             lookup.get("profile.email"),
             Some(&vec!["email_idx".to_string(), "email_text_idx".to_string()])
         );
+    }
+
+    #[test]
+    fn collect_field_stats_infers_embedded_document_fields_inside_arrays() {
+        let document = doc! {
+            "items": [
+                { "sku": "A-1", "qty": 2 },
+                { "sku": "B-2" }
+            ]
+        };
+        let mut stats = BTreeMap::new();
+
+        collect_field_stats(&document, &mut stats);
+
+        let items = stats.get("items").expect("items field should be tracked");
+        let field = build_field_info("items", items, 1.0);
+        let nested_fields = field
+            .nested_fields
+            .expect("array-of-document fields should expose nested fields");
+
+        assert_eq!(field.common_type, "Array");
+        assert!(nested_fields.iter().any(|nested| nested.name == "sku"));
+        assert!(nested_fields.iter().any(|nested| nested.name == "qty"));
     }
 }

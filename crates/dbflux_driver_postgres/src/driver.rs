@@ -1137,9 +1137,41 @@ fn plan_postgres_explain(request: &ExplainRequest) -> SemanticPlan {
         SemanticPlanKind::Query,
         dbflux_core::PlannedQuery::new(
             QueryLanguage::Sql,
-            format!("EXPLAIN (FORMAT JSON, ANALYZE) {}", query),
+            format!("EXPLAIN (FORMAT JSON) {}", query),
         ),
     )
+}
+
+struct ActiveQueryGuard<'a> {
+    active_query: &'a RwLock<Option<Uuid>>,
+}
+
+impl<'a> ActiveQueryGuard<'a> {
+    fn activate(active_query: &'a RwLock<Option<Uuid>>, query_id: Uuid) -> Result<Self, DbError> {
+        let mut active = active_query
+            .write()
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e).into()))?;
+        *active = Some(query_id);
+        drop(active);
+
+        Ok(Self { active_query })
+    }
+}
+
+impl Drop for ActiveQueryGuard<'_> {
+    fn drop(&mut self) {
+        match self.active_query.write() {
+            Ok(mut active) => {
+                *active = None;
+            }
+            Err(error) => {
+                log::warn!(
+                    "[CLEANUP] Failed to clear active PostgreSQL query state: {}",
+                    error
+                );
+            }
+        }
+    }
 }
 
 fn plan_postgres_describe(request: &DescribeRequest) -> SemanticPlan {
@@ -1225,14 +1257,7 @@ impl Connection for PostgresConnection {
 
         let start = Instant::now();
         let query_id = Uuid::new_v4();
-
-        {
-            let mut active = self
-                .active_query
-                .write()
-                .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e).into()))?;
-            *active = Some(query_id);
-        }
+        let _active_query_guard = ActiveQueryGuard::activate(&self.active_query, query_id)?;
 
         let sql_preview = if req.sql.len() > 80 {
             format!("{}...", &req.sql[..80])
@@ -1288,14 +1313,6 @@ impl Connection for PostgresConnection {
 
             (columns, rows)
         };
-
-        {
-            let mut active = self
-                .active_query
-                .write()
-                .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e).into()))?;
-            *active = None;
-        }
 
         let query_time = start.elapsed();
 
@@ -1718,7 +1735,7 @@ impl Connection for PostgresConnection {
             ),
         };
 
-        let sql = format!("EXPLAIN (FORMAT JSON, ANALYZE) {}", query);
+        let sql = format!("EXPLAIN (FORMAT JSON) {}", query);
         self.execute(&QueryRequest::new(sql))
     }
 

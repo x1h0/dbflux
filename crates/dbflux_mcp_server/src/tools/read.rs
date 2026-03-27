@@ -1,7 +1,7 @@
 //! Read operation tools for MCP server.
 //!
 //! Provides type-safe parameter structs for read operations:
-//! - `select_data`: Query records with filtering, sorting, pagination, and joins
+//! - `select_data`: Query records with filtering, sorting, and pagination
 //! - `count_records`: Count records matching a filter
 //! - `aggregate_data`: Perform aggregations with grouping and having clauses
 
@@ -90,7 +90,9 @@ pub struct SelectDataParams {
     #[schemars(description = "Number of rows to skip")]
     pub offset: Option<u32>,
 
-    #[schemars(description = "Join operations (relational databases only)")]
+    #[schemars(
+        description = "Join operations (currently rejected until select_data join support is implemented)"
+    )]
     pub joins: Option<Vec<JoinSpec>>,
 
     #[schemars(description = "Optional database/schema name")]
@@ -311,6 +313,15 @@ impl DbFluxServer {
             .transpose()?
             .flatten();
 
+        if let Some(joins) = _joins
+            && !joins.is_empty()
+        {
+            return Err(
+                "select_data join operations are not implemented yet; the MCP server now rejects them explicitly instead of ignoring them"
+                    .to_string(),
+            );
+        }
+
         let connection = if let Some(target_db) = database {
             let current_db = Self::get_current_database(&state, connection_id).await?;
 
@@ -486,8 +497,8 @@ impl DbFluxServer {
                     conn.count_collection(&request)
                         .map_err(|e| format!("Count error: {}", e))
                 })
-                    .await
-                    .map_err(|e| format!("Blocking task failed: {}", e))?
+                .await
+                .map_err(|e| format!("Blocking task failed: {}", e))?
             }
             DatabaseCategory::Relational
             | DatabaseCategory::KeyValue
@@ -506,8 +517,8 @@ impl DbFluxServer {
                     conn.count_table(&request)
                         .map_err(|e| format!("Count error: {}", e))
                 })
-                    .await
-                    .map_err(|e| format!("Blocking task failed: {}", e))?
+                .await
+                .map_err(|e| format!("Blocking task failed: {}", e))?
             }
         }
     }

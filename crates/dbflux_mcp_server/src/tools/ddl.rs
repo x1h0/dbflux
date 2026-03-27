@@ -9,7 +9,7 @@
 //! - `drop_table`: Drop a table (requires confirmation)
 //! - `drop_database`: Drop a database (requires confirmation)
 //!
-//! All operations are classified as Admin level.
+//! Operations are classified per-tool and per-alter action risk level.
 
 use crate::{
     DbFluxServer,
@@ -625,9 +625,13 @@ impl DbFluxServer {
         );
 
         let request = QueryRequest::new(&sql);
-        connection
-            .execute(&request)
-            .map_err(|e| format!("Create table error: {}", e))?;
+        Self::execute_connection_blocking(connection.clone(), move |connection| {
+            connection
+                .execute(&request)
+                .map_err(|e| format!("Create table error: {}", e))
+                .map(|_| ())
+        })
+        .await?;
 
         Ok(serde_json::json!({
             "created": true,
@@ -745,9 +749,19 @@ impl DbFluxServer {
                         // Execute all parts and collect results
                         for part_sql in parts {
                             let request = QueryRequest::new(&part_sql);
-                            match connection.execute(&request) {
+                            match Self::execute_connection_blocking(
+                                connection.clone(),
+                                move |connection| {
+                                    connection
+                                        .execute(&request)
+                                        .map_err(|e| format!("Alter column error: {}", e))
+                                        .map(|_| ())
+                                },
+                            )
+                            .await
+                            {
                                 Ok(_) => {}
-                                Err(e) => return Err(format!("Alter column error: {}", e)),
+                                Err(e) => return Err(e),
                             }
                         }
 
@@ -877,7 +891,14 @@ impl DbFluxServer {
             };
 
             let request = QueryRequest::new(&sql);
-            match connection.execute(&request) {
+            match Self::execute_connection_blocking(connection.clone(), move |connection| {
+                connection
+                    .execute(&request)
+                    .map_err(|e| format!("ALTER TABLE error: {}", e))
+                    .map(|_| ())
+            })
+            .await
+            {
                 Ok(_) => results.push(serde_json::json!({"action": op.action, "success": true})),
                 Err(e) => results.push(serde_json::json!({
                     "action": op.action,
@@ -932,9 +953,13 @@ impl DbFluxServer {
         );
 
         let request = QueryRequest::new(&sql);
-        connection
-            .execute(&request)
-            .map_err(|e| format!("Create index error: {}", e))?;
+        Self::execute_connection_blocking(connection.clone(), move |connection| {
+            connection
+                .execute(&request)
+                .map_err(|e| format!("Create index error: {}", e))
+                .map(|_| ())
+        })
+        .await?;
 
         Ok(serde_json::json!({
             "created": true,
@@ -956,9 +981,13 @@ impl DbFluxServer {
         let sql = connection.build_drop_index_sql(index_name, table, if_exists);
 
         let request = QueryRequest::new(&sql);
-        connection
-            .execute(&request)
-            .map_err(|e| format!("Drop index error: {}", e))?;
+        Self::execute_connection_blocking(connection.clone(), move |connection| {
+            connection
+                .execute(&request)
+                .map_err(|e| format!("Drop index error: {}", e))
+                .map(|_| ())
+        })
+        .await?;
 
         Ok(serde_json::json!({
             "dropped": true,
@@ -978,77 +1007,6 @@ impl DbFluxServer {
         // This is PostgreSQL-specific and requires special handling
         // For now, return a not supported response
         Err("CREATE TYPE is database-specific and not yet fully implemented.".to_string())
-    }
-
-    #[tool(description = "Preview DDL changes without executing them")]
-    async fn preview_ddl(
-        &self,
-        Parameters(params): Parameters<PreviewDdlParams>,
-    ) -> Result<CallToolResult, ErrorData> {
-        use dbflux_policy::ExecutionClassification;
-
-        let state = self.state.clone();
-        let connection_id = params.connection_id.clone();
-        let database = params.database.clone();
-        let sql = params.sql.clone();
-
-        self.governance
-            .authorize_and_execute(
-                "preview_ddl",
-                Some(&params.connection_id),
-                ExecutionClassification::Metadata,
-                move || async move {
-                    Self::preview_ddl_impl(state, &connection_id, database.as_deref(), &sql)
-                        .await
-                        .map_err(|e| e.into_error_data())
-                },
-            )
-            .await
-    }
-
-    async fn preview_ddl_impl(
-        state: ServerState,
-        connection_id: &str,
-        database: Option<&str>,
-        sql: &str,
-    ) -> Result<CallToolResult, String> {
-        use crate::tools::ddl_preview;
-
-        let connection = Self::get_or_connect(state.clone(), connection_id).await?;
-
-        // Get profile to determine driver ID
-        let profile_uuid = connection_id
-            .parse::<uuid::Uuid>()
-            .map_err(|_| format!("Invalid connection ID: {}", connection_id))?;
-
-        let profile = {
-            let profile_manager = state.profile_manager.read().await;
-            profile_manager
-                .find_by_id(profile_uuid)
-                .cloned()
-                .ok_or_else(|| format!("Profile not found for connection: {}", connection_id))?
-        };
-
-        let driver_id = profile.driver_id();
-
-        // Get driver from registry
-        let driver = state
-            .driver_registry
-            .get(&driver_id)
-            .cloned()
-            .ok_or_else(|| format!("Driver not found for ID: {}", driver_id))?;
-
-        // Execute preview
-        let result = ddl_preview::preview_ddl_impl(driver, connection, database, sql)
-            .map_err(|e| e.to_string())?;
-
-        // Serialize result
-        let result_json = serde_json::to_value(&result)
-            .map_err(|e| format!("Failed to serialize preview result: {}", e))?;
-
-        Ok(CallToolResult::success(vec![Content::text(
-            serde_json::to_string_pretty(&result_json).unwrap_or_else(|_| result_json.to_string()),
-        )]))
     }
 }
 

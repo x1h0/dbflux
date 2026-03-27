@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use dbflux_core::{Connection, ExplainRequest, SemanticRequest, TableRef};
+use dbflux_core::{
+    Connection, ExplainRequest, SemanticRequest, TableRef, classify_query_for_governance,
+};
 use rmcp::{
     ErrorData,
     handler::server::wrapper::Parameters,
@@ -201,6 +203,19 @@ impl DbFluxServer {
                             error_prefix
                         )
                     })?;
+
+                    let classification =
+                        classify_query_for_governance(&planned_query.language, &planned_query.text);
+                    if !matches!(
+                        classification,
+                        dbflux_policy::ExecutionClassification::Metadata
+                            | dbflux_policy::ExecutionClassification::Read
+                    ) {
+                        return Err(format!(
+                            "{} planning error: driver generated a non-read-only preview query",
+                            error_prefix
+                        ));
+                    }
 
                     connection
                         .execute(&planned_query.into_query_request())
@@ -426,6 +441,37 @@ mod tests {
                 .expect("explain queries mutex poisoned")
                 .as_slice(),
             [Some("UPDATE users SET active = true".to_string())]
+        );
+    }
+
+    #[tokio::test]
+    async fn run_explain_request_rejects_non_read_only_plans() {
+        let connection = Arc::new(TestConnection::new(
+            Some(SemanticPlan::single_query(
+                SemanticPlanKind::Query,
+                dbflux_core::PlannedQuery::new(
+                    QueryLanguage::Sql,
+                    "UPDATE users SET active = true",
+                ),
+            )),
+            true,
+        ));
+
+        let error = DbFluxServer::run_explain_request(
+            connection.clone(),
+            ExplainRequest::new(TableRef::new("users")).with_query("SELECT 1"),
+            "Preview",
+        )
+        .await
+        .expect_err("non-read-only preview plans must be rejected");
+
+        assert!(error.contains("non-read-only preview query"));
+        assert!(
+            connection
+                .executed_queries
+                .lock()
+                .expect("executed queries mutex poisoned")
+                .is_empty()
         );
     }
 }
