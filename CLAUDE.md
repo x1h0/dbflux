@@ -275,7 +275,7 @@ Returns `Subscription`; store in `_subscriptions: Vec<Subscription>` field.
 - `dbflux_ipc`: Versioned app-control + driver RPC protocol contracts, framing, socket naming helpers
 - `dbflux_driver_ipc`: RPC client transport and `DbDriver` adapter for external services
 - `dbflux_driver_host`: Standalone RPC host binary that serves drivers over local sockets
-- `dbflux_driver_*`: Implement `DbDriver`, `Connection`, `ErrorFormatter`, and optionally `QueryGenerator` traits
+- `dbflux_driver_*`: Implement `DbDriver`, `Connection`, `ErrorFormatter`, and query generation abstractions (`QueryGenerator` for mutation/read templates when applicable)
 - `dbflux_aws`: AWS auth providers (SSO/shared/static), AWS account discovery, and AWS value providers
 - `dbflux_ssm`: Managed AWS SSM port-forward tunnel factory used by `AccessManager`
 - `dbflux_tunnel_core`: RAII `Tunnel`, `TunnelConnector` trait, `ForwardingConnection<R>` bidirectional forwarder, adaptive sleep
@@ -384,7 +384,7 @@ Key abstractions for UI adaptation:
 2. Implement `DbDriver` and `Connection` from `dbflux_core`
 3. Define `DriverMetadata` with appropriate `DatabaseCategory`, `QueryLanguage`, and `DriverCapabilities`
 4. Implement `ErrorFormatter` for driver-specific error messages
-5. Optionally implement `QueryGenerator` for "Copy as Query" support
+5. Implement `QueryGenerator` when the driver can generate native mutation/read templates for UI previews, copy-as-query, or MCP previews
 6. Add feature flag in `crates/dbflux/Cargo.toml`
 7. Register in `AppState::new()` under `#[cfg(feature = "name")]`
 
@@ -419,10 +419,17 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 
 **Classification**: Operations are classified by impact level via `ExecutionClassification`:
 - `Metadata` — Schema introspection (list tables, describe object)
-- `Read` — SELECT queries, data browsing
+- `Read` — SELECT queries, data browsing, read-only previews
 - `Write` — INSERT/UPDATE, mutations
 - `Destructive` — DELETE, DROP, TRUNCATE
-- `Admin` — DDL operations, user management
+- `AdminSafe` — Safe DDL operations (CREATE TABLE, CREATE INDEX, ADD COLUMN with default/nullable)
+- `Admin` — Risky DDL operations and privileged admin flows
+- `AdminDestructive` — Irreversible DDL operations (DROP TABLE, DROP DATABASE, TRUNCATE TABLE)
+
+**Important runtime rules**:
+- `preview_mutation` must stay read-only and must never execute the mutation being previewed
+- `preview_ddl` is intentionally not exposed until DBFlux has a safe non-mutating schema preview path
+- `select_data` rejects unsupported `joins` explicitly instead of ignoring them
 
 **Policy Engine** (`dbflux_policy`):
 - `PolicyEngine::evaluate()` takes actor, connection, tool, and classification
@@ -520,7 +527,7 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 | `crates/dbflux_core/src/auth/mod.rs`                              | Auth provider contracts                             |
 | `crates/dbflux_core/src/auth/types.rs`                            | Auth profile/session types + migration              |
 | `crates/dbflux_core/src/core/error_formatter.rs`                  | ErrorFormatter trait for driver errors              |
-| `crates/dbflux_core/src/query/generator.rs`                       | QueryGenerator trait, MutationRequest routing       |
+| `crates/dbflux_core/src/query/generator.rs`                       | QueryGenerator trait, mutation/read templates       |
 | `crates/dbflux_core/src/connection/hook.rs`                       | Hook types, HookRunner, phase orchestration         |
 | `crates/dbflux_core/src/query/language_service.rs`                | Dangerous query detection (SQL, MongoDB, Redis)     |
 | `crates/dbflux_core/src/pipeline/mod.rs`                          | Provider-agnostic connect pipeline orchestration    |

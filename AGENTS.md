@@ -275,7 +275,7 @@ Returns `Subscription`; store in `_subscriptions: Vec<Subscription>` field.
 - `dbflux_ipc`: Versioned app-control + driver RPC protocol contracts, framing, socket naming helpers
 - `dbflux_driver_ipc`: RPC client transport and `DbDriver` adapter for external services
 - `dbflux_driver_host`: Standalone RPC host binary that serves drivers over local sockets
-- `dbflux_driver_*`: Implement `DbDriver`, `Connection`, `ErrorFormatter`, and optionally `QueryGenerator` traits
+- `dbflux_driver_*`: Implement `DbDriver`, `Connection`, `ErrorFormatter`, and query generation abstractions (`QueryGenerator` for mutation/read templates when applicable)
 - `dbflux_aws`: AWS auth providers (SSO/shared/static), AWS account discovery, and AWS value providers
 - `dbflux_ssm`: Managed AWS SSM port-forward tunnel factory used by `AccessManager`
 - `dbflux_tunnel_core`: RAII `Tunnel`, `TunnelConnector` trait, `ForwardingConnection<R>` bidirectional forwarder, adaptive sleep
@@ -384,7 +384,7 @@ Key abstractions for UI adaptation:
 2. Implement `DbDriver` and `Connection` from `dbflux_core`
 3. Define `DriverMetadata` with appropriate `DatabaseCategory`, `QueryLanguage`, and `DriverCapabilities`
 4. Implement `ErrorFormatter` for driver-specific error messages
-5. Optionally implement `QueryGenerator` for "Copy as Query" support
+5. Implement `QueryGenerator` when the driver can generate native mutation/read templates for UI previews, copy-as-query, or MCP previews
 6. Add feature flag in `crates/dbflux/Cargo.toml`
 7. Register in `AppState::new()` under `#[cfg(feature = "name")]`
 
@@ -448,6 +448,11 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 - Emits `McpRuntimeEvent` for UI updates
 - Tool catalog defines canonical MCP tools and deferred tools
 
+**Important runtime rules**:
+- `preview_mutation` must stay read-only; it may return generated SQL/query text or a non-mutating plan, but must never execute the mutation being previewed
+- `preview_ddl` is intentionally not exposed from the MCP surface until DBFlux has a truly safe schema-preview path
+- `select_data` must reject unsupported `joins` explicitly rather than ignoring them
+
 **Standalone Server** (`dbflux_mcp_server`):
 - Integrated as subcommand: `dbflux mcp --client-id <id>` for AI clients
 - Communicates via JSON-RPC over stdin/stdout
@@ -482,10 +487,13 @@ MCP provides a preview-before-execute workflow for schema changes:
 
 **Preview Workflow**:
 1. AI agent calls `preview_mutation` with operation parameters
-2. DBFlux generates SQL/query using `QueryGenerator` trait
+2. DBFlux generates SQL/query text or an execution preview using driver-owned generation/planning
 3. Preview returned with SQL, classification, affected objects, and warnings
 4. Agent reviews and decides whether to proceed
 5. Agent calls actual tool (`alter_table`, `create_table`, etc.) if safe
+
+**Current limitation**:
+- DDL preview is not exposed as a standalone MCP tool in this branch. The old `preview_ddl` surface was removed because it could not guarantee a non-mutating preview across drivers.
 
 **Classification Algorithm**: `classify_alter_table_operation()` in `dbflux_core/src/query/classify.rs` determines risk level:
 - `ADD COLUMN` (nullable or with default) → `AdminSafe`
@@ -571,7 +579,7 @@ MCP provides a preview-before-execute workflow for schema changes:
 | `crates/dbflux_core/src/auth/mod.rs`                              | Auth provider contracts                             |
 | `crates/dbflux_core/src/auth/types.rs`                            | Auth profile/session types + migration              |
 | `crates/dbflux_core/src/core/error_formatter.rs`                  | ErrorFormatter trait for driver errors              |
-| `crates/dbflux_core/src/query/generator.rs`                       | QueryGenerator trait, MutationRequest routing       |
+| `crates/dbflux_core/src/query/generator.rs`                       | QueryGenerator trait, mutation/read templates       |
 | `crates/dbflux_core/src/query/column_ref.rs`                      | ColumnRef type for WHERE clause column references   |
 | `crates/dbflux_core/src/query/classify.rs`                        | DDL classification (AdminSafe/Admin/AdminDestructive)|
 | `crates/dbflux_core/src/connection/hook.rs`                       | Hook types, HookRunner, phase orchestration         |

@@ -212,7 +212,7 @@ crates/
       code_generation.rs    # DDL code generation (indexes, types, FKs)
     src/query/              # Query types and language services
       types.rs              # QueryRequest, QueryResult, Row, ColumnMeta
-      generator.rs          # QueryGenerator trait and MutationRequest routing
+      generator.rs          # QueryGenerator trait, mutation/read templates, semantic preview helpers
       language_service.rs   # Dangerous query detection (SQL, MongoDB, Redis)
       safety.rs             # Safe read query detection
       table_browser.rs      # Table browsing state and pagination
@@ -323,7 +323,7 @@ crates/
     src/handlers/           # Tool handlers adapted for standalone operation
   dbflux_policy/            # Policy engine and classification
     src/lib.rs              # Exports for engine, classification, trusted clients
-    src/classification.rs   # ExecutionClassification enum (Metadata/Read/Write/Destructive/Admin)
+    src/classification.rs   # ExecutionClassification enum (Metadata/Read/Write/Destructive/AdminSafe/Admin/AdminDestructive)
     src/engine.rs           # PolicyEngine with PolicyRole and ToolPolicy
     src/trusted_clients.rs  # TrustedClientRegistry for known AI clients
     src/assignments.rs      # ConnectionPolicyAssignment and PolicyBindingScope
@@ -389,7 +389,7 @@ crates/
   - `DriverMetadata`: static driver info (id, name, category, query_language, capabilities, icon)
 - **Error formatting**: `crates/dbflux_core/src/core/error_formatter.rs` provides `ErrorFormatter` trait for driver-specific error messages with context (detail, hint, column, table, constraint).
 - Core domain API: `crates/dbflux_core/src/core/traits.rs` defines `DbDriver`, `Connection`, SQL generation, and cancellation contracts.
-- **Query generation**: `crates/dbflux_core/src/query/generator.rs` defines `QueryGenerator` trait with `supported_categories()` and `generate_mutation(&MutationRequest)`. Each driver crate implements its own generator (SQL via `SqlMutationGenerator`, MongoDB via `MongoShellGenerator`, Redis via `RedisCommandGenerator`, DynamoDB via `DynamoQueryGenerator`). The UI accesses generators through `Connection::query_generator()`.
+- **Query generation**: `crates/dbflux_core/src/query/generator.rs` defines `QueryGenerator` as the driver-owned source of truth for mutation text plus read/query templates. SQL drivers use `SqlMutationGenerator`; MongoDB, Redis, and DynamoDB expose their own native generators. The UI and MCP access generators through `Connection::query_generator()` so previews and copied queries come from the driver rather than a UI-local formatter.
 - Driver forms: `crates/dbflux_core/src/driver/form.rs` defines dynamic form schemas that drivers provide for connection configuration. Supports both form-based and URI connection modes.
 - **Driver/UI decoupling**: The UI never checks driver IDs directly. Instead, it uses `DriverMetadata` abstractions (`DatabaseCategory`, `QueryLanguage`, `DriverCapabilities`) to adapt behavior. This allows new drivers to work automatically without UI changes.
 
@@ -515,8 +515,8 @@ crates/
 DBFlux supports the Model Context Protocol (MCP) for AI client integration with a complete governance layer:
 
 **Classification** (`dbflux_policy/classification.rs`):
-- `ExecutionClassification` enum: Metadata, Read, Write, Destructive, Admin
-- Used to categorize operations by impact level for policy decisions
+- `ExecutionClassification` enum: Metadata, Read, Write, Destructive, AdminSafe, Admin, AdminDestructive
+- Used to categorize operations by impact level for policy decisions and approval flows
 
 **Policy Engine** (`dbflux_policy/engine.rs`):
 - `PolicyEngine::evaluate()` takes actor, connection, tool, and classification
@@ -547,10 +547,11 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 - Tool catalog (`tool_catalog.rs`) defines canonical MCP tools and deferred tools
 
 **Standalone Server** (`dbflux_mcp_server`):
-- Binary `dbflux-mcp-server --client-id <id>` for AI clients
+- Exposed as `dbflux mcp --client-id <id>` for AI clients
 - JSON-RPC over stdin/stdout transport
-- `ConnectionCache` for connection pooling
+- `ConnectionCache` plus serialized connection setup prevent request-scoped PostgreSQL teardown and duplicate-connect races
 - Same governance stack as in-app MCP
+- `preview_mutation` is strictly read-only; unsafe `preview_ddl` is intentionally not exposed until DBFlux has a safe non-mutating DDL preview path
 
 **UI Integration**:
 - `McpApprovalsView` (`ui/document/governance.rs`) for reviewing pending executions
@@ -565,7 +566,7 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 - Query flow: `CodeDocument` submits database queries to a `Connection` implementation when the active `QueryLanguage` supports connection context. The query language (SQL/MongoDB/etc) is determined by driver metadata. Results are rendered in result tabs within the document. Dangerous queries (DELETE without WHERE, DROP, TRUNCATE) trigger confirmation dialogs (handled in `code/execution.rs`).
 - Script flow: `CodeDocument` executes Lua, Python, and Bash documents as script hooks rather than database queries. Script runs create a local output channel, stream live text into a document-owned buffer, and keep the final output as a text result when execution completes.
 - View mode selection: `DataGridPanel` (in `document/data_grid_panel/`) automatically selects appropriate view mode based on database category—Table view for relational databases, Document tree view for document databases like MongoDB and DynamoDB, key-value view for Redis. Context menus include "Copy as Query" for generating driver-specific mutation statements/envelopes via `QueryGenerator`.
-- Query preview: `SqlPreviewModal` (in `overlays/sql_preview_modal.rs`) operates in dual mode—SQL mode with regeneration and options panel, or generic mode for non-SQL languages (MongoDB, Redis) with static text and language-specific syntax highlighting.
+- Query preview: `SqlPreviewModal` (in `overlays/sql_preview_modal.rs`) routes relational read/DML previews through `QueryGenerator` for row, table, and view previews, while DDL stays on `CodeGenerator`. Non-SQL languages (MongoDB, Redis) still use generic preview mode with static text and language-specific syntax highlighting.
 - Schema refresh: `Workspace::refresh_schema` runs `Connection::schema` on a background executor and updates `AppState` (crates/dbflux/src/ui/views/workspace/).
 - Lazy loading: Drivers fetch table/collection metadata (columns, indexes) on-demand when items are expanded in sidebar, not during initial connection (performance optimization for large databases).
 - History flow: completed queries are stored in `HistoryStore`, persisted to JSON, and accessible via the history modal (crates/dbflux_core/src/storage/history.rs).
@@ -585,7 +586,7 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 - PostgreSQL: `tokio-postgres` client with optional TLS, cancellation support, lazy schema loading, and URI connection mode (crates/dbflux_driver_postgres/src/driver.rs).
 - MySQL/MariaDB: `mysql` crate with dual connection architecture (sync for schema, async for queries), lazy schema loading, and URI connection mode (crates/dbflux_driver_mysql/src/driver.rs).
 - SQLite: `rusqlite` file-based connections with lazy schema loading (crates/dbflux_driver_sqlite/src/driver.rs).
-- MongoDB: `mongodb` async driver with BSON handling, query parser for `db.collection.method()` syntax, collection/index discovery, document CRUD, and shell query generation (crates/dbflux_driver_mongodb/src/driver.rs).
+- MongoDB: `mongodb` async driver with BSON handling, query parser for `db.collection.method()` syntax, collection/index discovery, document CRUD, shell query generation, and collection description support for MCP/UI metadata workflows (crates/dbflux_driver_mongodb/src/driver.rs).
 - Redis: `redis` driver with key-value API for all Redis types, variadic commands, keyspace support, key scanning, and command generation (crates/dbflux_driver_redis/src/driver.rs).
 - DynamoDB: `aws-sdk-dynamodb` driver with AWS profile/region support for remote DynamoDB, plus optional endpoint override for local emulators and tests (crates/dbflux_driver_dynamodb/src/driver.rs).
 - AWS auth stack: `dbflux_aws` provides AWS SSO/shared/static auth providers, SSO login orchestration, account/role discovery, and `~/.aws/config` profile write-back for newly saved auth profiles.

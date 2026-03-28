@@ -96,8 +96,8 @@ All six layers run inside the server process on every `tools/call` request. None
 | Schema | `list_collections` | List MongoDB collections |
 | Schema | `describe_object` | Get column/field definitions and indexes for a table |
 | Query | `read_query` | Execute a SELECT or equivalent read-only query |
-| Query | `explain_query` | Show the query execution plan without running it |
-| Query | `preview_mutation` | Dry-run a write query (EXPLAIN only — nothing is executed) |
+| Query | `explain_query` | Show the query execution plan without executing the target mutation |
+| Query | `preview_mutation` | Return a read-only preview/plan for a write query; the mutation is never executed |
 | Scripts | `list_scripts` | List saved scripts in the scripts directory |
 | Scripts | `get_script` | Retrieve the source of a specific saved script |
 | Scripts | `create_script` | Save a new script to the scripts directory |
@@ -118,6 +118,10 @@ Deferred tools (explicitly rejected at request time in v1):
 - `estimate_query_cost`
 - `get_execution_status`
 
+Not exposed in this branch:
+
+- `preview_ddl` — DBFlux intentionally does not expose schema preview until it has a safe, non-mutating implementation across drivers
+
 ## 5. Execution Classes
 
 Policies gate tools at two levels: the tool ID itself and the execution classification. A request is allowed only when both match the policy's allowlist.
@@ -125,10 +129,12 @@ Policies gate tools at two levels: the tool ID itself and the execution classifi
 | Class | What it covers |
 |-------|---------------|
 | `metadata` | Schema inspection — listing databases, tables, and describing objects |
-| `read` | Running read-only queries and fetching data |
+| `read` | Running read-only queries, fetching data, and read-only previews |
 | `write` | Inserting, updating, or running scripts that modify data |
 | `destructive` | DELETE, DROP, TRUNCATE and other irreversible operations |
-| `admin` | Approving/rejecting executions, exporting audit logs, and privileged actions |
+| `admin_safe` | Safe DDL operations such as additive schema changes and index creation |
+| `admin` | Risky DDL operations, approvals, audit export, and privileged actions |
+| `admin_destructive` | Irreversible admin operations such as dropping or truncating schema objects |
 
 ## 6. Built-in Policies and Roles
 
@@ -138,9 +144,9 @@ Three policies and three roles are shipped as immutable built-ins. They are alwa
 
 | ID | Allowed classes | Scope |
 |----|----------------|-------|
-| `builtin/read-only` | metadata, read | All discovery + schema tools; `read_query`, `explain_query`; `list_scripts`, `get_script`; audit read tools |
-| `builtin/write` | metadata, read, write | All read-only tools plus `preview_mutation`; `create_script`, `update_script`, `run_script`; `request_execution`, pending execution reads |
-| `builtin/admin` | metadata, read, write, destructive, admin | All 25 canonical tools |
+| `builtin/read-only` | metadata, read | All discovery + schema tools; read-only query and preview tools; script listing/get; audit read tools |
+| `builtin/write` | metadata, read, write | All read-only tools plus write-capable script and request/approval-submission flows |
+| `builtin/admin` | metadata, read, write, destructive, admin_safe, admin, admin_destructive | All canonical tools exposed in this branch |
 
 ### Built-in roles
 

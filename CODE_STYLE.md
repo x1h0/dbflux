@@ -39,6 +39,7 @@
 - Shared process execution: process-backed hooks and `dbflux.process.run()` should reuse `dbflux_core::execute_streaming_process()` instead of maintaining separate polling or output-capture loops.
 - Live script output: prefer a channel plus a document-owned buffer (`LiveOutputState`) for streamed UI output; do not use shared `Arc<Mutex<String>>` buffers for live rendering.
 - Script languages (`Lua`, `Python`, `Bash`) are handled by `CodeDocument`; they execute as scripts, not DB queries, and should not depend on connection context UI.
+- Driver-owned query generation: textual read/DML previews, copy-as-query flows, and MCP mutation/query previews should go through `Connection::query_generator()` instead of ad hoc UI-side SQL building. Keep `CodeGenerator` focused on DDL.
 - Platform detection: use `platform::floating_window_kind()` for secondary windows (Settings, Connection Manager); use `platform::apply_window_options()` to set min size for X11 compatibility with tiling WMs.
 - MCP governance: all MCP operations go through `McpGovernanceService` trait; policy decisions use `PolicyEngine::evaluate()` with `ExecutionClassification` and return `PolicyDecision`.
 - Settings sections: implement `SettingsSection` trait for keyboard navigation; use `FormSection` trait for form-based sections with 2D grid navigation.
@@ -72,6 +73,7 @@
 - Do propagate or log errors; do not silently discard fallible results (AGENTS.md).
 - Do refactor and modularize functions that grow beyond ~100 lines; treat this as a design smell.
 - Do use abstractions (`DatabaseCategory`, `QueryLanguage`, `DriverCapabilities`) to adapt UI behavior instead of driver-specific conditionals.
+- Do use `QueryGenerator` for copied queries and textual read/DML previews; do not duplicate mutation or read template formatting in the UI.
 - Do keep each `crates/dbflux_driver_*/README.md` updated with current **Features** and **Limitations**.
 - Do use `LuaCapabilities::all_enabled()` for editor-run Lua scripts so the script runner matches the full hook-testing environment.
 - Do treat external service `Hello` metadata/form definition as the source of truth for RPC drivers.
@@ -79,6 +81,7 @@
 - Don't use deprecated GPUI types (`Model<T>`, `View<T>`, etc.) (AGENTS.md).
 - Don't add driver-specific logic in UI code (e.g., `if driver == "mongodb"`). Use capability flags and metadata from `DriverMetadata` instead.
 - Don't import driver crates directly in UI code. All driver interaction goes through `dbflux_core` traits.
+- Don't route DML or read query templates through `CodeGenerator`; reserve `CodeGenerator` for DDL.
 - Don't add a second subprocess execution path for hooks or Lua helpers when the shared streaming executor already fits the job.
 - Don't use `config.json` to define driver metadata/forms for external services; it is runtime launch/socket config only.
 - Do use type-erased handles (`Box<dyn Any + Send + Sync>`) when storing cross-crate RAII objects to avoid circular dependencies.
