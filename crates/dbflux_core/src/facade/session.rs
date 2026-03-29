@@ -8,8 +8,8 @@ use crate::storage::history_manager::HistoryManager;
 use crate::storage::saved_query_manager::SavedQueryManager;
 use crate::storage::secret_manager::SecretManager;
 use crate::{
-    create_secret_store, ConnectionProfile, DangerousQueryKind, DbDriver, ShutdownCoordinator,
-    ShutdownPhase, TaskManager,
+    ConnectionProfile, DangerousQueryKind, DbDriver, ShutdownCoordinator, ShutdownPhase,
+    TaskManager, create_secret_store,
 };
 use log::info;
 use std::collections::HashMap;

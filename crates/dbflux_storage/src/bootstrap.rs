@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use log::info;
 
+use crate::artifacts::ArtifactStore;
 use crate::error::StorageError;
 use crate::migrations;
 use crate::paths;
@@ -17,7 +18,8 @@ use crate::repositories::settings::SettingsRepository;
 use crate::repositories::ssh_tunnel_profiles::SshTunnelProfileRepository;
 use crate::repositories::state::{
     query_history::QueryHistoryRepository, recent_items::RecentItemsRepository,
-    saved_queries::SavedQueriesRepository, ui_state::UiStateRepository,
+    saved_queries::SavedQueriesRepository, sessions::SessionRepository,
+    ui_state::UiStateRepository,
 };
 use crate::sqlite;
 
@@ -33,6 +35,9 @@ pub struct StorageRuntime {
     state_db_path: PathBuf,
     config_db: OwnedConnection,
     state_db: OwnedConnection,
+    /// Manages filesystem artifact paths (scratch/shadow files).
+    /// Content stays on disk; metadata about paths lives in state.db.
+    artifacts: ArtifactStore,
 }
 
 impl StorageRuntime {
@@ -52,6 +57,13 @@ impl StorageRuntime {
         migrations::run_state_migrations(&state_conn)?;
         info!("State database ready at {}", state_db_path.display());
 
+        // Initialize the artifact store (filesystem boundary for scratch/shadow)
+        let artifacts = ArtifactStore::new()?;
+        info!(
+            "Artifact store ready at {}",
+            artifacts.root_path().display()
+        );
+
         // Wrap connections in Arc for shared access
         let config_db = Arc::new(config_conn);
         let state_db = Arc::new(state_conn);
@@ -61,6 +73,7 @@ impl StorageRuntime {
             state_db_path,
             config_db,
             state_db,
+            artifacts,
         })
     }
 
@@ -193,6 +206,26 @@ impl StorageRuntime {
     /// Creates a saved queries repository.
     pub fn saved_queries(&self) -> SavedQueriesRepository {
         SavedQueriesRepository::new(self.state_db())
+    }
+
+    /// Creates a session repository.
+    pub fn sessions(&self) -> SessionRepository {
+        SessionRepository::new(self.state_db())
+    }
+
+    /// Returns the artifact store for scratch/shadow path management.
+    pub fn artifacts(&self) -> &ArtifactStore {
+        &self.artifacts
+    }
+
+    /// Returns the scratch file path for a document ID and extension.
+    pub fn scratch_path(&self, doc_id: &str, extension: &str) -> std::path::PathBuf {
+        self.artifacts.scratch_path(doc_id, extension)
+    }
+
+    /// Returns the shadow file path for a document ID.
+    pub fn shadow_path(&self, doc_id: &str) -> std::path::PathBuf {
+        self.artifacts.shadow_path(doc_id)
     }
 }
 

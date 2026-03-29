@@ -79,10 +79,8 @@ impl CodeDocument {
                 Ok(()) => {
                     cx.update(|cx| {
                         entity.update(cx, |doc, cx| {
-                            if let Some(scratch) = doc.scratch_path.take()
-                                && let Some(store) = doc.app_state.read(cx).session_store()
-                            {
-                                store.delete(&scratch);
+                            if let Some(scratch) = doc.scratch_path.take() {
+                                let _ = std::fs::remove_file(&scratch);
                             }
 
                             doc.path = Some(path.clone());

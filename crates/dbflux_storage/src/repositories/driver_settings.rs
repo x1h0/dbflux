@@ -4,7 +4,7 @@
 //! global settings and driver-specific settings schemas.
 
 use log::info;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 
 use crate::bootstrap::OwnedConnection;

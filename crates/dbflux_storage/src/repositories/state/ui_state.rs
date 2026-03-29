@@ -3,7 +3,7 @@
 //! Stores persisted UI layout preferences (collapse state, scroll positions).
 
 use log::info;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 
 use crate::bootstrap::OwnedConnection;
 use crate::error::StorageError;

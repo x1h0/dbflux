@@ -1,8 +1,8 @@
 use crate::auth::AuthProfile;
 use crate::{ConnectionProfile, JsonStore, ProxyProfile, SshTunnelProfile};
 use log::{error, info};
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use uuid::Uuid;
 
 pub trait Identifiable {

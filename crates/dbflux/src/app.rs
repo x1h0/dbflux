@@ -1,13 +1,12 @@
 use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
     AppConfig, AppConfigStore, AuthProfile, CancelToken, Connection, ConnectionHook,
-    ConnectionHooks, ConnectionMcpGovernance, ConnectionProfile, DbDriver, DbSchemaInfo,
-    DriverKey, EffectiveSettings, FormValues, GeneralSettings, GlobalOverrides,
-    GovernanceSettings, HistoryEntry, HookContext, HookPhase, PolicyRoleConfig, ProfileManager,
-    ProxyProfile, SavedQuery, SchemaForeignKeyInfo, SchemaIndexInfo,
-    SchemaSnapshot, ScriptsDirectory, SecretStore, ServiceConfig, SessionFacade, SessionStore,
-    ShutdownPhase, SshTunnelProfile, TaskId, TaskKind, TaskSnapshot, ToolPolicyConfig,
-    TrustedClientConfig,
+    ConnectionHooks, ConnectionMcpGovernance, ConnectionProfile, DbDriver, DbSchemaInfo, DriverKey,
+    EffectiveSettings, FormValues, GeneralSettings, GlobalOverrides, GovernanceSettings,
+    HistoryEntry, HookContext, HookPhase, PolicyRoleConfig, ProfileManager, ProxyProfile,
+    SavedQuery, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot, ScriptsDirectory,
+    SecretStore, ServiceConfig, SessionFacade, ShutdownPhase, SshTunnelProfile, TaskId, TaskKind,
+    TaskSnapshot, ToolPolicyConfig, TrustedClientConfig,
 };
 use dbflux_driver_ipc::{IpcDriver, driver::IpcDriverLaunchConfig};
 use dbflux_storage::bootstrap::StorageRuntime;
@@ -82,22 +81,21 @@ struct BuiltDrivers {
     hook_definitions: HashMap<String, ConnectionHook>,
 }
 
-    pub struct AppState {
-        pub facade: SessionFacade,
-        pub settings_window: Option<WindowHandle<Root>>,
-        general_settings: GeneralSettings,
-        driver_overrides: HashMap<DriverKey, GlobalOverrides>,
-        driver_settings: HashMap<DriverKey, FormValues>,
-        hook_definitions: HashMap<String, ConnectionHook>,
-        detached_hook_tasks: HashMap<Uuid, HashSet<TaskId>>,
-        auth_provider_registry: AuthProviderRegistry,
-        history_manager: super::history_manager_sqlite::HistoryManager,
-        scripts_directory: Option<ScriptsDirectory>,
-        session_store: Option<SessionStore>,
-        storage_runtime: StorageRuntime,
-        #[cfg(feature = "mcp")]
-        mcp_runtime: McpRuntime,
-    }
+pub struct AppState {
+    pub facade: SessionFacade,
+    pub settings_window: Option<WindowHandle<Root>>,
+    general_settings: GeneralSettings,
+    driver_overrides: HashMap<DriverKey, GlobalOverrides>,
+    driver_settings: HashMap<DriverKey, FormValues>,
+    hook_definitions: HashMap<String, ConnectionHook>,
+    detached_hook_tasks: HashMap<Uuid, HashSet<TaskId>>,
+    auth_provider_registry: AuthProviderRegistry,
+    history_manager: super::history_manager_sqlite::HistoryManager,
+    scripts_directory: Option<ScriptsDirectory>,
+    storage_runtime: StorageRuntime,
+    #[cfg(feature = "mcp")]
+    mcp_runtime: McpRuntime,
+}
 
 impl AppState {
     pub fn new() -> Self {
@@ -134,14 +132,12 @@ impl AppState {
             .inspect_err(|e| log::warn!("Failed to initialize scripts directory: {}", e))
             .ok();
 
-        let session_store = SessionStore::new()
-            .inspect_err(|e| log::warn!("Failed to initialize session store: {}", e))
-            .ok();
-
         let profile_manager = ProfileManager::with_profiles(profiles, None);
-        let ssh_manager = dbflux_core::SshTunnelManager::with_items(ssh_tunnels, None, "SSH tunnel profiles");
+        let ssh_manager =
+            dbflux_core::SshTunnelManager::with_items(ssh_tunnels, None, "SSH tunnel profiles");
         let proxy_manager = dbflux_core::ProxyManager::with_items(proxies, None, "proxy profiles");
-        let auth_manager = dbflux_core::AuthProfileManager::with_items(auth_profiles, None, "auth profiles");
+        let auth_manager =
+            dbflux_core::AuthProfileManager::with_items(auth_profiles, None, "auth profiles");
 
         let facade = SessionFacade::with_custom_managers(
             drivers,
@@ -197,7 +193,6 @@ impl AppState {
             auth_provider_registry,
             history_manager,
             scripts_directory,
-            session_store,
             storage_runtime,
             #[cfg(feature = "mcp")]
             mcp_runtime,
@@ -349,7 +344,10 @@ impl AppState {
         )
     }
 
-    fn launch_rpc_services(drivers: &mut HashMap<String, Arc<dyn DbDriver>>, services: Vec<ServiceConfig>) {
+    fn launch_rpc_services(
+        drivers: &mut HashMap<String, Arc<dyn DbDriver>>,
+        services: Vec<ServiceConfig>,
+    ) {
         for service in services {
             if !service.enabled {
                 log::info!("Skipping disabled service '{}'", service.socket_id);
@@ -1102,10 +1100,16 @@ impl AppState {
         }
     }
 
-    // --- SessionStore ---
+    // --- ArtifactStore (filesystem boundary for scratch/shadow) ---
 
-    pub fn session_store(&self) -> Option<&SessionStore> {
-        self.session_store.as_ref()
+    /// Returns the scratch file path for a new document with the given id and extension.
+    pub fn scratch_path(&self, doc_id: &str, extension: &str) -> std::path::PathBuf {
+        self.storage_runtime.scratch_path(doc_id, extension)
+    }
+
+    /// Returns the shadow file path for a document with the given id.
+    pub fn shadow_path(&self, doc_id: &str) -> std::path::PathBuf {
+        self.storage_runtime.shadow_path(doc_id)
     }
 
     // --- TaskManager ---
@@ -1475,7 +1479,8 @@ impl AppState {
 
     pub fn update_general_settings(&mut self, settings: GeneralSettings) {
         // Apply max_history_entries to the SQLite-backed history manager
-        self.history_manager.set_max_entries(settings.max_history_entries);
+        self.history_manager
+            .set_max_entries(settings.max_history_entries);
 
         self.general_settings = settings;
     }

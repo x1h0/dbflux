@@ -13,6 +13,7 @@ license.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
+dbflux_core.workspace = true
 dirs.workspace = true
 rusqlite.workspace = true
 thiserror.workspace = true

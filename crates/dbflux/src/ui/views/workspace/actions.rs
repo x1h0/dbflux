@@ -887,16 +887,13 @@ impl Workspace {
         self.set_focus(FocusTarget::Document, window, cx);
     }
 
-    // === Session persistence ===
-
-    /// Write the current tab state to the session manifest.
+    /// Write the current tab state to the session manifest (state.db-backed).
     pub(super) fn write_session_manifest(&self, cx: &App) {
-        use dbflux_core::{SessionManifest, SessionTab, SessionTabKind};
+        use dbflux_core::SessionTab;
 
-        let Some(store) = self.app_state.read(cx).session_store() else {
-            return;
-        };
+        let runtime = self.app_state.read(cx).storage_runtime();
 
+        let repo = runtime.sessions();
         let manager = self.tab_manager.read(cx);
         let mut tabs = Vec::new();
 
@@ -907,26 +904,32 @@ impl Workspace {
 
             let doc = entity.read(cx);
 
-            let kind = if let Some(path) = doc.path() {
-                SessionTabKind::FileBacked {
-                    file_path: path.clone(),
-                    shadow_path: doc.shadow_path().cloned(),
-                }
-            } else if let Some(scratch) = doc.scratch_path() {
-                SessionTabKind::Scratch {
-                    scratch_path: scratch.clone(),
-                    title: doc.title(),
-                }
+            let kind_str = if let Some(_path) = doc.path() {
+                "FileBacked".to_string()
+            } else if doc.scratch_path().is_some() {
+                "Scratch".to_string()
             } else {
                 continue;
             };
 
-            tabs.push(SessionTab {
-                id: doc.id().0.to_string(),
-                kind,
-                language: SessionTab::language_key(doc.query_language()),
-                exec_ctx: doc.exec_ctx().clone(),
-            });
+            let scratch_path_str: Option<std::path::PathBuf> = doc.scratch_path().cloned();
+            let shadow_path_str: Option<std::path::PathBuf> = doc.shadow_path().cloned();
+            let file_path_str: Option<std::path::PathBuf> = doc.path().cloned();
+
+            tabs.push(
+                dbflux_storage::repositories::state::sessions::WorkspaceTab {
+                    id: doc.id().0.to_string(),
+                    tab_kind: kind_str,
+                    language: SessionTab::language_key(doc.query_language()),
+                    exec_ctx: doc.exec_ctx().clone(),
+                    scratch_path: scratch_path_str,
+                    shadow_path: shadow_path_str,
+                    file_path: file_path_str,
+                    title: doc.title(),
+                    position: tabs.len(),
+                    is_pinned: false,
+                },
+            );
         }
 
         let active_index = manager.active_id().and_then(|active_id| {
@@ -934,33 +937,33 @@ impl Workspace {
                 .position(|tab| tab.id == active_id.0.to_string())
         });
 
-        let manifest = SessionManifest {
+        let manifest = dbflux_storage::repositories::state::sessions::WorkspaceSessionManifest {
             version: 1,
             active_index,
             tabs,
         };
 
-        if let Err(e) = store.save_manifest(&manifest) {
+        if let Err(e) = repo.save_workspace_session(&manifest) {
             log::error!("Failed to save session manifest: {}", e);
         }
     }
 
-    /// Restore tabs from the session manifest on startup.
+    /// Restore tabs from the session manifest on startup (state.db-backed).
     pub(super) fn restore_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        use dbflux_core::SessionTabKind;
-
         let manifest = {
             let app = self.app_state.read(cx);
-            let Some(store) = app.session_store() else {
-                return;
-            };
+            let runtime = app.storage_runtime();
+            let repo = runtime.sessions();
+            let artifacts = runtime.artifacts();
 
-            let Some(manifest) = store.load_manifest() else {
-                return;
-            };
-
-            store.cleanup_orphans(&manifest);
-            manifest
+            match repo.restore_session(artifacts) {
+                Ok(Some(session)) => session,
+                Ok(None) => return,
+                Err(e) => {
+                    log::warn!("Failed to restore session from state.db: {}", e);
+                    return;
+                }
+            }
         };
 
         if manifest.tabs.is_empty() {
@@ -968,52 +971,72 @@ impl Workspace {
         }
 
         for tab in &manifest.tabs {
-            let manifest_language = tab.query_language();
-
-            // Old manifests may have stored script tabs as "sql". Re-infer
-            // the language from the file path or scratch title so that
-            // .lua/.py/.sh files restore with the correct editor mode.
-            let language = match &tab.kind {
-                SessionTabKind::FileBacked { file_path, .. } => {
-                    QueryLanguage::from_path(file_path).unwrap_or(manifest_language)
-                }
-                SessionTabKind::Scratch { title, .. } => {
-                    let title_path = std::path::Path::new(title.as_str());
-                    QueryLanguage::from_path(title_path).unwrap_or(manifest_language)
-                }
+            let manifest_language = match tab.language.as_str() {
+                "sql" => dbflux_core::QueryLanguage::Sql,
+                "mongo" => dbflux_core::QueryLanguage::MongoQuery,
+                "redis" => dbflux_core::QueryLanguage::RedisCommands,
+                "cypher" => dbflux_core::QueryLanguage::Cypher,
+                "lua" => dbflux_core::QueryLanguage::Lua,
+                "python" => dbflux_core::QueryLanguage::Python,
+                "bash" => dbflux_core::QueryLanguage::Bash,
+                _ => dbflux_core::QueryLanguage::Sql,
             };
 
-            let (content, path, scratch_path, shadow_path) = match &tab.kind {
-                SessionTabKind::Scratch {
-                    scratch_path,
-                    title: _,
-                } => {
-                    let content = std::fs::read_to_string(scratch_path).unwrap_or_default();
-                    (content, None, Some(scratch_path.clone()), None)
+            let language = match &tab.tab_kind[..] {
+                "FileBacked" => {
+                    if let Some(ref fp) = tab.file_path {
+                        dbflux_core::QueryLanguage::from_path(fp).unwrap_or(manifest_language)
+                    } else {
+                        manifest_language
+                    }
                 }
-                SessionTabKind::FileBacked {
-                    file_path,
-                    shadow_path,
-                } => {
-                    let content = if let Some(shadow) = shadow_path {
-                        // Shadow exists: check for conflict
-                        let shadow_content = std::fs::read_to_string(shadow).unwrap_or_default();
-                        let original_modified = std::fs::metadata(file_path)
-                            .ok()
-                            .and_then(|m| m.modified().ok());
-                        let shadow_modified = std::fs::metadata(shadow)
-                            .ok()
-                            .and_then(|m| m.modified().ok());
+                "Scratch" => {
+                    let title_path = std::path::Path::new(&tab.title);
+                    dbflux_core::QueryLanguage::from_path(title_path).unwrap_or(manifest_language)
+                }
+                _ => manifest_language,
+            };
+
+            let (content, path, scratch_path, shadow_path) = match tab.tab_kind.as_str() {
+                "Scratch" => {
+                    let sp = match tab.scratch_path.as_ref() {
+                        Some(p) => p.clone(),
+                        None => {
+                            log::warn!(
+                                "Scratch tab '{}' has no scratch_path in restored session — skipping",
+                                tab.title
+                            );
+                            continue;
+                        }
+                    };
+                    let content = std::fs::read_to_string(&sp).unwrap_or_default();
+                    (content, None, Some(sp), None)
+                }
+                "FileBacked" => {
+                    let fp = match tab.file_path.as_ref() {
+                        Some(p) => p.clone(),
+                        None => {
+                            log::warn!(
+                                "FileBacked tab '{}' has no file_path in restored session — skipping",
+                                tab.title
+                            );
+                            continue;
+                        }
+                    };
+                    let content = if let Some(ref sh) = tab.shadow_path {
+                        let shadow_content = std::fs::read_to_string(sh).unwrap_or_default();
+                        let original_modified =
+                            std::fs::metadata(&fp).ok().and_then(|m| m.modified().ok());
+                        let shadow_modified =
+                            std::fs::metadata(sh).ok().and_then(|m| m.modified().ok());
 
                         if let (Some(orig_t), Some(shad_t)) = (original_modified, shadow_modified) {
                             if orig_t > shad_t {
-                                // Original was modified after shadow — external edit.
-                                // Prefer the original file content (user can undo).
                                 log::warn!(
                                     "External edit detected for {}: using original file",
-                                    file_path.display()
+                                    fp.display()
                                 );
-                                std::fs::read_to_string(file_path).unwrap_or(shadow_content)
+                                std::fs::read_to_string(&fp).unwrap_or(shadow_content)
                             } else {
                                 shadow_content
                             }
@@ -1021,29 +1044,33 @@ impl Workspace {
                             shadow_content
                         }
                     } else {
-                        std::fs::read_to_string(file_path).unwrap_or_default()
+                        std::fs::read_to_string(&fp).unwrap_or_default()
                     };
 
-                    (content, Some(file_path.clone()), None, shadow_path.clone())
+                    (content, Some(fp), None, tab.shadow_path.clone())
                 }
+                _ => continue,
             };
 
-            let connection_id = tab
-                .exec_ctx
+            let exec_ctx_json = tab.exec_ctx_json.as_str();
+            let exec_ctx: dbflux_core::ExecutionContext = serde_json::from_str(exec_ctx_json)
+                .unwrap_or_else(|_| dbflux_core::ExecutionContext::default());
+
+            let connection_id = exec_ctx
                 .connection_id
                 .filter(|id| self.app_state.read(cx).connections().contains_key(id));
 
-            let exec_ctx = tab.exec_ctx.clone();
-
             let body = Self::strip_annotation_header(&content, &language);
 
-            let title = match &tab.kind {
-                SessionTabKind::Scratch { title, .. } => title.clone(),
-                SessionTabKind::FileBacked { file_path, .. } => file_path
-                    .file_name()
+            let title = if tab.tab_kind == "Scratch" {
+                tab.title.clone()
+            } else {
+                tab.file_path
+                    .as_ref()
+                    .and_then(|p| p.file_name())
                     .and_then(|n| n.to_str())
                     .unwrap_or("Untitled")
-                    .to_string(),
+                    .to_string()
             };
 
             let doc = cx.new(|cx| {
@@ -1055,7 +1082,7 @@ impl Workspace {
                     cx,
                 );
 
-                doc.set_session_paths(scratch_path, shadow_path);
+                doc.set_session_paths(scratch_path.clone(), shadow_path.clone());
 
                 if let Some(p) = path {
                     doc = doc.with_path(p);
@@ -1064,14 +1091,7 @@ impl Workspace {
                 doc = doc.with_title(title).with_exec_ctx(exec_ctx, cx);
                 doc.set_content(body, window, cx);
 
-                // If there was a shadow, the tab had unsaved changes — mark dirty
-                if matches!(
-                    &tab.kind,
-                    SessionTabKind::FileBacked {
-                        shadow_path: Some(_),
-                        ..
-                    }
-                ) {
+                if tab.tab_kind == "FileBacked" && tab.shadow_path.is_some() {
                     doc.restore_dirty(cx);
                 }
 

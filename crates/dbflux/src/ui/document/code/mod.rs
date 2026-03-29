@@ -310,9 +310,11 @@ impl CodeDocument {
 
         let doc_id = DocumentId::new();
 
-        let scratch_path = app_state.read(cx).session_store().map(|store| {
-            store.scratch_path(&doc_id.0.to_string(), query_language.default_extension())
-        });
+        let scratch_path = Some(
+            app_state
+                .read(cx)
+                .scratch_path(&doc_id.0.to_string(), query_language.default_extension()),
+        );
 
         let initial_database = connection_id.and_then(|id| {
             let connections = app_state.read(cx).connections();
@@ -524,11 +526,8 @@ impl CodeDocument {
             self.is_dirty = true;
 
             if self.is_file_backed() && self.shadow_path.is_none() {
-                self.shadow_path = self
-                    .app_state
-                    .read(cx)
-                    .session_store()
-                    .map(|store| store.shadow_path(&self.id.0.to_string()));
+                self.shadow_path =
+                    Some(self.app_state.read(cx).shadow_path(&self.id.0.to_string()));
             }
 
             cx.emit(DocumentEvent::MetaChanged);
@@ -542,10 +541,8 @@ impl CodeDocument {
             self.original_content = self.input_state.read(cx).value().to_string();
             self._auto_save_debounce = None;
 
-            if let Some(shadow) = self.shadow_path.take()
-                && let Some(store) = self.app_state.read(cx).session_store()
-            {
-                store.delete(&shadow);
+            if let Some(shadow) = self.shadow_path.take() {
+                let _ = std::fs::remove_file(&shadow);
             }
 
             cx.emit(DocumentEvent::MetaChanged);

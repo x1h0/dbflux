@@ -140,6 +140,7 @@ fn run_initial_migration_in(conn: &Connection) -> Result<(), StorageError> {
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
             kind TEXT NOT NULL DEFAULT 'workspace',
+            active_index INTEGER,
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             updated_at TEXT NOT NULL DEFAULT (datetime('now')),
             last_opened_at TEXT NOT NULL DEFAULT (datetime('now')),

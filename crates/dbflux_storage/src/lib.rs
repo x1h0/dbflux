@@ -1,3 +1,4 @@
+pub mod artifacts;
 pub mod bootstrap;
 pub mod error;
 pub mod migrations;
@@ -5,10 +6,12 @@ pub mod paths;
 pub mod repositories;
 pub mod sqlite;
 
-pub use bootstrap::OwnedConnection;
+pub use artifacts::ArtifactStore;
+pub use bootstrap::{OwnedConnection, StorageRuntime};
 pub use repositories::state::{
     query_history::QueryHistoryRepository, recent_items::RecentItemsRepository,
-    saved_queries::SavedQueriesRepository, ui_state::UiStateRepository,
+    saved_queries::SavedQueriesRepository, sessions::SessionRepository,
+    ui_state::UiStateRepository,
 };
 pub use repositories::{
     auth_profiles::AuthProfileRepository, connection_profiles::ConnectionProfileRepository,
