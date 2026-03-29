@@ -1,9 +1,13 @@
 pub mod artifacts;
 pub mod bootstrap;
+pub mod diagnostics;
 pub mod error;
+pub mod export;
+pub mod legacy;
 pub mod migrations;
 pub mod paths;
 pub mod repositories;
+pub mod reset;
 pub mod sqlite;
 
 pub use artifacts::ArtifactStore;

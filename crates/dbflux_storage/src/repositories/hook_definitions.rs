@@ -4,7 +4,7 @@
 //! to connection profiles.
 
 use log::info;
-use rusqlite::{Connection, params};
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -173,6 +173,59 @@ impl HookDefinitionRepository {
             })?;
 
         info!("Inserted hook definition: {}", hook.name);
+        Ok(())
+    }
+
+    /// Upserts a hook definition (insert or update by ID).
+    pub fn upsert(&self, hook: &HookDefinitionDto) -> Result<(), StorageError> {
+        self.conn()
+            .execute(
+                r#"
+                INSERT INTO hook_definitions (
+                    id, name, kind_json, execution_mode, script_ref, command_json,
+                    cwd, env_json, inherit_env, timeout_ms, ready_signal, on_failure,
+                    enabled, created_at, updated_at
+                ) VALUES (
+                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
+                    datetime('now'), datetime('now')
+                )
+                ON CONFLICT(id) DO UPDATE SET
+                    name = excluded.name,
+                    kind_json = excluded.kind_json,
+                    execution_mode = excluded.execution_mode,
+                    script_ref = excluded.script_ref,
+                    command_json = excluded.command_json,
+                    cwd = excluded.cwd,
+                    env_json = excluded.env_json,
+                    inherit_env = excluded.inherit_env,
+                    timeout_ms = excluded.timeout_ms,
+                    ready_signal = excluded.ready_signal,
+                    on_failure = excluded.on_failure,
+                    enabled = excluded.enabled,
+                    updated_at = datetime('now')
+                "#,
+                params![
+                    hook.id,
+                    hook.name,
+                    hook.kind_json,
+                    hook.execution_mode,
+                    hook.script_ref,
+                    hook.command_json,
+                    hook.cwd,
+                    hook.env_json,
+                    hook.inherit_env as i32,
+                    hook.timeout_ms,
+                    hook.ready_signal,
+                    hook.on_failure,
+                    hook.enabled as i32,
+                ],
+            )
+            .map_err(|source| StorageError::Sqlite {
+                path: "config.db".into(),
+                source,
+            })?;
+
+        info!("Upserted hook definition: {}", hook.name);
         Ok(())
     }
 

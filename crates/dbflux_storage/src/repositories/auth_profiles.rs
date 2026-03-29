@@ -4,7 +4,7 @@
 //! cloud-hosted databases (e.g., AWS SSO, Azure AD).
 
 use log::info;
-use rusqlite::{Connection, params};
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -179,6 +179,30 @@ impl AuthProfileRepository {
         }
 
         Ok(())
+    }
+
+    /// Inserts a new auth profile from the core AuthProfile type.
+    pub fn insert_auth_profile(
+        &self,
+        profile: &dbflux_core::AuthProfile,
+    ) -> Result<(), StorageError> {
+        let fields_json =
+            serde_json::to_string(&profile.fields).map_err(|e| StorageError::Sqlite {
+                path: "config.db".into(),
+                source: rusqlite::Error::InvalidParameterName(e.to_string()),
+            })?;
+
+        let dto = AuthProfileDto {
+            id: profile.id.to_string(),
+            name: profile.name.clone(),
+            provider_id: profile.provider_id.clone(),
+            fields_json,
+            enabled: profile.enabled,
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+
+        self.insert(&dto)
     }
 
     /// Deletes an auth profile by ID.

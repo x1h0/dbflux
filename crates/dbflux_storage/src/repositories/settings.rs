@@ -3,7 +3,7 @@
 //! App settings store key-value pairs for global configuration.
 
 use log::info;
-use rusqlite::{Connection, params};
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
 use crate::bootstrap::OwnedConnection;
@@ -93,6 +93,48 @@ impl SettingsRepository {
             })?;
 
         Ok(count)
+    }
+
+    /// Returns all settings as key-value pairs.
+    pub fn all(&self) -> Result<Vec<SettingDto>, StorageError> {
+        let mut stmt = self
+            .conn()
+            .prepare("SELECT key, value_json, updated_at FROM app_settings ORDER BY key")
+            .map_err(|source| StorageError::Sqlite {
+                path: "config.db".into(),
+                source,
+            })?;
+
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(SettingDto {
+                    key: row.get(0)?,
+                    value_json: row.get(1)?,
+                    updated_at: row.get(2)?,
+                })
+            })
+            .map_err(|source| StorageError::Sqlite {
+                path: "config.db".into(),
+                source,
+            })?;
+
+        let mut result = Vec::new();
+        let mut last_err = None;
+        for row in rows {
+            match row {
+                Ok(r) => result.push(r),
+                Err(e) => last_err = Some(e),
+            }
+        }
+
+        if let Some(e) = last_err {
+            return Err(StorageError::Sqlite {
+                path: "config.db".into(),
+                source: e,
+            });
+        }
+
+        Ok(result)
     }
 }
 

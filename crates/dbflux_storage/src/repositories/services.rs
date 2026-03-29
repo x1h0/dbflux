@@ -4,7 +4,7 @@
 //! environment variables) for launching managed driver hosts.
 
 use log::info;
-use rusqlite::{Connection, params};
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
 use crate::bootstrap::OwnedConnection;
@@ -182,6 +182,39 @@ impl ServiceRepository {
             info!("Updated service: {}", service.socket_id);
         }
 
+        Ok(())
+    }
+
+    /// Upserts a service (insert or update).
+    pub fn upsert(&self, service: &ServiceDto) -> Result<(), StorageError> {
+        self.conn()
+            .execute(
+                r#"
+                INSERT INTO services (
+                    socket_id, enabled, command, args_json, env_json, startup_timeout_ms, created_at, updated_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'), datetime('now'))
+                ON CONFLICT(socket_id) DO UPDATE SET
+                    enabled = excluded.enabled,
+                    command = excluded.command,
+                    args_json = excluded.args_json,
+                    env_json = excluded.env_json,
+                    startup_timeout_ms = excluded.startup_timeout_ms,
+                    updated_at = datetime('now')
+                "#,
+                params![
+                    service.socket_id,
+                    service.enabled as i32,
+                    service.command,
+                    service.args_json,
+                    service.env_json,
+                    service.startup_timeout_ms,
+                ],
+            )
+            .map_err(|source| StorageError::Sqlite {
+                path: "config.db".into(),
+                source,
+            })?;
+        info!("Upserted service: {}", service.socket_id);
         Ok(())
     }
 

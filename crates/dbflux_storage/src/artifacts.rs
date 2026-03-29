@@ -30,6 +30,9 @@ pub struct ArtifactStore {
 
 impl ArtifactStore {
     /// Creates an `ArtifactStore` for the default DBFlux data directory.
+    ///
+    /// Calls `paths::data_dir()` which resolves `~/.local/share/dbflux/`.
+    /// Use `for_root()` for test/alternate data roots.
     pub fn new() -> Result<Self, StorageError> {
         let data_dir = paths::data_dir()?;
         let root = data_dir.join(SESSIONS_SUBDIR);
@@ -166,7 +169,6 @@ impl Default for ArtifactStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
 
     fn temp_store() -> (tempfile::TempDir, ArtifactStore) {
         let dir = tempfile::tempdir().unwrap();

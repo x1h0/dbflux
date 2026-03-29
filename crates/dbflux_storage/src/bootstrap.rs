@@ -6,6 +6,7 @@ use log::info;
 
 use crate::artifacts::ArtifactStore;
 use crate::error::StorageError;
+use crate::legacy::LegacyImportResult;
 use crate::migrations;
 use crate::paths;
 use crate::repositories::auth_profiles::AuthProfileRepository;
@@ -57,8 +58,14 @@ impl StorageRuntime {
         migrations::run_state_migrations(&state_conn)?;
         info!("State database ready at {}", state_db_path.display());
 
-        // Initialize the artifact store (filesystem boundary for scratch/shadow)
-        let artifacts = ArtifactStore::new()?;
+        // Initialize the artifact store using the parent directory of state.db as data root.
+        // This ensures test/temp runtimes use isolated directories instead of resolving
+        // the real artifact root from the user home directory.
+        let sessions_root = state_db_path
+            .parent()
+            .map(|p| p.join("sessions"))
+            .unwrap_or_else(|| PathBuf::from("sessions"));
+        let artifacts = ArtifactStore::for_root(sessions_root.clone())?;
         info!(
             "Artifact store ready at {}",
             artifacts.root_path().display()
@@ -227,6 +234,24 @@ impl StorageRuntime {
     pub fn shadow_path(&self, doc_id: &str) -> std::path::PathBuf {
         self.artifacts.shadow_path(doc_id)
     }
+
+    /// Runs legacy JSON import using the provided directory roots.
+    ///
+    /// The directories are used only to locate legacy JSON source files.
+    /// This method is exposed on `StorageRuntime` so tests and bootstrap code
+    /// can call it with arbitrary roots (avoiding global `dirs::*` lookups).
+    pub fn run_legacy_import(
+        &self,
+        config_dir: &PathBuf,
+        data_dir: &PathBuf,
+    ) -> LegacyImportResult {
+        crate::legacy::run_legacy_import(
+            self.config_db.clone(),
+            self.state_db.clone(),
+            config_dir,
+            data_dir,
+        )
+    }
 }
 
 /// Bootstraps the internal storage layer.
@@ -238,16 +263,37 @@ impl StorageRuntime {
 /// 1. Resolves `~/.config/dbflux/` (creating if needed) and `~/.local/share/dbflux/` (creating if needed).
 /// 2. Opens (or creates) `config.db` in the config directory with migrations applied.
 /// 3. Opens (or creates) `state.db` in the data directory with migrations applied.
-/// 4. Returns a [`StorageRuntime`] that can hand out connections on demand.
+/// 4. Runs legacy JSON import for any existing data (idempotent, restart-safe).
+///    If import fails, the error is surfaced and the runtime is NOT returned.
+/// 5. Returns a [`StorageRuntime`] that can hand out connections on demand.
 #[allow(clippy::result_large_err)]
 pub fn initialize() -> Result<StorageRuntime, StorageError> {
     let config_db_path = paths::config_db_path()?;
     let state_db_path = paths::state_db_path()?;
+    let config_dir = paths::config_data_dir()?;
+    let data_dir = paths::data_dir()?;
 
     info!("Config database path: {}", config_db_path.display());
     info!("State database path: {}", state_db_path.display());
 
-    StorageRuntime::for_path(config_db_path, state_db_path)
+    let runtime = StorageRuntime::for_path(config_db_path.clone(), state_db_path.clone())?;
+
+    // Run legacy import if needed (idempotent via system_metadata markers)
+    let import_result = runtime.run_legacy_import(&config_dir, &data_dir);
+    if import_result.any_imported() {
+        info!(
+            "Legacy import complete: {} items imported",
+            import_result.total_imported()
+        );
+    }
+    if import_result.has_errors() {
+        // Surface critical import failures rather than silently continuing.
+        // Wrap the first error as the cause.
+        let first_error = import_result.errors.join("; ");
+        return Err(StorageError::LegacyImportFailed(first_error));
+    }
+
+    Ok(runtime)
 }
 
 #[cfg(test)]
@@ -283,11 +329,11 @@ mod tests {
         let runtime = StorageRuntime::in_memory().expect("bootstrap should succeed");
         let conn = runtime.open_state_db().expect("should open state db");
 
-        // State db migrations have run, so user_version should be 1 (INITIAL_VERSION)
+        // State db migrations have run, so user_version should be 2 (INITIAL_VERSION + SYSTEM_METADATA_VERSION)
         let version: i64 = conn
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 1);
+        assert_eq!(version, 2);
     }
 
     #[test]

@@ -18,6 +18,9 @@ pub mod state;
 pub mod config_migrations {
     /// Initial migration version for config.db.
     pub const INITIAL_VERSION: u32 = 1;
+    /// Version 2: adds system_metadata table for existing installs
+    /// that ran the v1 migration before this table was added.
+    pub const SYSTEM_METADATA_VERSION: u32 = 2;
 }
 
 /// Runs all pending config database migrations.
@@ -67,6 +70,58 @@ pub fn run_config_migrations(conn: &Connection) -> Result<(), StorageError> {
         info!(
             "Config initial migration {} applied successfully",
             config_migrations::INITIAL_VERSION
+        );
+    }
+
+    // Additive v2 migration: add system_metadata for existing installs that
+    // ran the v1 migration before this table was added.
+    if current_version < config_migrations::SYSTEM_METADATA_VERSION {
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|source| StorageError::Sqlite {
+                path: "config.db".into(),
+                source,
+            })?;
+
+        tx.execute(
+            "CREATE TABLE IF NOT EXISTS system_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT (datetime('now')))",
+            [],
+        )
+        .map_err(|source| StorageError::Sqlite {
+            path: "config.db".into(),
+            source,
+        })?;
+
+        tx.pragma_update(
+            None,
+            "user_version",
+            config_migrations::SYSTEM_METADATA_VERSION,
+        )
+        .map_err(|source| StorageError::Sqlite {
+            path: "config.db".into(),
+            source,
+        })?;
+
+        tx.execute(
+            "INSERT INTO schema_migrations (version, name) VALUES (?1, ?2)",
+            rusqlite::params![
+                config_migrations::SYSTEM_METADATA_VERSION,
+                "0002_system_metadata"
+            ],
+        )
+        .map_err(|source| StorageError::Sqlite {
+            path: "config.db".into(),
+            source,
+        })?;
+
+        tx.commit().map_err(|source| StorageError::Sqlite {
+            path: "config.db".into(),
+            source,
+        })?;
+
+        info!(
+            "Config system_metadata migration {} applied successfully",
+            config_migrations::SYSTEM_METADATA_VERSION
         );
     }
 
@@ -285,13 +340,13 @@ mod tests {
 
         run_config_migrations(&conn).expect("migration should run");
 
-        // Verify migration was recorded
+        // Verify migration was recorded (0001_initial + 0002_system_metadata)
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(count, 1);
+        assert_eq!(count, 2);
 
         // Verify key tables exist
         conn.execute("SELECT 1 FROM app_settings", [])
@@ -329,13 +384,13 @@ mod tests {
         // Second run should succeed (idempotent)
         run_config_migrations(&conn).expect("second migration should be idempotent");
 
-        // Still only one migration recorded
+        // Still only two migrations recorded (0001_initial + 0002_system_metadata)
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(count, 1);
+        assert_eq!(count, 2);
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(path.with_extension("sqlite-wal"));
