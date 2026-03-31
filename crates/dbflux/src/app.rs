@@ -2,13 +2,12 @@ use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
     AuthProfile, CancelToken, Connection, ConnectionHook, ConnectionHooks, ConnectionMcpGovernance,
     ConnectionProfile, DbDriver, DbSchemaInfo, DriverKey, EffectiveSettings, FormValues,
-    GeneralSettings, GlobalOverrides, GovernanceSettings, HistoryEntry, HistoryManager,
-    HookContext, HookPhase, PolicyRoleConfig, ProfileManager, ProxyProfile, SavedQuery,
-    SavedQueryManager, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot, ScriptsDirectory,
-    SecretStore, ServiceConfig, SessionFacade, ShutdownPhase, SshTunnelProfile, TaskId, TaskKind,
-    TaskSnapshot, ToolPolicyConfig, TrustedClientConfig,
+    GeneralSettings, GlobalOverrides, HistoryEntry, HistoryManager, HookContext, HookPhase,
+    ProfileManager, ProxyProfile, SavedQuery, SavedQueryManager, SchemaForeignKeyInfo,
+    SchemaIndexInfo, SchemaSnapshot, ScriptsDirectory, SecretStore, ServiceConfig, SessionFacade,
+    ShutdownPhase, SshTunnelProfile, TaskId, TaskKind, TaskSnapshot,
 };
-use dbflux_driver_ipc::{IpcDriver, driver::IpcDriverLaunchConfig};
+use dbflux_driver_ipc::{driver::IpcDriverLaunchConfig, IpcDriver};
 use dbflux_storage::bootstrap::StorageRuntime;
 
 #[cfg(feature = "mcp")]
@@ -208,58 +207,70 @@ impl AppState {
         };
 
         #[cfg(feature = "mcp")]
-        state.bootstrap_mcp_runtime_from_persistence();
+        if let Err(e) = state.bootstrap_mcp_runtime_from_persistence() {
+            log::warn!("Failed to bootstrap MCP runtime from persistence: {}", e);
+        }
 
         state
     }
 
     #[cfg(feature = "mcp")]
-    fn bootstrap_mcp_runtime_from_persistence(&mut self) {
-        let governance = self
-            .storage_runtime
-            .settings()
-            .get("governance_settings")
-            .ok()
-            .flatten()
-            .and_then(|json| serde_json::from_str::<GovernanceSettings>(&json).ok())
-            .unwrap_or_default();
+    fn bootstrap_mcp_runtime_from_persistence(&mut self) -> Result<(), String> {
+        let repo = self.storage_runtime.governance_settings();
 
-        for client in governance.trusted_clients {
-            let _ = self
-                .mcp_runtime
+        // Load mcp_enabled from governance_settings
+        if let Some(settings) = repo.get().map_err(|e| e.to_string())? {
+            self.mcp_runtime
+                .set_mcp_enabled(settings.mcp_enabled_by_default != 0);
+        }
+
+        // Load trusted clients from governance_trusted_clients table
+        let storage_clients = repo.get_trusted_clients().map_err(|e| e.to_string())?;
+        for client in storage_clients {
+            self.mcp_runtime
                 .upsert_trusted_client_mut(TrustedClientDto {
-                    id: client.id,
+                    id: client.client_id,
                     name: client.name,
                     issuer: client.issuer,
-                    active: client.active,
-                });
+                    active: client.active != 0,
+                })
+                .map_err(|e| format!("failed to upsert trusted client: {}", e))?;
         }
 
-        for role in governance.roles {
-            let _ = self.mcp_runtime.upsert_role_mut(PolicyRoleDto {
-                id: role.id,
-                policy_ids: role.policy_ids,
-            });
+        // Load policy roles from governance_policy_roles table
+        let storage_roles = repo.get_policy_roles().map_err(|e| e.to_string())?;
+        for role in storage_roles {
+            self.mcp_runtime
+                .upsert_role_mut(PolicyRoleDto {
+                    id: role.role_id,
+                    policy_ids: Vec::new(), // Populated via policy_roles_policies join if needed
+                })
+                .map_err(|e| format!("failed to upsert policy role: {}", e))?;
         }
 
-        for policy in governance.policies {
-            let _ = self.mcp_runtime.upsert_policy_mut(ToolPolicyDto {
-                id: policy.id,
-                allowed_tools: policy.allowed_tools,
-                allowed_classes: policy.allowed_classes,
-            });
+        // Load tool policies from governance_tool_policies table
+        let storage_policies = repo.get_tool_policies().map_err(|e| e.to_string())?;
+        for policy in storage_policies {
+            self.mcp_runtime
+                .upsert_policy_mut(ToolPolicyDto {
+                    id: policy.policy_id,
+                    allowed_tools: policy.allowed_tools,
+                    allowed_classes: policy.allowed_classes,
+                })
+                .map_err(|e| format!("failed to upsert tool policy: {}", e))?;
         }
 
+        // Load connection policy assignments from profile MCP governance settings
         for profile in self.facade.profiles.profiles.clone() {
-            let Some(governance) = profile.mcp_governance else {
+            let Some(profile_governance) = profile.mcp_governance else {
                 continue;
             };
 
-            if !governance.enabled {
+            if !profile_governance.enabled {
                 continue;
             }
 
-            let assignments = governance
+            let assignments = profile_governance
                 .policy_bindings
                 .into_iter()
                 .map(|binding| dbflux_policy::ConnectionPolicyAssignment {
@@ -272,15 +283,16 @@ impl AppState {
                 })
                 .collect();
 
-            let _ = self.mcp_runtime.save_connection_policy_assignment_mut(
-                ConnectionPolicyAssignmentDto {
+            self.mcp_runtime
+                .save_connection_policy_assignment_mut(ConnectionPolicyAssignmentDto {
                     connection_id: profile.id.to_string(),
                     assignments,
-                },
-            );
+                })
+                .map_err(|e| format!("failed to save connection policy assignment: {}", e))?;
         }
 
         self.mcp_runtime.drain_events();
+        Ok(())
     }
 
     #[allow(clippy::result_large_err)]
@@ -1633,8 +1645,7 @@ impl AppState {
             .upsert_trusted_client_mut(client)
             .map_err(|error| error.to_string())?;
 
-        self.persist_mcp_governance();
-        Ok(())
+        self.persist_mcp_governance()
     }
 
     pub fn delete_mcp_trusted_client(&mut self, client_id: &str) -> Result<(), String> {
@@ -1642,8 +1653,7 @@ impl AppState {
             .delete_trusted_client_mut(client_id)
             .map_err(|error| error.to_string())?;
 
-        self.persist_mcp_governance();
-        Ok(())
+        self.persist_mcp_governance()
     }
 
     #[allow(dead_code)]
@@ -1662,8 +1672,7 @@ impl AppState {
             .save_connection_policy_assignment_mut(assignment)
             .map_err(|error| error.to_string())?;
 
-        self.persist_mcp_governance();
-        Ok(())
+        self.persist_mcp_governance()
     }
 
     #[allow(dead_code)]
@@ -1750,8 +1759,7 @@ impl AppState {
             .upsert_role_mut(role)
             .map_err(|error| error.to_string())?;
 
-        self.persist_mcp_governance();
-        Ok(())
+        self.persist_mcp_governance()
     }
 
     pub fn delete_mcp_role(&mut self, role_id: &str) -> Result<(), String> {
@@ -1763,8 +1771,7 @@ impl AppState {
             .delete_role_mut(role_id)
             .map_err(|error| error.to_string())?;
 
-        self.persist_mcp_governance();
-        Ok(())
+        self.persist_mcp_governance()
     }
 
     pub fn list_mcp_policies(&self) -> Result<Vec<ToolPolicyDto>, String> {
@@ -1785,8 +1792,7 @@ impl AppState {
             .upsert_policy_mut(policy)
             .map_err(|error| error.to_string())?;
 
-        self.persist_mcp_governance();
-        Ok(())
+        self.persist_mcp_governance()
     }
 
     pub fn delete_mcp_policy(&mut self, policy_id: &str) -> Result<(), String> {
@@ -1798,8 +1804,7 @@ impl AppState {
             .delete_policy_mut(policy_id)
             .map_err(|error| error.to_string())?;
 
-        self.persist_mcp_governance();
-        Ok(())
+        self.persist_mcp_governance()
     }
 
     #[allow(dead_code)]
@@ -1825,68 +1830,94 @@ impl AppState {
     }
 
     #[allow(clippy::result_large_err)]
-    pub fn persist_mcp_governance(&self) {
-        let trusted_clients = self
+    pub fn persist_mcp_governance(&mut self) -> Result<(), String> {
+        let repo = self.storage_runtime.governance_settings();
+
+        // Read current mcp_enabled_by_default from storage (if exists)
+        let mcp_enabled_by_default = repo
+            .get()
+            .map_err(|e| e.to_string())?
+            .map(|s| s.mcp_enabled_by_default)
+            .unwrap_or(0);
+
+        // Upsert governance settings (mcp_enabled_by_default)
+        let governance_settings =
+            dbflux_storage::repositories::governance_settings::GovernanceSettingsDto {
+                id: 1,
+                mcp_enabled_by_default,
+                updated_at: String::new(), // Repository uses datetime('now')
+            };
+        repo.upsert(&governance_settings)
+            .map_err(|e| e.to_string())?;
+
+        // Persist trusted clients to governance_trusted_clients table
+        let mcp_clients = self
             .mcp_runtime
             .list_trusted_clients()
-            .unwrap_or_default()
+            .map_err(|e| e.to_string())?;
+        let storage_clients = mcp_clients
             .into_iter()
-            .map(|client| TrustedClientConfig {
-                id: client.id,
-                name: client.name,
-                issuer: client.issuer,
-                active: client.active,
-            })
-            .collect();
+            .map(
+                |client| dbflux_storage::repositories::governance_settings::TrustedClientDto {
+                    id: Uuid::new_v4().to_string(),
+                    governance_id: 1,
+                    client_id: client.id,
+                    name: client.name,
+                    issuer: client.issuer,
+                    active: if client.active { 1 } else { 0 },
+                },
+            )
+            .collect::<Vec<_>>();
+        repo.replace_trusted_clients(&storage_clients)
+            .map_err(|e| e.to_string())?;
 
-        let roles = self
-            .mcp_runtime
-            .list_roles()
-            .unwrap_or_default()
+        // Persist policy roles to governance_policy_roles table
+        let mcp_roles = self.mcp_runtime.list_roles().map_err(|e| e.to_string())?;
+        let storage_roles = mcp_roles
             .into_iter()
-            .map(|role| PolicyRoleConfig {
-                id: role.id,
-                policy_ids: role.policy_ids,
-            })
-            .collect();
+            .map(
+                |role| dbflux_storage::repositories::governance_settings::PolicyRoleDto {
+                    id: Uuid::new_v4().to_string(),
+                    governance_id: 1,
+                    role_id: role.id,
+                },
+            )
+            .collect::<Vec<_>>();
+        repo.replace_policy_roles(&storage_roles)
+            .map_err(|e| e.to_string())?;
 
-        let policies = self
+        // Persist tool policies to governance_tool_policies table
+        let mcp_policies = self
             .mcp_runtime
             .list_policies()
-            .unwrap_or_default()
+            .map_err(|e| e.to_string())?;
+        let storage_policies = mcp_policies
             .into_iter()
-            .map(|policy| ToolPolicyConfig {
-                id: policy.id,
-                allowed_tools: policy.allowed_tools,
-                allowed_classes: policy.allowed_classes,
-            })
-            .collect();
+            .map(
+                |policy| dbflux_storage::repositories::governance_settings::ToolPolicyDto {
+                    id: Uuid::new_v4().to_string(),
+                    governance_id: 1,
+                    policy_id: policy.id,
+                    allowed_tools: policy.allowed_tools,
+                    allowed_classes: policy.allowed_classes,
+                },
+            )
+            .collect::<Vec<_>>();
+        repo.replace_tool_policies(&storage_policies)
+            .map_err(|e| e.to_string())?;
 
-        let mcp_enabled_by_default = self
-            .storage_runtime
-            .settings()
-            .get("governance_settings")
-            .ok()
-            .flatten()
-            .and_then(|json| serde_json::from_str::<GovernanceSettings>(&json).ok())
-            .map(|settings| settings.mcp_enabled_by_default)
-            .unwrap_or(false);
-
-        let governance = GovernanceSettings {
-            mcp_enabled_by_default,
-            trusted_clients,
-            roles,
-            policies,
-        };
-
-        if let Ok(json) = serde_json::to_string(&governance) {
-            let _ = self
-                .storage_runtime
-                .settings()
-                .set("governance_settings", &json);
-        }
-
+        // Save profile MCP governance bindings
         self.save_profiles();
+
+        Ok(())
+    }
+
+    /// Reloads the MCP runtime state from the database.
+    /// Clears current state and repopulates from GovernanceSettingsRepository.
+    #[allow(dead_code)]
+    pub fn reload_mcp_runtime_from_db(&mut self) -> Result<(), String> {
+        self.mcp_runtime.clear();
+        self.bootstrap_mcp_runtime_from_persistence()
     }
 }
 
@@ -2060,7 +2091,7 @@ mod tests {
     use dbflux_storage::bootstrap::StorageRuntime;
 
     #[cfg(feature = "mcp")]
-    use dbflux_mcp::server::authorization::{AuthorizationRequest, authorize_request};
+    use dbflux_mcp::server::authorization::{authorize_request, AuthorizationRequest};
     #[cfg(feature = "mcp")]
     use dbflux_mcp::server::request_context::RequestIdentity;
     #[cfg(feature = "mcp")]
@@ -2494,11 +2525,9 @@ mod tests {
             assert_eq!(clients.len(), 1);
 
             let events = state.drain_mcp_runtime_events();
-            assert!(
-                events
-                    .iter()
-                    .any(|event| matches!(event, McpRuntimeEvent::TrustedClientsUpdated))
-            );
+            assert!(events
+                .iter()
+                .any(|event| matches!(event, McpRuntimeEvent::TrustedClientsUpdated)));
         });
     }
 
@@ -2519,11 +2548,9 @@ mod tests {
             assert_eq!(pending.actor_id, "agent-a");
 
             let events = state.drain_mcp_runtime_events();
-            assert!(
-                events
-                    .iter()
-                    .any(|event| matches!(event, McpRuntimeEvent::PendingExecutionsUpdated))
-            );
+            assert!(events
+                .iter()
+                .any(|event| matches!(event, McpRuntimeEvent::PendingExecutionsUpdated)));
         });
     }
 

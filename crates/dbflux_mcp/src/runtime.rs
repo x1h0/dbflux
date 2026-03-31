@@ -32,6 +32,7 @@ pub struct McpRuntime {
     approval_service: ApprovalService,
     audit_service: AuditService,
     pending_events: Vec<McpRuntimeEvent>,
+    mcp_enabled: bool,
 }
 
 impl McpRuntime {
@@ -44,6 +45,7 @@ impl McpRuntime {
             approval_service: ApprovalService::new(InMemoryPendingExecutionStore::default()),
             audit_service,
             pending_events: Vec::new(),
+            mcp_enabled: true,
         }
     }
 
@@ -65,6 +67,26 @@ impl McpRuntime {
 
     pub fn drain_events(&mut self) -> Vec<McpRuntimeEvent> {
         std::mem::take(&mut self.pending_events)
+    }
+
+    pub fn set_mcp_enabled(&mut self, enabled: bool) {
+        self.mcp_enabled = enabled;
+    }
+
+    pub fn is_mcp_enabled(&self) -> bool {
+        self.mcp_enabled
+    }
+
+    /// Clears all runtime state and emits reset events.
+    pub fn clear(&mut self) {
+        self.trusted_clients.clear();
+        self.roles.clear();
+        self.policies.clear();
+        self.connection_policy_assignments.clear();
+        self.pending_events
+            .push(McpRuntimeEvent::TrustedClientsUpdated);
+        self.pending_events.push(McpRuntimeEvent::RolesUpdated);
+        self.pending_events.push(McpRuntimeEvent::PoliciesUpdated);
     }
 
     fn push_event(&mut self, event: McpRuntimeEvent) {
@@ -547,11 +569,9 @@ mod tests {
         assert_eq!(assignments.len(), 1);
 
         let events = runtime.drain_events();
-        assert!(
-            events
-                .iter()
-                .any(|event| matches!(event, McpRuntimeEvent::TrustedClientsUpdated))
-        );
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, McpRuntimeEvent::TrustedClientsUpdated)));
         assert!(events.iter().any(|event| matches!(
             event,
             McpRuntimeEvent::ConnectionPolicyUpdated { connection_id }

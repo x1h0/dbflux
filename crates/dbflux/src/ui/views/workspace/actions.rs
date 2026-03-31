@@ -181,7 +181,10 @@ impl Workspace {
         use crate::ui::components::toast::ToastExt;
 
         self.app_state.update(cx, |state, cx| {
-            state.persist_mcp_governance();
+            if let Err(e) = state.persist_mcp_governance() {
+                log::error!("Failed to persist MCP governance: {}", e);
+                return;
+            }
 
             for event in state.drain_mcp_runtime_events() {
                 cx.emit(crate::app::McpRuntimeEventRaised { event });
