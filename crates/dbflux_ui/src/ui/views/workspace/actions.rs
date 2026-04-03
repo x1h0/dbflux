@@ -77,7 +77,7 @@ impl Workspace {
         let app_state = self.app_state.clone();
 
         // Check if settings window is already open - if so, focus it
-        if let Some(handle) = app_state.read(cx).settings_window.clone() {
+        if let Some(handle) = app_state.read(cx).settings_window {
             if let Err(e) = handle.update(cx, |_root, window, _cx| {
                 window.activate_window();
             }) {
@@ -120,7 +120,7 @@ impl Workspace {
         }) {
             // Store the handle in AppStateEntity so we can reuse/focus it later
             app_state.update(cx, |state, _| {
-                state.settings_window = Some(handle.clone());
+                state.settings_window = Some(handle);
             });
 
             // Explicitly activate the window and force initial render (X11 fix)

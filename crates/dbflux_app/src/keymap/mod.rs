@@ -6,10 +6,10 @@ mod chord;
 mod command;
 mod context;
 mod focus;
-mod keymap;
+mod keymap_layer;
 
 pub use chord::{KeyChord, Modifiers, ParseError};
 pub use command::Command;
 pub use context::ContextId;
 pub use focus::FocusTarget;
-pub use keymap::{KeymapLayer, KeymapStack};
+pub use keymap_layer::{KeymapLayer, KeymapStack};

@@ -106,6 +106,12 @@ impl ToastHost {
     }
 }
 
+impl Default for ToastHost {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 fn mix_color(base: Hsla, accent: Hsla, ratio: f32) -> Hsla {
     Hsla {
         h: base.h * (1.0 - ratio) + accent.h * ratio,
