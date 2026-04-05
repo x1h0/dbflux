@@ -1,31 +1,67 @@
 use std::collections::HashMap;
+use std::sync::LazyLock;
 use std::sync::Mutex;
 use std::time::Instant;
 
+use std::sync::Arc;
+
+use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
-    ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionProfile, DatabaseCategory,
-    DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DefaultSqlDialect, Diagnostic,
-    DiagnosticSeverity, DriverCapabilities, DriverFormDef, DriverMetadata, EditorDiagnostic,
-    FormValues, FormattedError, HashDeleteRequest, HashSetRequest, Icon, KeyBulkGetRequest,
-    KeyDeleteRequest, KeyEntry, KeyExistsRequest, KeyExpireRequest, KeyGetRequest, KeyGetResult,
-    KeyPersistRequest, KeyRenameRequest, KeyScanPage, KeyScanRequest, KeySetRequest, KeySpaceInfo,
-    KeyTtlRequest, KeyType, KeyTypeRequest, KeyValueApi, KeyValueSchema, LanguageService, ListEnd,
-    ListPushRequest, ListRemoveRequest, ListSetRequest, QueryErrorFormatter, QueryGenerator,
-    QueryHandle, QueryLanguage, QueryRequest, QueryResult, REDIS_FORM, SchemaLoadingStrategy,
-    SchemaSnapshot, SetAddRequest, SetCondition, SetRemoveRequest, SqlDialect, SshTunnelConfig,
-    StreamAddRequest, StreamDeleteRequest, StreamEntryId, TextPosition, TextPositionRange,
+    ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionExt, ConnectionProfile,
+    DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo,
+    DdlCapabilities, DefaultSqlDialect, Diagnostic, DiagnosticSeverity, DocumentConnection,
+    DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata, EditorDiagnostic,
+    FormFieldDef, FormFieldKind, FormSection, FormTab, FormValues, FormattedError,
+    HashDeleteRequest, HashSetRequest, Icon, KeyBulkGetRequest, KeyDeleteRequest, KeyEntry,
+    KeyExistsRequest, KeyExpireRequest, KeyGetRequest, KeyGetResult, KeyPersistRequest,
+    KeyRenameRequest, KeyScanPage, KeyScanRequest, KeySetRequest, KeySpaceInfo, KeyTtlRequest,
+    KeyType, KeyTypeRequest, KeyValueApi, KeyValueConnection, KeyValueSchema, LanguageService,
+    ListEnd, ListPushRequest, ListRemoveRequest, ListSetRequest, MutationCapabilities,
+    OrderByColumn, PaginationStyle, QueryCapabilities, QueryErrorFormatter, QueryGenerator,
+    QueryHandle, QueryLanguage, QueryRequest, QueryResult, REDIS_FORM, RelationalConnection,
+    SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan, SemanticRequest, SetAddRequest,
+    SetCondition, SetRemoveRequest, SqlDialect, SshTunnelConfig, StreamAddRequest,
+    StreamDeleteRequest, StreamEntryId, TextPosition, TextPositionRange, TransactionCapabilities,
     ValidationResult, Value, ValueRepr, ZSetAddRequest, ZSetRemoveRequest, sanitize_uri,
 };
 use dbflux_ssh::SshTunnel;
+
+fn plan_redis_mutation(mutation: &dbflux_core::MutationRequest) -> Result<SemanticPlan, DbError> {
+    static GENERATOR: crate::command_generator::RedisCommandGenerator =
+        crate::command_generator::RedisCommandGenerator;
+
+    GENERATOR.plan_mutation(mutation).ok_or_else(|| {
+        DbError::NotSupported("Redis semantic planning does not support this mutation".into())
+    })
+}
+
+fn plan_redis_semantic_request(request: &SemanticRequest) -> Result<SemanticPlan, DbError> {
+    match request {
+        SemanticRequest::Mutation(mutation) => plan_redis_mutation(mutation),
+        SemanticRequest::TableBrowse(_)
+        | SemanticRequest::TableCount(_)
+        | SemanticRequest::Aggregate(_)
+        | SemanticRequest::CollectionBrowse(_)
+        | SemanticRequest::CollectionCount(_) => Err(DbError::NotSupported(
+            "Redis semantic planning does not support relational or collection browse/count requests"
+                .into(),
+        )),
+        SemanticRequest::Explain(_) | SemanticRequest::Describe(_) => Err(DbError::NotSupported(
+            "Redis semantic planning does not support explain or describe requests".into(),
+        )),
+    }
+}
+
 /// Redis driver metadata.
-pub static REDIS_METADATA: DriverMetadata = DriverMetadata {
-    id: "redis",
-    display_name: "Redis",
-    description: "In-memory key-value database",
+pub static REDIS_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
+    id: "redis".into(),
+    display_name: "Redis".into(),
+    description: "In-memory key-value database".into(),
     category: DatabaseCategory::KeyValue,
     query_language: QueryLanguage::RedisCommands,
     capabilities: DriverCapabilities::from_bits_truncate(
         DriverCapabilities::KEYVALUE_BASE.bits()
+            | DriverCapabilities::MULTIPLE_DATABASES.bits()
             | DriverCapabilities::KV_TTL.bits()
             | DriverCapabilities::KV_KEY_TYPES.bits()
             | DriverCapabilities::KV_VALUE_SIZE.bits()
@@ -39,9 +75,83 @@ pub static REDIS_METADATA: DriverMetadata = DriverMetadata {
             | DriverCapabilities::SSL.bits(),
     ),
     default_port: Some(6379),
-    uri_scheme: "redis",
+    uri_scheme: "redis".into(),
     icon: Icon::Redis,
-};
+    syntax: None,
+    query: Some(QueryCapabilities {
+        pagination: vec![PaginationStyle::Cursor],
+        where_operators: vec![],
+        supports_order_by: false,
+        supports_group_by: false,
+        supports_having: false,
+        supports_distinct: false,
+        supports_limit: false,
+        supports_offset: false,
+        supports_joins: false,
+        supports_subqueries: false,
+        supports_union: false,
+        supports_intersect: false,
+        supports_except: false,
+        supports_case_expressions: false,
+        supports_window_functions: false,
+        supports_ctes: false,
+        supports_explain: false,
+        max_query_parameters: 0,
+        max_order_by_columns: 0,
+        max_group_by_columns: 0,
+    }),
+    mutation: Some(MutationCapabilities {
+        supports_insert: true,
+        supports_update: true,
+        supports_delete: true,
+        supports_upsert: false,
+        supports_returning: false,
+        supports_batch: true,
+        supports_bulk_update: false,
+        supports_bulk_delete: true,
+        max_insert_values: 0,
+    }),
+    ddl: Some(DdlCapabilities {
+        supports_create_database: false,
+        supports_drop_database: false,
+        supports_create_table: false,
+        supports_drop_table: false,
+        supports_alter_table: false,
+        supports_create_index: false,
+        supports_drop_index: false,
+        supports_create_view: false,
+        supports_drop_view: false,
+        supports_create_trigger: false,
+        supports_drop_trigger: false,
+        transactional_ddl: false,
+        supports_add_column: false,
+        supports_drop_column: false,
+        supports_rename_column: false,
+        supports_alter_column: false,
+        supports_add_constraint: false,
+        supports_drop_constraint: false,
+    }),
+    transactions: Some(TransactionCapabilities {
+        supports_transactions: true,
+        supported_isolation_levels: vec![],
+        default_isolation_level: None,
+        supports_savepoints: false,
+        supports_nested_transactions: false,
+        supports_read_only: false,
+        supports_deferrable: false,
+    }),
+    limits: Some(DriverLimits {
+        max_query_length: 0,
+        max_parameters: 0,
+        max_result_rows: 0,
+        max_connections: 0,
+        max_nested_subqueries: 0,
+        max_identifier_length: 0,
+        max_columns: 0,
+        max_indexes_per_table: 0,
+    }),
+    classification_override: None,
+});
 
 pub struct RedisDriver;
 
@@ -148,11 +258,64 @@ impl DbDriver for RedisDriver {
         DbKind::Redis
     }
 
-    fn metadata(&self) -> &'static DriverMetadata {
+    fn metadata(&self) -> &DriverMetadata {
         &REDIS_METADATA
     }
 
-    fn form_definition(&self) -> &'static DriverFormDef {
+    fn driver_key(&self) -> dbflux_core::DriverKey {
+        "builtin:redis".into()
+    }
+
+    fn settings_schema(&self) -> Option<Arc<DriverFormDef>> {
+        Some(Arc::new(DriverFormDef {
+            tabs: vec![FormTab {
+                id: "settings".into(),
+                label: "Settings".into(),
+                sections: vec![
+                    FormSection {
+                        title: "Key Scanning".into(),
+                        fields: vec![
+                            FormFieldDef {
+                                id: "scan_batch_size".into(),
+                                label: "Scan batch size".into(),
+                                kind: FormFieldKind::Number,
+                                placeholder: "100".into(),
+                                required: false,
+                                default_value: "100".into(),
+                                enabled_when_checked: None,
+                                enabled_when_unchecked: None,
+                            },
+                            FormFieldDef {
+                                id: "stream_preview_limit".into(),
+                                label: "Stream preview limit".into(),
+                                kind: FormFieldKind::Number,
+                                placeholder: "50".into(),
+                                required: false,
+                                default_value: "50".into(),
+                                enabled_when_checked: None,
+                                enabled_when_unchecked: None,
+                            },
+                        ],
+                    },
+                    FormSection {
+                        title: "Safety".into(),
+                        fields: vec![FormFieldDef {
+                            id: "allow_flush".into(),
+                            label: "Allow FLUSHALL / FLUSHDB".into(),
+                            kind: FormFieldKind::Checkbox,
+                            placeholder: String::new(),
+                            required: false,
+                            default_value: "false".into(),
+                            enabled_when_checked: None,
+                            enabled_when_unchecked: None,
+                        }],
+                    },
+                ],
+            }],
+        }))
+    }
+
+    fn form_definition(&self) -> &DriverFormDef {
         &REDIS_FORM
     }
 
@@ -333,10 +496,13 @@ impl DbDriver for RedisDriver {
     fn connect_with_secrets(
         &self,
         profile: &ConnectionProfile,
-        password: Option<&str>,
-        ssh_secret: Option<&str>,
+        password: Option<&SecretString>,
+        ssh_secret: Option<&SecretString>,
     ) -> Result<Box<dyn Connection>, DbError> {
         let config = extract_redis_config(&profile.config)?;
+
+        let password = password.map(|value| value.expose_secret());
+        let ssh_secret = ssh_secret.map(|value| value.expose_secret());
 
         if config.use_uri {
             if config.ssh_tunnel.is_some() {
@@ -478,7 +644,7 @@ impl RedisConnection {
 }
 
 impl Connection for RedisConnection {
-    fn metadata(&self) -> &'static DriverMetadata {
+    fn metadata(&self) -> &DriverMetadata {
         &REDIS_METADATA
     }
 
@@ -640,6 +806,112 @@ impl Connection for RedisConnection {
         static GENERATOR: crate::command_generator::RedisCommandGenerator =
             crate::command_generator::RedisCommandGenerator;
         Some(&GENERATOR)
+    }
+
+    fn plan_semantic_request(&self, request: &SemanticRequest) -> Result<SemanticPlan, DbError> {
+        plan_redis_semantic_request(request)
+    }
+
+    fn build_select_sql(
+        &self,
+        _table: &str,
+        _columns: &[String],
+        _filter: Option<&Value>,
+        _order_by: &[OrderByColumn],
+        _limit: u32,
+        _offset: u32,
+    ) -> String {
+        // Redis doesn't use SQL - this is for SQL-based drivers
+        "SELECT * FROM key WHERE filter LIMIT offset".to_string()
+    }
+
+    fn build_insert_sql(
+        &self,
+        _table: &str,
+        _columns: &[String],
+        _values: &[Value],
+    ) -> (String, Vec<Value>) {
+        // Redis doesn't use SQL - this is for SQL-based drivers
+        ("SET key value".to_string(), Vec::new())
+    }
+
+    fn build_update_sql(
+        &self,
+        _table: &str,
+        _set: &[(String, Value)],
+        _filter: Option<&Value>,
+    ) -> (String, Vec<Value>) {
+        // Redis doesn't use SQL - this is for SQL-based drivers
+        ("SET key value".to_string(), Vec::new())
+    }
+
+    fn build_delete_sql(&self, _table: &str, _filter: Option<&Value>) -> (String, Vec<Value>) {
+        // Redis doesn't use SQL - this is for SQL-based drivers
+        ("DEL key".to_string(), Vec::new())
+    }
+
+    fn build_upsert_sql(
+        &self,
+        _table: &str,
+        _columns: &[String],
+        _values: &[Value],
+        _conflict_columns: &[String],
+        _update_columns: &[String],
+    ) -> (String, Vec<Value>) {
+        // Redis doesn't use SQL - this is for SQL-based drivers
+        ("SET key value".to_string(), Vec::new())
+    }
+
+    fn build_count_sql(&self, _table: &str, _filter: Option<&Value>) -> String {
+        // Redis doesn't use SQL - this is for SQL-based drivers
+        "DBSIZE".to_string()
+    }
+
+    fn build_truncate_sql(&self, _table: &str) -> String {
+        // Redis doesn't support TRUNCATE - use FLUSHDB with caution
+        "FLUSHDB".to_string()
+    }
+
+    fn build_drop_index_sql(
+        &self,
+        _index_name: &str,
+        _table_name: Option<&str>,
+        _if_exists: bool,
+    ) -> String {
+        // Redis doesn't have named indexes like SQL databases
+        "DROP INDEX not_applicable".to_string()
+    }
+
+    fn version_query(&self) -> &'static str {
+        // Redis uses INFO command, not SQL
+        "INFO server | grep redis_version"
+    }
+
+    fn supports_transactional_ddl(&self) -> bool {
+        false
+    }
+
+    fn translate_filter(&self, _filter: &Value) -> Result<String, DbError> {
+        // Redis doesn't use SQL WHERE clauses
+        Err(DbError::NotSupported(
+            "translate_filter is not applicable to Redis - it uses key-based access and commands, not SQL".to_string(),
+        ))
+    }
+}
+
+impl KeyValueConnection for RedisConnection {}
+
+impl ConnectionExt for RedisConnection {
+    fn as_relational(&self) -> Option<&dyn RelationalConnection> {
+        None
+    }
+
+    fn as_document(&self) -> Option<&dyn DocumentConnection> {
+        None
+    }
+
+    fn as_keyvalue(&self) -> Option<&dyn KeyValueConnection> {
+        Some(self)
     }
 }
 
@@ -1280,11 +1552,13 @@ fn redis_array_to_result(
                 name: "#".to_string(),
                 type_name: "int".to_string(),
                 nullable: false,
+                is_primary_key: false,
             },
             ColumnMeta {
                 name: "value".to_string(),
                 type_name: "redis".to_string(),
                 nullable: true,
+                is_primary_key: false,
             },
         ];
 
@@ -1976,7 +2250,10 @@ fn redis_first_line_range(query: &str) -> TextPositionRange {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dbflux_core::{DatabaseCategory, DbDriver, QueryLanguage, ValidationResult};
+    use dbflux_core::{
+        DatabaseCategory, DbDriver, KeySetRequest, MutationRequest, QueryLanguage,
+        SemanticPlanKind, SemanticRequest, TableBrowseRequest, TableRef, ValidationResult,
+    };
 
     #[test]
     fn build_config_requires_uri_when_uri_mode_enabled() {
@@ -2162,5 +2439,70 @@ mod tests {
         assert_eq!(metadata.default_port, Some(6379));
         assert_eq!(metadata.uri_scheme, "redis");
         assert!(!driver.form_definition().tabs.is_empty());
+    }
+
+    #[test]
+    fn settings_schema_exposes_scan_and_safety_fields() {
+        let driver = RedisDriver::new();
+        let schema = driver
+            .settings_schema()
+            .expect("redis should have a settings schema");
+
+        assert_eq!(schema.tabs.len(), 1);
+        assert_eq!(schema.tabs[0].sections.len(), 2);
+
+        let scanning = &schema.tabs[0].sections[0];
+        assert_eq!(scanning.title, "Key Scanning");
+        assert_eq!(scanning.fields.len(), 2);
+        assert_eq!(scanning.fields[0].id, "scan_batch_size");
+        assert_eq!(scanning.fields[0].default_value, "100");
+        assert_eq!(scanning.fields[1].id, "stream_preview_limit");
+        assert_eq!(scanning.fields[1].default_value, "50");
+
+        let safety = &schema.tabs[0].sections[1];
+        assert_eq!(safety.title, "Safety");
+        assert_eq!(safety.fields.len(), 1);
+        assert_eq!(safety.fields[0].id, "allow_flush");
+        assert_eq!(safety.fields[0].default_value, "false");
+    }
+
+    #[test]
+    fn driver_key_is_builtin_redis() {
+        let driver = RedisDriver::new();
+        assert_eq!(driver.driver_key(), "builtin:redis");
+    }
+
+    #[test]
+    fn semantic_planner_wraps_key_value_mutation_preview() {
+        let plan = plan_redis_semantic_request(&SemanticRequest::Mutation(
+            MutationRequest::KeyValueSet(KeySetRequest::new("session:1", b"alive".to_vec())),
+        ))
+        .expect("key-value mutation should plan");
+
+        assert_eq!(plan.kind, SemanticPlanKind::MutationPreview);
+        assert_eq!(plan.queries[0].language, QueryLanguage::RedisCommands);
+        assert_eq!(plan.queries[0].text, "SET session:1 alive");
+    }
+
+    #[test]
+    fn semantic_planner_rejects_relational_browse_requests() {
+        let error = plan_redis_semantic_request(&SemanticRequest::TableBrowse(
+            TableBrowseRequest::new(TableRef::new("users")),
+        ))
+        .expect_err("redis should reject relational browse planning");
+
+        assert!(matches!(error, DbError::NotSupported(_)));
+        assert!(error.to_string().contains("browse/count"));
+    }
+
+    #[test]
+    fn semantic_planner_rejects_explain_requests_explicitly() {
+        let error = plan_redis_semantic_request(&SemanticRequest::Explain(
+            dbflux_core::ExplainRequest::new(TableRef::new("sessions")).with_query("GET sessions"),
+        ))
+        .expect_err("redis should reject explain planning");
+
+        assert!(matches!(error, DbError::NotSupported(_)));
+        assert!(error.to_string().contains("explain or describe"));
     }
 }

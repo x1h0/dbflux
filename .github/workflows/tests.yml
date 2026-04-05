@@ -2,10 +2,11 @@ name: Tests
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
     tags:
       - 'v*.*.*'
   pull_request:
+    branches: [main, dev]
   workflow_call:
   workflow_dispatch:
 

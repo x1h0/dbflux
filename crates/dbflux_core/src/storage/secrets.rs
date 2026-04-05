@@ -1,0 +1,149 @@
+use crate::DbError;
+use secrecy::SecretString;
+
+pub trait SecretStore: Send + Sync {
+    fn is_available(&self) -> bool;
+    fn get(&self, secret_ref: &str) -> Result<Option<SecretString>, DbError>;
+    fn set(&self, secret_ref: &str, value: &SecretString) -> Result<(), DbError>;
+    fn delete(&self, secret_ref: &str) -> Result<(), DbError>;
+}
+
+pub struct NoopSecretStore;
+
+impl SecretStore for NoopSecretStore {
+    fn is_available(&self) -> bool {
+        false
+    }
+
+    fn get(&self, _secret_ref: &str) -> Result<Option<SecretString>, DbError> {
+        Ok(None)
+    }
+
+    fn set(&self, _secret_ref: &str, _value: &SecretString) -> Result<(), DbError> {
+        Ok(())
+    }
+
+    fn delete(&self, _secret_ref: &str) -> Result<(), DbError> {
+        Ok(())
+    }
+}
+
+const SERVICE_NAME: &str = "dbflux";
+
+pub struct KeyringSecretStore {
+    available: bool,
+}
+
+impl KeyringSecretStore {
+    pub fn new() -> Self {
+        let available = Self::check_availability();
+        Self { available }
+    }
+
+    fn check_availability() -> bool {
+        let test_entry = keyring::Entry::new(SERVICE_NAME, "__dbflux_test__");
+        match test_entry {
+            Ok(entry) => {
+                let _ = entry.get_password();
+                true
+            }
+            Err(_) => false,
+        }
+    }
+}
+
+impl Default for KeyringSecretStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SecretStore for KeyringSecretStore {
+    fn is_available(&self) -> bool {
+        self.available
+    }
+
+    fn get(&self, secret_ref: &str) -> Result<Option<SecretString>, DbError> {
+        if !self.available {
+            return Ok(None);
+        }
+
+        let entry = keyring::Entry::new(SERVICE_NAME, secret_ref)
+            .map_err(|e| DbError::IoError(std::io::Error::other(e.to_string())))?;
+
+        match entry.get_password() {
+            Ok(password) => Ok(Some(SecretString::from(password))),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(e) => Err(DbError::IoError(std::io::Error::other(e.to_string()))),
+        }
+    }
+
+    fn set(&self, secret_ref: &str, value: &SecretString) -> Result<(), DbError> {
+        use secrecy::ExposeSecret;
+
+        if !self.available {
+            return Ok(());
+        }
+
+        let entry = keyring::Entry::new(SERVICE_NAME, secret_ref)
+            .map_err(|e| DbError::IoError(std::io::Error::other(e.to_string())))?;
+
+        entry
+            .set_password(value.expose_secret())
+            .map_err(|e| DbError::IoError(std::io::Error::other(e.to_string())))
+    }
+
+    fn delete(&self, secret_ref: &str) -> Result<(), DbError> {
+        if !self.available {
+            return Ok(());
+        }
+
+        let entry = keyring::Entry::new(SERVICE_NAME, secret_ref)
+            .map_err(|e| DbError::IoError(std::io::Error::other(e.to_string())))?;
+
+        match entry.delete_credential() {
+            Ok(()) => Ok(()),
+            Err(keyring::Error::NoEntry) => Ok(()),
+            Err(e) => Err(DbError::IoError(std::io::Error::other(e.to_string()))),
+        }
+    }
+}
+
+pub fn connection_secret_ref(profile_id: &uuid::Uuid) -> String {
+    format!("dbflux:conn:{}", profile_id)
+}
+
+pub fn ssh_secret_ref(profile_id: &uuid::Uuid) -> String {
+    format!("dbflux:ssh:{}", profile_id)
+}
+
+pub fn ssh_tunnel_secret_ref(tunnel_id: &uuid::Uuid) -> String {
+    format!("dbflux:ssh_tunnel:{}", tunnel_id)
+}
+
+pub fn proxy_secret_ref(proxy_id: &uuid::Uuid) -> String {
+    format!("dbflux:proxy:{}", proxy_id)
+}
+
+pub fn create_secret_store() -> Box<dyn SecretStore> {
+    let keyring_store = KeyringSecretStore::new();
+    if keyring_store.is_available() {
+        Box::new(keyring_store)
+    } else {
+        Box::new(NoopSecretStore)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn proxy_secret_ref_format() {
+        let id = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        assert_eq!(
+            proxy_secret_ref(&id),
+            "dbflux:proxy:550e8400-e29b-41d4-a716-446655440000"
+        );
+    }
+}

@@ -14,6 +14,7 @@ path = "src/lib.rs"
 
 [dependencies]
 dbflux_core = { path = "../dbflux_core" }
+dbflux_tunnel_core = { path = "../dbflux_tunnel_core" }
 dirs = "6"
 log = "0.4"
 ssh2 = "0.9"

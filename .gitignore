@@ -5,3 +5,5 @@ scripts/src
 scripts/pkg
 scripts/dbflux*
 .logs
+result
+.atl/

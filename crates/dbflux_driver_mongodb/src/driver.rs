@@ -1,39 +1,134 @@
 use std::collections::{BTreeMap, HashMap};
+use std::sync::LazyLock;
 use std::sync::Mutex;
 use std::time::Instant;
 
+use std::sync::Arc;
+
 use bson::{Bson, Document, doc};
+use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
     CollectionBrowseRequest, CollectionCountRequest, CollectionIndexInfo, ColumnMeta, Connection,
-    ConnectionErrorFormatter, ConnectionProfile, CrudResult, DangerousQueryKind, DatabaseCategory,
-    DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, Diagnostic,
-    DiagnosticSeverity, DocumentDelete, DocumentInsert, DocumentSchema, DocumentUpdate,
-    DriverCapabilities, DriverFormDef, DriverMetadata, EditorDiagnostic, FieldInfo, FormValues,
-    FormattedError, Icon, IndexData, IndexDirection, LanguageService, MONGODB_FORM,
-    PlaceholderStyle, QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage,
-    QueryRequest, QueryResult, Row, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
-    SshTunnelConfig, TableInfo, TextPosition, TextPositionRange, ValidationResult, Value, ViewInfo,
+    ConnectionErrorFormatter, ConnectionExt, ConnectionProfile, CrudResult, DangerousQueryKind,
+    DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo,
+    DdlCapabilities, DescribeRequest, Diagnostic, DiagnosticSeverity, DocumentConnection,
+    DocumentDelete, DocumentInsert, DocumentSchema, DocumentUpdate, DriverCapabilities,
+    DriverFormDef, DriverLimits, DriverMetadata, EditorDiagnostic, FieldInfo, FormFieldDef,
+    FormFieldKind, FormSection, FormTab, FormValues, FormattedError, Icon, IndexData,
+    IndexDirection, KeyValueConnection, LanguageService, MONGODB_FORM, MutationCapabilities,
+    OrderByColumn, PaginationStyle, PlaceholderStyle, QueryCapabilities, QueryErrorFormatter,
+    QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult, RelationalConnection,
+    Row, SchemaLoadingStrategy, SchemaSnapshot, SemanticFieldRef, SemanticFilter, SemanticPlan,
+    SemanticPlanKind, SemanticRequest, SqlDialect, SshTunnelConfig, TableInfo, TextPosition,
+    TextPositionRange, TransactionCapabilities, ValidationResult, Value, ViewInfo, WhereOperator,
     detect_dangerous_mongo, sanitize_uri,
 };
 use dbflux_ssh::SshTunnel;
 use mongodb::sync::{Client, Database};
 
 /// MongoDB driver metadata.
-pub static MONGODB_METADATA: DriverMetadata = DriverMetadata {
-    id: "mongodb",
-    display_name: "MongoDB",
-    description: "Document database for modern applications",
+pub static MONGODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
+    id: "mongodb".into(),
+    display_name: "MongoDB".into(),
+    description: "Document database for modern applications".into(),
     category: DatabaseCategory::Document,
     query_language: QueryLanguage::MongoQuery,
     capabilities: DriverCapabilities::from_bits_truncate(
         DriverCapabilities::DOCUMENT_BASE.bits()
             | DriverCapabilities::AGGREGATION.bits()
+            | DriverCapabilities::SSH_TUNNEL.bits()
             | DriverCapabilities::INDEXES.bits(),
     ),
     default_port: Some(27017),
-    uri_scheme: "mongodb",
+    uri_scheme: "mongodb".into(),
     icon: Icon::Mongodb,
-};
+    syntax: None,
+    query: Some(QueryCapabilities {
+        pagination: vec![PaginationStyle::Cursor, PaginationStyle::PageToken],
+        where_operators: vec![
+            WhereOperator::Eq,
+            WhereOperator::Ne,
+            WhereOperator::Gt,
+            WhereOperator::Gte,
+            WhereOperator::Lt,
+            WhereOperator::Lte,
+            WhereOperator::In,
+            WhereOperator::NotIn,
+            WhereOperator::And,
+            WhereOperator::Or,
+            WhereOperator::Not,
+        ],
+        supports_order_by: true,
+        supports_group_by: true,
+        supports_having: true,
+        supports_distinct: false,
+        supports_limit: true,
+        supports_offset: true,
+        supports_joins: false,
+        supports_subqueries: false,
+        supports_union: false,
+        supports_intersect: false,
+        supports_except: false,
+        supports_case_expressions: false,
+        supports_window_functions: false,
+        supports_ctes: false,
+        supports_explain: false,
+        max_query_parameters: 0,
+        max_order_by_columns: 0,
+        max_group_by_columns: 0,
+    }),
+    mutation: Some(MutationCapabilities {
+        supports_insert: true,
+        supports_update: true,
+        supports_delete: true,
+        supports_upsert: true,
+        supports_returning: false,
+        supports_batch: false,
+        supports_bulk_update: false,
+        supports_bulk_delete: false,
+        max_insert_values: 0,
+    }),
+    ddl: Some(DdlCapabilities {
+        supports_create_database: false,
+        supports_drop_database: false,
+        supports_create_table: false,
+        supports_drop_table: false,
+        supports_alter_table: false,
+        supports_create_index: true,
+        supports_drop_index: true,
+        supports_create_view: false,
+        supports_drop_view: false,
+        supports_create_trigger: false,
+        supports_drop_trigger: false,
+        transactional_ddl: false,
+        supports_add_column: false,
+        supports_drop_column: false,
+        supports_rename_column: false,
+        supports_alter_column: false,
+        supports_add_constraint: false,
+        supports_drop_constraint: false,
+    }),
+    transactions: Some(TransactionCapabilities {
+        supports_transactions: true,
+        supported_isolation_levels: vec![],
+        default_isolation_level: None,
+        supports_savepoints: false,
+        supports_nested_transactions: false,
+        supports_read_only: false,
+        supports_deferrable: false,
+    }),
+    limits: Some(DriverLimits {
+        max_query_length: 0,
+        max_parameters: 0,
+        max_result_rows: 0,
+        max_connections: 0,
+        max_nested_subqueries: 0,
+        max_identifier_length: 63,
+        max_columns: 0,
+        max_indexes_per_table: 64,
+    }),
+    classification_override: None,
+});
 
 pub struct MongoDriver;
 
@@ -54,11 +149,49 @@ impl DbDriver for MongoDriver {
         DbKind::MongoDB
     }
 
-    fn metadata(&self) -> &'static DriverMetadata {
+    fn metadata(&self) -> &DriverMetadata {
         &MONGODB_METADATA
     }
 
-    fn form_definition(&self) -> &'static DriverFormDef {
+    fn driver_key(&self) -> dbflux_core::DriverKey {
+        "builtin:mongodb".into()
+    }
+
+    fn settings_schema(&self) -> Option<Arc<DriverFormDef>> {
+        Some(Arc::new(DriverFormDef {
+            tabs: vec![FormTab {
+                id: "settings".into(),
+                label: "Settings".into(),
+                sections: vec![FormSection {
+                    title: "Schema".into(),
+                    fields: vec![
+                        FormFieldDef {
+                            id: "schema_sample_size".into(),
+                            label: "Schema sample size".into(),
+                            kind: FormFieldKind::Number,
+                            placeholder: "100".into(),
+                            required: false,
+                            default_value: "100".into(),
+                            enabled_when_checked: None,
+                            enabled_when_unchecked: None,
+                        },
+                        FormFieldDef {
+                            id: "show_system_databases".into(),
+                            label: "Show system databases".into(),
+                            kind: FormFieldKind::Checkbox,
+                            placeholder: String::new(),
+                            required: false,
+                            default_value: "false".into(),
+                            enabled_when_checked: None,
+                            enabled_when_unchecked: None,
+                        },
+                    ],
+                }],
+            }],
+        }))
+    }
+
+    fn form_definition(&self) -> &DriverFormDef {
         &MONGODB_FORM
     }
 
@@ -246,10 +379,14 @@ impl DbDriver for MongoDriver {
     fn connect_with_secrets(
         &self,
         profile: &ConnectionProfile,
-        password: Option<&str>,
-        ssh_secret: Option<&str>,
+        password: Option<&SecretString>,
+        ssh_secret: Option<&SecretString>,
     ) -> Result<Box<dyn Connection>, DbError> {
         let config = extract_mongodb_config(&profile.config)?;
+        let schema_settings = Self::schema_settings(profile);
+
+        let password = password.map(|value| value.expose_secret());
+        let ssh_secret = ssh_secret.map(|value| value.expose_secret());
 
         if config.use_uri {
             self.connect_with_uri(
@@ -257,6 +394,7 @@ impl DbDriver for MongoDriver {
                 config.user.as_deref(),
                 password,
                 config.database,
+                schema_settings,
             )
         } else if let Some(tunnel_config) = &config.ssh_tunnel {
             self.connect_via_ssh_tunnel(
@@ -268,6 +406,7 @@ impl DbDriver for MongoDriver {
                 config.database.clone(),
                 config.auth_database.as_deref(),
                 password,
+                schema_settings,
             )
         } else {
             self.connect_direct(
@@ -277,6 +416,7 @@ impl DbDriver for MongoDriver {
                 config.database,
                 config.auth_database.as_deref(),
                 password,
+                schema_settings,
             )
         }
     }
@@ -288,12 +428,33 @@ impl DbDriver for MongoDriver {
 }
 
 impl MongoDriver {
+    fn schema_settings(profile: &ConnectionProfile) -> MongoSchemaSettings {
+        let settings = profile.connection_settings.as_ref();
+
+        let schema_sample_size = settings
+            .and_then(|values| values.get("schema_sample_size"))
+            .and_then(|value| value.parse::<i32>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(DEFAULT_SAMPLE_SIZE);
+
+        let show_system_databases = settings
+            .and_then(|values| values.get("show_system_databases"))
+            .map(|value| value == "true")
+            .unwrap_or(false);
+
+        MongoSchemaSettings {
+            schema_sample_size,
+            show_system_databases,
+        }
+    }
+
     fn connect_with_uri(
         &self,
         base_uri: &str,
         user: Option<&str>,
         password: Option<&str>,
         database: Option<String>,
+        schema_settings: MongoSchemaSettings,
     ) -> Result<Box<dyn Connection>, DbError> {
         let uri = inject_credentials_into_uri(base_uri, user, password);
 
@@ -312,10 +473,12 @@ impl MongoDriver {
         Ok(Box::new(MongoConnection {
             client: Mutex::new(client),
             default_database: database,
+            schema_settings,
             ssh_tunnel: None,
         }))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn connect_direct(
         &self,
         host: &str,
@@ -324,6 +487,7 @@ impl MongoDriver {
         database: Option<String>,
         auth_database: Option<&str>,
         password: Option<&str>,
+        schema_settings: MongoSchemaSettings,
     ) -> Result<Box<dyn Connection>, DbError> {
         let uri = build_mongodb_uri(host, port, user, password, auth_database);
 
@@ -341,6 +505,7 @@ impl MongoDriver {
         Ok(Box::new(MongoConnection {
             client: Mutex::new(client),
             default_database: database,
+            schema_settings,
             ssh_tunnel: None,
         }))
     }
@@ -356,6 +521,7 @@ impl MongoDriver {
         database: Option<String>,
         auth_database: Option<&str>,
         password: Option<&str>,
+        schema_settings: MongoSchemaSettings,
     ) -> Result<Box<dyn Connection>, DbError> {
         let total_start = Instant::now();
 
@@ -415,9 +581,16 @@ impl MongoDriver {
         Ok(Box::new(MongoConnection {
             client: Mutex::new(client),
             default_database: database,
+            schema_settings,
             ssh_tunnel: Some(tunnel),
         }))
     }
+}
+
+#[derive(Clone, Copy)]
+struct MongoSchemaSettings {
+    schema_sample_size: i32,
+    show_system_databases: bool,
 }
 
 struct ExtractedMongoConfig {
@@ -609,12 +782,428 @@ fn format_mongo_query_error(e: &mongodb::error::Error) -> DbError {
 pub struct MongoConnection {
     client: Mutex<Client>,
     default_database: Option<String>,
+    schema_settings: MongoSchemaSettings,
     #[allow(dead_code)]
     ssh_tunnel: Option<SshTunnel>,
 }
 
+fn mongo_filter_json_from_request(
+    legacy_filter: Option<&serde_json::Value>,
+    semantic_filter: Option<&SemanticFilter>,
+) -> Result<Option<serde_json::Value>, DbError> {
+    match semantic_filter {
+        Some(filter) => Ok(Some(mongo_filter_json_from_semantic(filter)?)),
+        None => Ok(legacy_filter.cloned()),
+    }
+}
+
+fn mongo_filter_document_from_request(
+    legacy_filter: Option<&serde_json::Value>,
+    semantic_filter: Option<&SemanticFilter>,
+) -> Result<Document, DbError> {
+    let filter = mongo_filter_json_from_request(legacy_filter, semantic_filter)?;
+
+    filter
+        .map(|value| json_to_bson_doc(&value))
+        .transpose()
+        .map(|value| value.unwrap_or_default())
+}
+
+fn mongo_filter_json_from_semantic(filter: &SemanticFilter) -> Result<serde_json::Value, DbError> {
+    match filter {
+        SemanticFilter::Predicate(predicate) => {
+            let field_name = mongo_filter_field_name(&predicate.field)?;
+
+            let filter_value = match predicate.operator {
+                WhereOperator::Eq => predicate
+                    .value
+                    .as_ref()
+                    .map(Value::to_serde_json)
+                    .ok_or_else(|| {
+                        DbError::query_failed("MongoDB semantic filter requires a value")
+                    })?,
+                WhereOperator::Null => serde_json::Value::Null,
+                WhereOperator::Ne => mongo_operator_filter("$ne", predicate.value.as_ref())?,
+                WhereOperator::Gt => mongo_operator_filter("$gt", predicate.value.as_ref())?,
+                WhereOperator::Gte => mongo_operator_filter("$gte", predicate.value.as_ref())?,
+                WhereOperator::Lt => mongo_operator_filter("$lt", predicate.value.as_ref())?,
+                WhereOperator::Lte => mongo_operator_filter("$lte", predicate.value.as_ref())?,
+                WhereOperator::In => mongo_operator_filter("$in", predicate.value.as_ref())?,
+                WhereOperator::NotIn => mongo_operator_filter("$nin", predicate.value.as_ref())?,
+                WhereOperator::Regex => mongo_operator_filter("$regex", predicate.value.as_ref())?,
+                unsupported => {
+                    return Err(DbError::NotSupported(format!(
+                        "MongoDB semantic filters do not support operator {:?}",
+                        unsupported
+                    )));
+                }
+            };
+
+            let mut object = serde_json::Map::new();
+            object.insert(field_name, filter_value);
+            Ok(serde_json::Value::Object(object))
+        }
+        SemanticFilter::And(filters) => mongo_logical_filter_json("$and", filters),
+        SemanticFilter::Or(filters) => mongo_logical_filter_json("$or", filters),
+        SemanticFilter::Not(filter) => {
+            let inner = mongo_filter_json_from_semantic(filter)?;
+            Ok(serde_json::json!({ "$nor": [inner] }))
+        }
+    }
+}
+
+fn mongo_logical_filter_json(
+    operator: &str,
+    filters: &[SemanticFilter],
+) -> Result<serde_json::Value, DbError> {
+    if filters.is_empty() {
+        return Err(DbError::query_failed(format!(
+            "MongoDB semantic filter '{}' requires at least one child expression",
+            operator
+        )));
+    }
+
+    let mut object = serde_json::Map::new();
+    object.insert(
+        operator.to_string(),
+        serde_json::Value::Array(
+            filters
+                .iter()
+                .map(mongo_filter_json_from_semantic)
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+    );
+    Ok(serde_json::Value::Object(object))
+}
+
+fn mongo_operator_filter(
+    operator: &str,
+    value: Option<&Value>,
+) -> Result<serde_json::Value, DbError> {
+    let value =
+        value.ok_or_else(|| DbError::query_failed("MongoDB semantic filter requires a value"))?;
+
+    let mut object = serde_json::Map::new();
+    object.insert(operator.to_string(), Value::to_serde_json(value));
+    Ok(serde_json::Value::Object(object))
+}
+
+fn mongo_filter_field_name(field: &SemanticFieldRef) -> Result<String, DbError> {
+    match field {
+        SemanticFieldRef::Column(column) => Ok(column.qualified_name()),
+        SemanticFieldRef::Path(segments) => {
+            if segments.is_empty() {
+                return Err(DbError::query_failed(
+                    "MongoDB semantic filter path must contain at least one segment",
+                ));
+            }
+
+            Ok(segments.join("."))
+        }
+    }
+}
+
+fn mongo_collection_shell_prefix(collection: &dbflux_core::CollectionRef) -> String {
+    format!(
+        "db.getSiblingDB({}).getCollection({})",
+        serde_json::to_string(&collection.database)
+            .unwrap_or_else(|_| format!("\"{}\"", collection.database)),
+        serde_json::to_string(&collection.name)
+            .unwrap_or_else(|_| format!("\"{}\"", collection.name)),
+    )
+}
+
+fn plan_mongo_collection_browse(
+    request: &CollectionBrowseRequest,
+) -> Result<SemanticPlan, DbError> {
+    let filter =
+        mongo_filter_json_from_request(request.filter.as_ref(), request.semantic_filter.as_ref())?
+            .unwrap_or_else(|| serde_json::json!({}));
+    let filter_text = serde_json::to_string_pretty(&filter).map_err(|error| {
+        DbError::query_failed(format!("Failed to render MongoDB filter preview: {error}"))
+    })?;
+
+    let mut query = format!(
+        "{}.find({filter_text})",
+        mongo_collection_shell_prefix(&request.collection)
+    );
+
+    let offset = request.pagination.offset();
+    if offset > 0 {
+        query.push_str(&format!(".skip({offset})"));
+    }
+
+    query.push_str(&format!(".limit({})", request.pagination.limit()));
+
+    Ok(SemanticPlan::single_query(
+        SemanticPlanKind::Query,
+        dbflux_core::PlannedQuery::new(QueryLanguage::MongoQuery, query)
+            .with_database(Some(request.collection.database.clone())),
+    ))
+}
+
+fn plan_mongo_collection_count(request: &CollectionCountRequest) -> Result<SemanticPlan, DbError> {
+    let filter =
+        mongo_filter_json_from_request(request.filter.as_ref(), request.semantic_filter.as_ref())?
+            .unwrap_or_else(|| serde_json::json!({}));
+    let filter_text = serde_json::to_string_pretty(&filter).map_err(|error| {
+        DbError::query_failed(format!("Failed to render MongoDB filter preview: {error}"))
+    })?;
+
+    let query = format!(
+        "{}.countDocuments({filter_text})",
+        mongo_collection_shell_prefix(&request.collection)
+    );
+
+    Ok(SemanticPlan::single_query(
+        SemanticPlanKind::Query,
+        dbflux_core::PlannedQuery::new(QueryLanguage::MongoQuery, query)
+            .with_database(Some(request.collection.database.clone())),
+    ))
+}
+
+fn validate_mongo_output_field_name(name: &str, context: &str) -> Result<(), DbError> {
+    if name.is_empty() {
+        return Err(DbError::query_failed(format!(
+            "MongoDB aggregate {context} cannot be empty"
+        )));
+    }
+
+    if name.starts_with('$') || name.contains('.') {
+        return Err(DbError::NotSupported(format!(
+            "MongoDB aggregate {context} '{name}' is not supported because output field names cannot contain '.' or start with '$'"
+        )));
+    }
+
+    Ok(())
+}
+
+fn mongo_field_path_from_column(column: &dbflux_core::ColumnRef) -> String {
+    column.qualified_name()
+}
+
+fn mongo_field_path_from_semantic_field(field: &SemanticFieldRef) -> Result<String, DbError> {
+    match field {
+        SemanticFieldRef::Column(column) => Ok(mongo_field_path_from_column(column)),
+        SemanticFieldRef::Path(segments) => {
+            if segments.is_empty() {
+                return Err(DbError::query_failed(
+                    "MongoDB aggregate field path must contain at least one segment",
+                ));
+            }
+
+            Ok(segments.join("."))
+        }
+    }
+}
+
+fn mongo_aggregate_output_field_from_semantic(field: &SemanticFieldRef) -> Result<String, DbError> {
+    let name = mongo_field_path_from_semantic_field(field)?;
+    validate_mongo_output_field_name(&name, "field")?;
+    Ok(name)
+}
+
+fn mongo_aggregate_output_field_from_column(
+    column: &dbflux_core::ColumnRef,
+) -> Result<String, DbError> {
+    mongo_aggregate_output_field_from_semantic(&column.clone().into())
+}
+
+fn mongo_aggregate_accumulator(
+    aggregation: &dbflux_core::AggregateSpec,
+) -> Result<serde_json::Value, DbError> {
+    use dbflux_core::AggregateFunction;
+
+    let column_path = aggregation
+        .column
+        .as_ref()
+        .map(mongo_field_path_from_column);
+
+    match aggregation.function {
+        AggregateFunction::Count => {
+            if let Some(column_path) = column_path {
+                Ok(serde_json::json!({
+                    "$sum": {
+                        "$cond": [
+                            {
+                                "$ne": [
+                                    { "$ifNull": [format!("${column_path}"), serde_json::Value::Null] },
+                                    serde_json::Value::Null
+                                ]
+                            },
+                            1,
+                            0
+                        ]
+                    }
+                }))
+            } else {
+                Ok(serde_json::json!({ "$sum": 1 }))
+            }
+        }
+        AggregateFunction::Sum => {
+            let column_path = column_path
+                .ok_or_else(|| DbError::query_failed("MongoDB SUM aggregate requires a column"))?;
+            Ok(serde_json::json!({ "$sum": format!("${column_path}") }))
+        }
+        AggregateFunction::Avg => {
+            let column_path = column_path
+                .ok_or_else(|| DbError::query_failed("MongoDB AVG aggregate requires a column"))?;
+            Ok(serde_json::json!({ "$avg": format!("${column_path}") }))
+        }
+        AggregateFunction::Min => {
+            let column_path = column_path
+                .ok_or_else(|| DbError::query_failed("MongoDB MIN aggregate requires a column"))?;
+            Ok(serde_json::json!({ "$min": format!("${column_path}") }))
+        }
+        AggregateFunction::Max => {
+            let column_path = column_path
+                .ok_or_else(|| DbError::query_failed("MongoDB MAX aggregate requires a column"))?;
+            Ok(serde_json::json!({ "$max": format!("${column_path}") }))
+        }
+    }
+}
+
+fn plan_mongo_aggregate(request: &dbflux_core::AggregateRequest) -> Result<SemanticPlan, DbError> {
+    if request.aggregations.is_empty() {
+        return Err(DbError::query_failed(
+            "MongoDB aggregate request requires at least one aggregation",
+        ));
+    }
+
+    let mut pipeline = Vec::new();
+
+    if let Some(filter) = &request.filter {
+        pipeline.push(serde_json::json!({
+            "$match": mongo_filter_json_from_semantic(filter)?
+        }));
+    }
+
+    let mut group_id = serde_json::Map::new();
+    let mut project = serde_json::Map::new();
+    project.insert("_id".to_string(), serde_json::json!(0));
+
+    for column in &request.group_by {
+        let field_name = column.qualified_name();
+        validate_mongo_output_field_name(&field_name, "group-by column")?;
+
+        group_id.insert(
+            field_name.clone(),
+            serde_json::json!(format!("${field_name}")),
+        );
+        project.insert(
+            field_name.clone(),
+            serde_json::json!(format!("$_id.{field_name}")),
+        );
+    }
+
+    let mut group = serde_json::Map::new();
+    group.insert(
+        "_id".to_string(),
+        if group_id.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::Value::Object(group_id)
+        },
+    );
+
+    for aggregation in &request.aggregations {
+        validate_mongo_output_field_name(&aggregation.alias, "aggregation alias")?;
+        group.insert(
+            aggregation.alias.clone(),
+            mongo_aggregate_accumulator(aggregation)?,
+        );
+        project.insert(
+            aggregation.alias.clone(),
+            serde_json::json!(format!("${}", aggregation.alias)),
+        );
+    }
+
+    pipeline.push(serde_json::json!({ "$group": serde_json::Value::Object(group) }));
+    pipeline.push(serde_json::json!({ "$project": serde_json::Value::Object(project) }));
+
+    if let Some(having) = &request.having {
+        pipeline.push(serde_json::json!({
+            "$match": mongo_filter_json_from_semantic(having)?
+        }));
+    }
+
+    if !request.order_by.is_empty() {
+        let mut sort = serde_json::Map::new();
+
+        for order in &request.order_by {
+            let field_name = mongo_aggregate_output_field_from_column(&order.column)?;
+            sort.insert(
+                field_name,
+                serde_json::json!(match order.direction {
+                    dbflux_core::SortDirection::Ascending => 1,
+                    dbflux_core::SortDirection::Descending => -1,
+                }),
+            );
+        }
+
+        pipeline.push(serde_json::json!({ "$sort": serde_json::Value::Object(sort) }));
+    }
+
+    if let Some(limit) = request.limit {
+        pipeline.push(serde_json::json!({ "$limit": limit }));
+    }
+
+    let mut query = serde_json::Map::new();
+    query.insert(
+        "collection".to_string(),
+        serde_json::Value::String(request.table.name.clone()),
+    );
+    query.insert("aggregate".to_string(), serde_json::Value::Array(pipeline));
+
+    let target_database = request
+        .target_database
+        .clone()
+        .or_else(|| request.table.schema.clone());
+
+    if let Some(database) = &target_database {
+        query.insert(
+            "database".to_string(),
+            serde_json::Value::String(database.clone()),
+        );
+    }
+
+    let query_text =
+        serde_json::to_string_pretty(&serde_json::Value::Object(query)).map_err(|error| {
+            DbError::query_failed(format!(
+                "Failed to render MongoDB aggregate preview: {error}"
+            ))
+        })?;
+
+    Ok(SemanticPlan::single_query(
+        SemanticPlanKind::Query,
+        dbflux_core::PlannedQuery::new(QueryLanguage::MongoQuery, query_text)
+            .with_database(target_database),
+    ))
+}
+
+fn plan_mongo_mutation(mutation: &dbflux_core::MutationRequest) -> Result<SemanticPlan, DbError> {
+    static GENERATOR: crate::query_generator::MongoShellGenerator =
+        crate::query_generator::MongoShellGenerator;
+
+    GENERATOR.plan_mutation(mutation).ok_or_else(|| {
+        DbError::NotSupported("MongoDB semantic planning does not support this mutation".into())
+    })
+}
+
+fn plan_mongo_semantic_request(request: &SemanticRequest) -> Result<SemanticPlan, DbError> {
+    match request {
+        SemanticRequest::CollectionBrowse(request) => plan_mongo_collection_browse(request),
+        SemanticRequest::CollectionCount(request) => plan_mongo_collection_count(request),
+        SemanticRequest::Aggregate(request) => plan_mongo_aggregate(request),
+        SemanticRequest::Mutation(mutation) => plan_mongo_mutation(mutation),
+        _ => Err(DbError::NotSupported(
+            "MongoDB semantic planning does not support this request".into(),
+        )),
+    }
+}
+
 impl Connection for MongoConnection {
-    fn metadata(&self) -> &'static DriverMetadata {
+    fn metadata(&self) -> &DriverMetadata {
         &MONGODB_METADATA
     }
 
@@ -712,7 +1301,10 @@ impl Connection for MongoConnection {
 
         Ok(db_names
             .into_iter()
-            .filter(|name| name != "admin" && name != "config" && name != "local")
+            .filter(|name| {
+                self.schema_settings.show_system_databases
+                    || (name != "admin" && name != "config" && name != "local")
+            })
             .map(|name| {
                 let is_current = self.default_database.as_ref() == Some(&name);
                 DatabaseInfo { name, is_current }
@@ -786,7 +1378,8 @@ impl Connection for MongoConnection {
         let db = client.database(database);
         let indexes = fetch_collection_indexes(&db, collection).map(IndexData::Document);
 
-        let sample_fields = sample_collection_fields(&db, collection);
+        let sample_fields =
+            sample_collection_fields(&db, collection, self.schema_settings.schema_sample_size);
 
         Ok(TableInfo {
             name: collection.to_string(),
@@ -797,6 +1390,97 @@ impl Connection for MongoConnection {
             constraints: None,
             sample_fields: Some(sample_fields),
         })
+    }
+
+    fn describe_table(&self, request: &DescribeRequest) -> Result<QueryResult, DbError> {
+        let start = Instant::now();
+
+        let database = request
+            .table
+            .schema
+            .as_deref()
+            .or(self.default_database.as_deref())
+            .ok_or_else(|| DbError::query_failed("No database specified".to_string()))?;
+
+        let details = self.table_details(database, None, &request.table.name)?;
+
+        let index_lookup = details
+            .indexes
+            .as_ref()
+            .and_then(|indexes| match indexes {
+                IndexData::Document(indexes) => Some(build_document_index_lookup(indexes)),
+                IndexData::Relational(_) => None,
+            })
+            .unwrap_or_default();
+
+        let mut flattened_fields = Vec::new();
+        if let Some(fields) = details.sample_fields.as_ref() {
+            flatten_field_infos(fields, None, &mut flattened_fields);
+        }
+
+        let rows = flattened_fields
+            .into_iter()
+            .map(|field| {
+                let index_names = index_lookup.get(&field.name).cloned().unwrap_or_default();
+
+                vec![
+                    Value::Text(field.name),
+                    Value::Text(field.common_type),
+                    field
+                        .occurrence_rate
+                        .map(|rate| Value::Float(rate as f64))
+                        .unwrap_or(Value::Null),
+                    Value::Bool(!index_names.is_empty()),
+                    if index_names.is_empty() {
+                        Value::Null
+                    } else {
+                        Value::Text(index_names.join(", "))
+                    },
+                    Value::Int(field.nested_field_count as i64),
+                ]
+            })
+            .collect();
+
+        let columns = vec![
+            ColumnMeta {
+                name: "field_name".to_string(),
+                type_name: "text".to_string(),
+                nullable: false,
+                is_primary_key: false,
+            },
+            ColumnMeta {
+                name: "common_type".to_string(),
+                type_name: "text".to_string(),
+                nullable: false,
+                is_primary_key: false,
+            },
+            ColumnMeta {
+                name: "occurrence_rate".to_string(),
+                type_name: "float".to_string(),
+                nullable: true,
+                is_primary_key: false,
+            },
+            ColumnMeta {
+                name: "is_indexed".to_string(),
+                type_name: "bool".to_string(),
+                nullable: false,
+                is_primary_key: false,
+            },
+            ColumnMeta {
+                name: "index_names".to_string(),
+                type_name: "text".to_string(),
+                nullable: true,
+                is_primary_key: false,
+            },
+            ColumnMeta {
+                name: "nested_field_count".to_string(),
+                type_name: "int".to_string(),
+                nullable: false,
+                is_primary_key: false,
+            },
+        ];
+
+        Ok(QueryResult::table(columns, rows, None, start.elapsed()))
     }
 
     fn view_details(
@@ -948,12 +1632,10 @@ impl Connection for MongoConnection {
         let db_name = request.collection.database.as_str();
         let db = client.database(db_name);
 
-        let filter = request
-            .filter
-            .as_ref()
-            .map(json_to_bson_doc)
-            .transpose()?
-            .unwrap_or_default();
+        let filter = mongo_filter_document_from_request(
+            request.filter.as_ref(),
+            request.semantic_filter.as_ref(),
+        )?;
 
         let collection = db.collection::<Document>(&request.collection.name);
 
@@ -994,12 +1676,10 @@ impl Connection for MongoConnection {
         let db = client.database(db_name);
         let collection = db.collection::<Document>(&request.collection.name);
 
-        let filter = request
-            .filter
-            .as_ref()
-            .map(json_to_bson_doc)
-            .transpose()?
-            .unwrap_or_default();
+        let filter = mongo_filter_document_from_request(
+            request.filter.as_ref(),
+            request.semantic_filter.as_ref(),
+        )?;
 
         let count = collection
             .count_documents(filter)
@@ -1021,6 +1701,122 @@ impl Connection for MongoConnection {
         static GENERATOR: crate::query_generator::MongoShellGenerator =
             crate::query_generator::MongoShellGenerator;
         Some(&GENERATOR)
+    }
+
+    fn plan_semantic_request(&self, request: &SemanticRequest) -> Result<SemanticPlan, DbError> {
+        plan_mongo_semantic_request(request)
+    }
+
+    fn build_select_sql(
+        &self,
+        _table: &str,
+        _columns: &[String],
+        _filter: Option<&Value>,
+        _order_by: &[OrderByColumn],
+        _limit: u32,
+        _offset: u32,
+    ) -> String {
+        // MongoDB doesn't use SQL - this is for SQL-based drivers
+        "SELECT * FROM table WHERE filter LIMIT offset".to_string()
+    }
+
+    fn build_insert_sql(
+        &self,
+        _table: &str,
+        _columns: &[String],
+        _values: &[Value],
+    ) -> (String, Vec<Value>) {
+        // MongoDB doesn't use SQL - this is for SQL-based drivers
+        (
+            "INSERT INTO table (columns) VALUES (values)".to_string(),
+            Vec::new(),
+        )
+    }
+
+    fn build_update_sql(
+        &self,
+        _table: &str,
+        _set: &[(String, Value)],
+        _filter: Option<&Value>,
+    ) -> (String, Vec<Value>) {
+        // MongoDB doesn't use SQL - this is for SQL-based drivers
+        (
+            "UPDATE table SET col=val WHERE filter".to_string(),
+            Vec::new(),
+        )
+    }
+
+    fn build_delete_sql(&self, _table: &str, _filter: Option<&Value>) -> (String, Vec<Value>) {
+        // MongoDB doesn't use SQL - this is for SQL-based drivers
+        ("DELETE FROM table WHERE filter".to_string(), Vec::new())
+    }
+
+    fn build_upsert_sql(
+        &self,
+        _table: &str,
+        _columns: &[String],
+        _values: &[Value],
+        _conflict_columns: &[String],
+        _update_columns: &[String],
+    ) -> (String, Vec<Value>) {
+        // MongoDB doesn't use SQL - this is for SQL-based drivers
+        (
+            "INSERT INTO table VALUES (vals) ON CONFLICT DO UPDATE".to_string(),
+            Vec::new(),
+        )
+    }
+
+    fn build_count_sql(&self, _table: &str, _filter: Option<&Value>) -> String {
+        // MongoDB doesn't use SQL - this is for SQL-based drivers
+        "SELECT COUNT(*) FROM table".to_string()
+    }
+
+    fn build_truncate_sql(&self, _table: &str) -> String {
+        // MongoDB doesn't use SQL - this is for SQL-based drivers
+        "TRUNCATE TABLE table".to_string()
+    }
+
+    fn build_drop_index_sql(
+        &self,
+        _index_name: &str,
+        _table_name: Option<&str>,
+        _if_exists: bool,
+    ) -> String {
+        // MongoDB doesn't use SQL - this is for SQL-based drivers
+        "DROP INDEX index_name".to_string()
+    }
+
+    fn version_query(&self) -> &'static str {
+        // MongoDB uses db.version() shell command, not SQL
+        "db.version()"
+    }
+
+    fn supports_transactional_ddl(&self) -> bool {
+        false
+    }
+
+    fn translate_filter(&self, _filter: &Value) -> Result<String, DbError> {
+        // For MongoDB, the Value filter is already in document format
+        // This is used by SQL-based drivers to convert JSON filters to SQL WHERE clauses
+        Err(DbError::NotSupported(
+            "translate_filter is not applicable to MongoDB - it uses document-based filters, not SQL".to_string(),
+        ))
+    }
+}
+
+impl DocumentConnection for MongoConnection {}
+
+impl ConnectionExt for MongoConnection {
+    fn as_relational(&self) -> Option<&dyn RelationalConnection> {
+        None
+    }
+
+    fn as_document(&self) -> Option<&dyn DocumentConnection> {
+        Some(self)
+    }
+
+    fn as_keyvalue(&self) -> Option<&dyn KeyValueConnection> {
+        None
     }
 }
 
@@ -1395,6 +2191,7 @@ fn execute_mongo_query(
                     name: "count".to_string(),
                     type_name: "Int64".to_string(),
                     nullable: false,
+                    is_primary_key: false,
                 }],
                 rows: vec![vec![Value::Int(count as i64)]],
                 affected_rows: None,
@@ -1414,6 +2211,7 @@ fn execute_mongo_query(
                     name: "insertedId".to_string(),
                     type_name: "ObjectId".to_string(),
                     nullable: false,
+                    is_primary_key: false,
                 }],
                 rows: vec![vec![inserted_id]],
                 affected_rows: Some(1),
@@ -1433,6 +2231,7 @@ fn execute_mongo_query(
                     name: "insertedCount".to_string(),
                     type_name: "Int64".to_string(),
                     nullable: false,
+                    is_primary_key: false,
                 }],
                 rows: vec![vec![Value::Int(count as i64)]],
                 affected_rows: Some(count),
@@ -1463,16 +2262,19 @@ fn execute_mongo_query(
                         name: "matchedCount".to_string(),
                         type_name: "Int64".to_string(),
                         nullable: false,
+                        is_primary_key: false,
                     },
                     ColumnMeta {
                         name: "modifiedCount".to_string(),
                         type_name: "Int64".to_string(),
                         nullable: false,
+                        is_primary_key: false,
                     },
                     ColumnMeta {
                         name: "upserted".to_string(),
                         type_name: "Bool".to_string(),
                         nullable: false,
+                        is_primary_key: false,
                     },
                 ],
                 rows: vec![vec![
@@ -1508,16 +2310,19 @@ fn execute_mongo_query(
                         name: "matchedCount".to_string(),
                         type_name: "Int64".to_string(),
                         nullable: false,
+                        is_primary_key: false,
                     },
                     ColumnMeta {
                         name: "modifiedCount".to_string(),
                         type_name: "Int64".to_string(),
                         nullable: false,
+                        is_primary_key: false,
                     },
                     ColumnMeta {
                         name: "upserted".to_string(),
                         type_name: "Bool".to_string(),
                         nullable: false,
+                        is_primary_key: false,
                     },
                 ],
                 rows: vec![vec![
@@ -1542,6 +2347,7 @@ fn execute_mongo_query(
                     name: "deletedCount".to_string(),
                     type_name: "Int64".to_string(),
                     nullable: false,
+                    is_primary_key: false,
                 }],
                 rows: vec![vec![Value::Int(deleted as i64)]],
                 affected_rows: Some(deleted),
@@ -1561,6 +2367,7 @@ fn execute_mongo_query(
                     name: "deletedCount".to_string(),
                     type_name: "Int64".to_string(),
                     nullable: false,
+                    is_primary_key: false,
                 }],
                 rows: vec![vec![Value::Int(deleted as i64)]],
                 affected_rows: Some(deleted),
@@ -1591,16 +2398,19 @@ fn execute_mongo_query(
                         name: "matchedCount".to_string(),
                         type_name: "Int64".to_string(),
                         nullable: false,
+                        is_primary_key: false,
                     },
                     ColumnMeta {
                         name: "modifiedCount".to_string(),
                         type_name: "Int64".to_string(),
                         nullable: false,
+                        is_primary_key: false,
                     },
                     ColumnMeta {
                         name: "upserted".to_string(),
                         type_name: "Bool".to_string(),
                         nullable: false,
+                        is_primary_key: false,
                     },
                 ],
                 rows: vec![vec![
@@ -1623,6 +2433,7 @@ fn execute_mongo_query(
                     name: "result".to_string(),
                     type_name: "Text".to_string(),
                     nullable: false,
+                    is_primary_key: false,
                 }],
                 rows: vec![vec![Value::Text("Collection dropped".to_string())]],
                 affected_rows: None,
@@ -1659,6 +2470,7 @@ fn execute_db_operation(
                     name: "name".to_string(),
                     type_name: "Text".to_string(),
                     nullable: false,
+                    is_primary_key: false,
                 }],
                 rows: vec![vec![Value::Text(name)]],
                 affected_rows: None,
@@ -1678,6 +2490,7 @@ fn execute_db_operation(
                     name: "collection".to_string(),
                     type_name: "Text".to_string(),
                     nullable: false,
+                    is_primary_key: false,
                 }],
                 rows,
                 affected_rows: None,
@@ -1738,6 +2551,7 @@ fn execute_db_operation(
                     name: "result".to_string(),
                     type_name: "Text".to_string(),
                     nullable: false,
+                    is_primary_key: false,
                 }],
                 rows: vec![vec![Value::Text(format!("Collection '{}' created", name))]],
                 affected_rows: None,
@@ -1752,6 +2566,7 @@ fn execute_db_operation(
                     name: "result".to_string(),
                     type_name: "Text".to_string(),
                     nullable: false,
+                    is_primary_key: false,
                 }],
                 rows: vec![vec![Value::Text("Database dropped".to_string())]],
                 affected_rows: None,
@@ -1790,6 +2605,7 @@ fn execute_db_operation(
                     name: "version".to_string(),
                     type_name: "Text".to_string(),
                     nullable: false,
+                    is_primary_key: false,
                 }],
                 rows: vec![vec![Value::Text(version)]],
                 affected_rows: None,
@@ -1854,6 +2670,7 @@ fn documents_to_result(documents: Vec<Document>) -> Result<QueryResultInternal, 
             name: name.clone(),
             type_name: "BSON".to_string(),
             nullable: true,
+            is_primary_key: name == "_id",
         })
         .collect();
 
@@ -2024,12 +2841,16 @@ fn bson_to_index_direction(value: &Bson) -> IndexDirection {
     }
 }
 
-const SAMPLE_SIZE: i32 = 100;
+const DEFAULT_SAMPLE_SIZE: i32 = 100;
 
-fn sample_collection_fields(db: &Database, collection_name: &str) -> Vec<FieldInfo> {
+fn sample_collection_fields(
+    db: &Database,
+    collection_name: &str,
+    sample_size: i32,
+) -> Vec<FieldInfo> {
     let collection = db.collection::<Document>(collection_name);
 
-    let pipeline = vec![doc! { "$sample": { "size": SAMPLE_SIZE } }];
+    let pipeline = vec![doc! { "$sample": { "size": sample_size } }];
     let cursor = match collection.aggregate(pipeline).run() {
         Ok(c) => c,
         Err(e) => {
@@ -2039,7 +2860,7 @@ fn sample_collection_fields(db: &Database, collection_name: &str) -> Vec<FieldIn
                 e
             );
 
-            match collection.find(doc! {}).limit(SAMPLE_SIZE as i64).run() {
+            match collection.find(doc! {}).limit(sample_size as i64).run() {
                 Ok(c) => c,
                 Err(find_error) => {
                     log::warn!(
@@ -2093,6 +2914,55 @@ fn sample_collection_fields(db: &Database, collection_name: &str) -> Vec<FieldIn
     fields
 }
 
+#[derive(Debug)]
+struct FlattenedFieldInfo {
+    name: String,
+    common_type: String,
+    occurrence_rate: Option<f32>,
+    nested_field_count: usize,
+}
+
+fn flatten_field_infos(
+    fields: &[FieldInfo],
+    prefix: Option<&str>,
+    output: &mut Vec<FlattenedFieldInfo>,
+) {
+    for field in fields {
+        let full_name = match prefix {
+            Some(prefix) => format!("{}.{}", prefix, field.name),
+            None => field.name.clone(),
+        };
+
+        let nested_field_count = field.nested_fields.as_ref().map_or(0, Vec::len);
+
+        output.push(FlattenedFieldInfo {
+            name: full_name.clone(),
+            common_type: field.common_type.clone(),
+            occurrence_rate: field.occurrence_rate,
+            nested_field_count,
+        });
+
+        if let Some(nested_fields) = field.nested_fields.as_ref() {
+            flatten_field_infos(nested_fields, Some(&full_name), output);
+        }
+    }
+}
+
+fn build_document_index_lookup(indexes: &[CollectionIndexInfo]) -> BTreeMap<String, Vec<String>> {
+    let mut lookup = BTreeMap::new();
+
+    for index in indexes {
+        for (field_name, _) in &index.keys {
+            lookup
+                .entry(field_name.clone())
+                .or_insert_with(Vec::new)
+                .push(index.name.clone());
+        }
+    }
+
+    lookup
+}
+
 struct FieldStats {
     occurrence_count: u32,
     type_counts: HashMap<String, u32>,
@@ -2114,6 +2984,17 @@ fn collect_field_stats(doc: &Document, stats: &mut BTreeMap<String, FieldStats>)
         if let Bson::Document(nested_doc) = value {
             let nested = entry.nested_stats.get_or_insert_with(BTreeMap::new);
             collect_field_stats(nested_doc, nested);
+            continue;
+        }
+
+        if let Bson::Array(items) = value {
+            let nested = entry.nested_stats.get_or_insert_with(BTreeMap::new);
+
+            for item in items {
+                if let Bson::Document(nested_doc) = item {
+                    collect_field_stats(nested_doc, nested);
+                }
+            }
         }
     }
 }
@@ -2167,7 +3048,11 @@ fn bson_type_name(value: &Bson) -> String {
 mod tests {
     use super::*;
     use crate::query_parser::parse_query;
-    use dbflux_core::{DatabaseCategory, DbDriver, DbError, QueryLanguage};
+    use dbflux_core::{
+        CollectionBrowseRequest, CollectionCountRequest, CollectionRef, DatabaseCategory, DbDriver,
+        DbError, QueryLanguage, SemanticFilter, SemanticPlanKind, SemanticRequest, Value,
+        WhereOperator,
+    };
 
     #[test]
     fn build_config_requires_uri_in_uri_mode() {
@@ -2367,5 +3252,199 @@ mod tests {
         if let Value::Document(map) = value {
             assert_eq!(map.len(), 2);
         }
+    }
+
+    #[test]
+    fn settings_schema_exposes_schema_fields() {
+        let driver = MongoDriver::new();
+        let schema = driver
+            .settings_schema()
+            .expect("mongodb should have a settings schema");
+
+        assert_eq!(schema.tabs.len(), 1);
+        assert_eq!(schema.tabs[0].sections.len(), 1);
+
+        let section = &schema.tabs[0].sections[0];
+        assert_eq!(section.title, "Schema");
+        assert_eq!(section.fields.len(), 2);
+        assert_eq!(section.fields[0].id, "schema_sample_size");
+        assert_eq!(section.fields[0].default_value, "100");
+        assert_eq!(section.fields[1].id, "show_system_databases");
+        assert_eq!(section.fields[1].default_value, "false");
+    }
+
+    #[test]
+    fn driver_key_is_builtin_mongodb() {
+        let driver = MongoDriver::new();
+        assert_eq!(driver.driver_key(), "builtin:mongodb");
+    }
+
+    #[test]
+    fn semantic_filter_translates_to_mongo_json() {
+        let filter = SemanticFilter::and(vec![
+            SemanticFilter::compare("status", WhereOperator::Eq, Value::Text("active".into())),
+            SemanticFilter::compare("score", WhereOperator::Gte, Value::Int(10)),
+        ]);
+
+        let translated = mongo_filter_json_from_semantic(&filter)
+            .expect("filter should translate to mongo json");
+
+        assert_eq!(
+            translated,
+            serde_json::json!({
+                "$and": [
+                    {"status": "active"},
+                    {"score": {"$gte": 10}}
+                ]
+            })
+        );
+    }
+
+    #[test]
+    fn semantic_planner_builds_collection_browse_preview() {
+        let request =
+            CollectionBrowseRequest::new(CollectionRef::new("app", "users")).with_semantic_filter(
+                SemanticFilter::compare("status", WhereOperator::Eq, Value::Text("active".into())),
+            );
+
+        let plan = plan_mongo_semantic_request(&SemanticRequest::CollectionBrowse(request))
+            .expect("browse request should plan");
+
+        assert_eq!(plan.kind, SemanticPlanKind::Query);
+        assert_eq!(plan.queries[0].language, QueryLanguage::MongoQuery);
+        assert_eq!(plan.queries[0].target_database.as_deref(), Some("app"));
+        assert!(plan.queries[0].text.contains("find"));
+        assert!(plan.queries[0].text.contains("status"));
+    }
+
+    #[test]
+    fn semantic_planner_builds_collection_count_preview() {
+        let request =
+            CollectionCountRequest::new(CollectionRef::new("app", "users")).with_semantic_filter(
+                SemanticFilter::compare("score", WhereOperator::Gt, Value::Int(5)),
+            );
+
+        let plan = plan_mongo_semantic_request(&SemanticRequest::CollectionCount(request))
+            .expect("count request should plan");
+
+        assert_eq!(plan.kind, SemanticPlanKind::Query);
+        assert_eq!(plan.queries[0].language, QueryLanguage::MongoQuery);
+        assert!(plan.queries[0].text.contains("countDocuments"));
+        assert!(plan.queries[0].text.contains("score"));
+    }
+
+    #[test]
+    fn semantic_planner_builds_aggregate_preview() {
+        let request = dbflux_core::AggregateRequest::new(dbflux_core::TableRef::new("orders"))
+            .with_filter(SemanticFilter::compare(
+                "status",
+                WhereOperator::Eq,
+                Value::Text("active".into()),
+            ))
+            .with_group_by(vec![dbflux_core::ColumnRef::new("customer_id")])
+            .with_aggregations(vec![
+                dbflux_core::AggregateSpec::count_all("total_orders"),
+                dbflux_core::AggregateSpec::new(
+                    dbflux_core::AggregateFunction::Sum,
+                    Some(dbflux_core::ColumnRef::new("amount")),
+                    "total_amount",
+                ),
+            ])
+            .with_having(SemanticFilter::compare(
+                "total_orders",
+                WhereOperator::Gt,
+                Value::Int(1),
+            ))
+            .with_order_by(vec![dbflux_core::OrderByColumn::desc("total_amount")])
+            .with_limit(Some(10))
+            .with_target_database(Some("app".into()));
+
+        let plan = plan_mongo_semantic_request(&SemanticRequest::Aggregate(request))
+            .expect("mongo aggregate request should plan");
+
+        assert_eq!(plan.kind, SemanticPlanKind::Query);
+        assert_eq!(plan.queries[0].language, QueryLanguage::MongoQuery);
+        assert_eq!(plan.queries[0].target_database.as_deref(), Some("app"));
+        assert!(plan.queries[0].text.contains("\"collection\": \"orders\""));
+        assert!(plan.queries[0].text.contains("\"$group\""));
+        assert!(plan.queries[0].text.contains("\"total_orders\""));
+        assert!(plan.queries[0].text.contains("\"total_amount\""));
+        assert!(plan.queries[0].text.contains("\"$match\""));
+        assert!(plan.queries[0].text.contains("\"$sort\""));
+        assert!(plan.queries[0].text.contains("\"$limit\""));
+    }
+
+    #[test]
+    fn flatten_field_infos_uses_dot_paths() {
+        let fields = vec![FieldInfo {
+            name: "profile".to_string(),
+            common_type: "Document".to_string(),
+            occurrence_rate: Some(1.0),
+            nested_fields: Some(vec![FieldInfo {
+                name: "email".to_string(),
+                common_type: "String".to_string(),
+                occurrence_rate: Some(0.5),
+                nested_fields: None,
+            }]),
+        }];
+
+        let mut flattened = Vec::new();
+        flatten_field_infos(&fields, None, &mut flattened);
+
+        assert_eq!(flattened.len(), 2);
+        assert_eq!(flattened[0].name, "profile");
+        assert_eq!(flattened[0].nested_field_count, 1);
+        assert_eq!(flattened[1].name, "profile.email");
+        assert_eq!(flattened[1].nested_field_count, 0);
+    }
+
+    #[test]
+    fn build_document_index_lookup_groups_indexes_per_field() {
+        let indexes = vec![
+            CollectionIndexInfo {
+                name: "email_idx".to_string(),
+                keys: vec![("profile.email".to_string(), IndexDirection::Ascending)],
+                is_unique: true,
+                is_sparse: false,
+                expire_after_seconds: None,
+            },
+            CollectionIndexInfo {
+                name: "email_text_idx".to_string(),
+                keys: vec![("profile.email".to_string(), IndexDirection::Text)],
+                is_unique: false,
+                is_sparse: false,
+                expire_after_seconds: None,
+            },
+        ];
+
+        let lookup = build_document_index_lookup(&indexes);
+
+        assert_eq!(
+            lookup.get("profile.email"),
+            Some(&vec!["email_idx".to_string(), "email_text_idx".to_string()])
+        );
+    }
+
+    #[test]
+    fn collect_field_stats_infers_embedded_document_fields_inside_arrays() {
+        let document = doc! {
+            "items": [
+                { "sku": "A-1", "qty": 2 },
+                { "sku": "B-2" }
+            ]
+        };
+        let mut stats = BTreeMap::new();
+
+        collect_field_stats(&document, &mut stats);
+
+        let items = stats.get("items").expect("items field should be tracked");
+        let field = build_field_info("items", items, 1.0);
+        let nested_fields = field
+            .nested_fields
+            .expect("array-of-document fields should expose nested fields");
+
+        assert_eq!(field.common_type, "Array");
+        assert!(nested_fields.iter().any(|nested| nested.name == "sku"));
+        assert!(nested_fields.iter().any(|nested| nested.name == "qty"));
     }
 }

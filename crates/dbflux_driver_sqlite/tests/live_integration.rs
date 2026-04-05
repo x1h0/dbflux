@@ -10,7 +10,13 @@ fn connect_sqlite() -> Result<Box<dyn dbflux_core::Connection>, DbError> {
     let db_path = temp_dir.path().join("test.sqlite");
 
     let driver = SqliteDriver::new();
-    let profile = ConnectionProfile::new("live-sqlite", DbConfig::SQLite { path: db_path });
+    let profile = ConnectionProfile::new(
+        "live-sqlite",
+        DbConfig::SQLite {
+            path: db_path,
+            connection_id: None,
+        },
+    );
 
     let connection = driver.connect(&profile)?;
     connection.ping()?;
@@ -333,7 +339,7 @@ fn sqlite_code_generators() -> Result<(), DbError> {
     let table = connection.table_details("main", None, "codegen_test")?;
 
     for generator in generators {
-        let code = connection.generate_code(generator.id, &table)?;
+        let code = connection.generate_code(&generator.id, &table)?;
         assert!(
             !code.is_empty(),
             "generator '{}' returned empty code",

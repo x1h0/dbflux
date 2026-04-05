@@ -2,29 +2,26 @@
 
 //! SSH tunneling support for DBFlux database drivers.
 //!
-//! This crate provides SSH tunnel functionality that can be shared across
-//! different database drivers (PostgreSQL, MySQL, etc.).
+//! Uses `dbflux_tunnel_core::Tunnel` for the shared RAII lifecycle and
+//! implements `TunnelConnector` for SSH-specific forwarding logic.
 
-use std::io::{Read, Write};
+use std::collections::BTreeMap;
+use std::io::Write;
 use std::net::{TcpListener, TcpStream};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::thread::{self, JoinHandle};
 
 use dbflux_core::{DbError, SshAuthMethod, SshTunnelConfig};
+use dbflux_tunnel_core::{ForwardingConnection, Tunnel, TunnelConnector, adaptive_sleep};
 use ssh2::Session;
 
 /// An active SSH tunnel that forwards local connections to a remote host.
 ///
-/// The tunnel runs in a background thread and automatically shuts down
-/// when dropped. All SSH operations are serialized through a single thread
-/// to avoid libssh2 thread-safety issues.
+/// All SSH operations are serialized through a single thread to avoid
+/// libssh2 thread-safety issues. Shuts down on drop.
 pub struct SshTunnel {
-    local_port: u16,
-    shutdown: Arc<AtomicBool>,
-    #[allow(dead_code)]
-    forwarder_thread: JoinHandle<()>,
+    inner: Tunnel,
 }
 
 impl SshTunnel {
@@ -32,19 +29,31 @@ impl SshTunnel {
     ///
     /// Returns a tunnel that listens on a random local port. Use `local_port()`
     /// to get the assigned port number.
-    ///
-    /// This function verifies the tunnel can reach the remote host before returning.
     pub fn start(session: Session, remote_host: String, remote_port: u16) -> Result<Self, DbError> {
-        // Test that we can actually forward to the remote host before starting the tunnel
-        log::info!(
-            "[SSH] Testing tunnel connectivity to {}:{}",
-            remote_host,
-            remote_port
-        );
+        let connector = SshConnector { session };
+        let inner = Tunnel::start(connector, remote_host, remote_port, "SSH")?;
+        Ok(Self { inner })
+    }
 
-        session.set_blocking(true);
-        let test_channel = session
-            .channel_direct_tcpip(&remote_host, remote_port, None)
+    /// Get the local port the tunnel is listening on.
+    pub fn local_port(&self) -> u16 {
+        self.inner.local_port()
+    }
+}
+
+struct SshConnector {
+    session: Session,
+}
+
+// Safety: all `Session` access is serialized to the tunnel thread.
+unsafe impl Send for SshConnector {}
+
+impl TunnelConnector for SshConnector {
+    fn test_connection(&self, remote_host: &str, remote_port: u16) -> Result<(), DbError> {
+        self.session.set_blocking(true);
+        let test_channel = self
+            .session
+            .channel_direct_tcpip(remote_host, remote_port, None)
             .map_err(|e| {
                 DbError::connection_failed(format!(
                     "SSH tunnel test failed - cannot reach {}:{} through SSH server: {}",
@@ -52,48 +61,18 @@ impl SshTunnel {
                 ))
             })?;
 
-        // Close test channel
         drop(test_channel);
-        log::info!("[SSH] Tunnel connectivity verified");
-
-        let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| {
-            DbError::connection_failed(format!("Failed to bind local tunnel port: {}", e))
-        })?;
-
-        let local_port = listener
-            .local_addr()
-            .map_err(|e| {
-                DbError::connection_failed(format!("Failed to get local tunnel address: {}", e))
-            })?
-            .port();
-
-        listener.set_nonblocking(true).map_err(|e| {
-            DbError::connection_failed(format!("Failed to set listener non-blocking: {}", e))
-        })?;
-
-        let shutdown = Arc::new(AtomicBool::new(false));
-        let shutdown_clone = shutdown.clone();
-
-        let thread = thread::spawn(move || {
-            run_tunnel_loop(listener, session, remote_host, remote_port, shutdown_clone);
-        });
-
-        Ok(Self {
-            local_port,
-            shutdown,
-            forwarder_thread: thread,
-        })
+        Ok(())
     }
 
-    /// Get the local port the tunnel is listening on.
-    pub fn local_port(&self) -> u16 {
-        self.local_port
-    }
-}
-
-impl Drop for SshTunnel {
-    fn drop(&mut self) {
-        self.shutdown.store(true, Ordering::SeqCst);
+    fn run_tunnel_loop(
+        self,
+        listener: TcpListener,
+        remote_host: String,
+        remote_port: u16,
+        shutdown: Arc<AtomicBool>,
+    ) {
+        run_ssh_tunnel_loop(listener, self.session, remote_host, remote_port, shutdown);
     }
 }
 
@@ -143,6 +122,8 @@ pub fn establish_session(
     session
         .handshake()
         .map_err(|e| DbError::connection_failed(format!("SSH handshake failed: {}", e)))?;
+
+    verify_or_store_host_key(&session, &config.host, config.port)?;
 
     log::info!(
         "[SSH] Phase 2/3: Handshake completed in {:.2}ms",
@@ -206,15 +187,134 @@ fn expand_tilde(path: &Path) -> std::path::PathBuf {
     path.to_path_buf()
 }
 
+fn verify_or_store_host_key(session: &Session, host: &str, port: u16) -> Result<(), DbError> {
+    let fingerprint = current_host_key_fingerprint(session)?;
+
+    let known_hosts_path = tofu_known_hosts_path()?;
+    let mut entries = load_tofu_known_hosts(&known_hosts_path)?;
+    let entry_key = format!("{}\t{}", host, port);
+
+    if let Some(existing) = entries.get(&entry_key) {
+        if existing == &fingerprint {
+            return Ok(());
+        }
+
+        return Err(DbError::connection_failed(format!(
+            "SSH host key mismatch for {}:{} (possible MITM attack)",
+            host, port
+        )));
+    }
+
+    entries.insert(entry_key, fingerprint);
+    save_tofu_known_hosts(&known_hosts_path, &entries)?;
+
+    log::warn!(
+        "[SSH] First connection to {}:{} -- storing host key (TOFU)",
+        host,
+        port
+    );
+
+    Ok(())
+}
+
+fn current_host_key_fingerprint(session: &Session) -> Result<String, DbError> {
+    let (key, _) = session.host_key().ok_or_else(|| {
+        DbError::connection_failed("SSH server did not present a host key".to_string())
+    })?;
+
+    Ok(hex_encode(key))
+}
+
+fn tofu_known_hosts_path() -> Result<PathBuf, DbError> {
+    let config_dir = dirs::config_dir().ok_or_else(|| {
+        DbError::connection_failed("Could not find config directory for SSH known hosts")
+    })?;
+
+    let app_dir = config_dir.join("dbflux");
+    std::fs::create_dir_all(&app_dir).map_err(|error| {
+        DbError::connection_failed(format!("Failed to create config directory: {}", error))
+    })?;
+
+    Ok(app_dir.join("ssh_known_hosts"))
+}
+
+fn load_tofu_known_hosts(path: &Path) -> Result<BTreeMap<String, String>, DbError> {
+    if !path.exists() {
+        return Ok(BTreeMap::new());
+    }
+
+    let content = std::fs::read_to_string(path).map_err(|error| {
+        DbError::connection_failed(format!("Failed to read SSH known hosts: {}", error))
+    })?;
+
+    let mut entries = BTreeMap::new();
+
+    for line in content
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
+        let mut parts = line.splitn(3, '\t');
+
+        let Some(host) = parts.next() else {
+            continue;
+        };
+        let Some(port) = parts.next() else {
+            continue;
+        };
+        let Some(fingerprint) = parts.next() else {
+            continue;
+        };
+
+        entries.insert(format!("{}\t{}", host, port), fingerprint.to_string());
+    }
+
+    Ok(entries)
+}
+
+fn save_tofu_known_hosts(path: &Path, entries: &BTreeMap<String, String>) -> Result<(), DbError> {
+    let mut output = String::new();
+
+    for (key, fingerprint) in entries {
+        let mut parts = key.splitn(2, '\t');
+        let Some(host) = parts.next() else {
+            continue;
+        };
+        let Some(port) = parts.next() else {
+            continue;
+        };
+
+        output.push_str(host);
+        output.push('\t');
+        output.push_str(port);
+        output.push('\t');
+        output.push_str(fingerprint);
+        output.push('\n');
+    }
+
+    std::fs::write(path, output).map_err(|error| {
+        DbError::connection_failed(format!("Failed to write SSH known hosts: {}", error))
+    })
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut output = String::with_capacity(bytes.len() * 2);
+
+    for byte in bytes {
+        output.push(HEX[(byte >> 4) as usize] as char);
+        output.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+
+    output
+}
+
 fn authenticate_with_key(
     session: &Session,
     user: &str,
     key_path: Option<&Path>,
     passphrase: Option<&str>,
 ) -> Result<(), DbError> {
-    // Only try SSH agent if no explicit key path was provided.
-    // When a key path is specified, the user wants to use that specific key,
-    // and the agent call can hang indefinitely in some configurations.
     if key_path.is_none() {
         log::info!("[SSH] No key path specified, trying SSH agent authentication...");
         match session.userauth_agent(user) {
@@ -233,7 +333,6 @@ fn authenticate_with_key(
         log::info!("[SSH] Key path specified, skipping SSH agent");
     }
 
-    // Build list of key paths to try
     let key_paths: Vec<std::path::PathBuf> = if let Some(path) = key_path {
         let expanded = expand_tilde(path);
         log::info!(
@@ -298,87 +397,12 @@ fn authenticate_with_key(
     )))
 }
 
-/// A single tunnel connection pairing a client TCP stream with an SSH channel.
-struct TunnelConnection {
-    client: TcpStream,
-    channel: ssh2::Channel,
-    client_buf: Vec<u8>,
-    channel_buf: Vec<u8>,
-    closed: bool,
-}
+// ---------------------------------------------------------------------------
+// SSH tunnel loop
+// ---------------------------------------------------------------------------
 
-impl TunnelConnection {
-    fn new(client: TcpStream, channel: ssh2::Channel) -> std::io::Result<Self> {
-        client.set_nodelay(true)?;
-        client.set_nonblocking(true)?;
-
-        Ok(Self {
-            client,
-            channel,
-            client_buf: vec![0u8; 8192],
-            channel_buf: vec![0u8; 8192],
-            closed: false,
-        })
-    }
-
-    /// Poll this connection for data transfer. Returns true if any data was transferred.
-    fn poll(&mut self) -> bool {
-        if self.closed {
-            return false;
-        }
-
-        let mut activity = false;
-
-        // Client -> SSH channel
-        match self.client.read(&mut self.client_buf) {
-            Ok(0) => {
-                self.closed = true;
-                return false;
-            }
-            Ok(n) => {
-                if self.channel.write_all(&self.client_buf[..n]).is_err() {
-                    self.closed = true;
-                    return false;
-                }
-                activity = true;
-            }
-            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
-            Err(_) => {
-                self.closed = true;
-                return false;
-            }
-        }
-
-        // SSH channel -> Client
-        match self.channel.read(&mut self.channel_buf) {
-            Ok(0) => {
-                self.closed = true;
-                return false;
-            }
-            Ok(n) => {
-                if self.client.write_all(&self.channel_buf[..n]).is_err() {
-                    self.closed = true;
-                    return false;
-                }
-                activity = true;
-            }
-            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
-            Err(_) => {
-                self.closed = true;
-                return false;
-            }
-        }
-
-        activity
-    }
-}
-
-/// Single-threaded tunnel loop that multiplexes all connections.
-///
-/// This approach avoids libssh2 thread-safety issues by keeping all SSH
-/// operations on a single thread. The session and all its channels are
-/// only ever accessed from this one thread.
-fn run_tunnel_loop(
+/// Single-threaded tunnel loop that multiplexes all SSH connections.
+fn run_ssh_tunnel_loop(
     listener: TcpListener,
     session: Session,
     remote_host: String,
@@ -387,12 +411,11 @@ fn run_tunnel_loop(
 ) {
     session.set_blocking(false);
 
-    let mut connections: Vec<TunnelConnection> = Vec::new();
+    let mut connections: Vec<ForwardingConnection<ssh2::Channel>> = Vec::new();
 
     while !shutdown.load(Ordering::SeqCst) {
         let mut activity = false;
 
-        // Accept new connections
         match listener.accept() {
             Ok((client_stream, addr)) => {
                 log::debug!("[SSH] New tunnel connection from {}", addr);
@@ -402,7 +425,7 @@ fn run_tunnel_loop(
                 match session.channel_direct_tcpip(&remote_host, remote_port, None) {
                     Ok(channel) => {
                         session.set_blocking(false);
-                        match TunnelConnection::new(client_stream, channel) {
+                        match ForwardingConnection::new(client_stream, channel) {
                             Ok(conn) => {
                                 connections.push(conn);
                                 activity = true;
@@ -425,14 +448,15 @@ fn run_tunnel_loop(
             }
         }
 
-        // Poll all active connections
         for conn in &mut connections {
-            if conn.poll() {
+            if conn.poll(
+                |channel, data| channel.write_all(data),
+                |client, data| client.write_all(data),
+            ) {
                 activity = true;
             }
         }
 
-        // Remove closed connections
         let before = connections.len();
         connections.retain(|c| !c.closed);
         if connections.len() < before {
@@ -443,10 +467,7 @@ fn run_tunnel_loop(
             );
         }
 
-        // Sleep briefly if no activity to avoid busy-spinning
-        if !activity {
-            thread::sleep(std::time::Duration::from_micros(500));
-        }
+        adaptive_sleep(activity, !connections.is_empty());
     }
 
     log::info!("[SSH] Tunnel loop shutting down");

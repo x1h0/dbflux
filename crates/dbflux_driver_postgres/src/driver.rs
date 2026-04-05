@@ -1,26 +1,31 @@
 use std::collections::HashMap;
 use std::net::IpAddr;
+use std::sync::LazyLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
+use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
     AddEnumValueRequest, AddForeignKeyRequest, CodeGenCapabilities, CodeGenScope, CodeGenerator,
-    CodeGeneratorInfo, ColumnInfo, ColumnMeta, Connection, ConnectionErrorFormatter,
+    CodeGeneratorInfo, ColumnInfo, ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionExt,
     ConnectionProfile, ConstraintInfo, ConstraintKind, CreateIndexRequest, CreateTypeRequest,
     CrudResult, CustomTypeInfo, CustomTypeKind, DatabaseCategory, DatabaseInfo, DbConfig, DbDriver,
-    DbError, DbKind, DbSchemaInfo, DescribeRequest, DriverCapabilities, DriverFormDef,
-    DriverMetadata, DropForeignKeyRequest, DropIndexRequest, DropTypeRequest, ErrorLocation,
-    ExplainRequest, ForeignKeyBuilder, ForeignKeyInfo, FormValues, FormattedError, Icon, IndexData,
-    IndexInfo, POSTGRES_FORM, PlaceholderStyle, QueryCancelHandle, QueryErrorFormatter,
-    QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult, ReindexRequest,
+    DbError, DbKind, DbSchemaInfo, DdlCapabilities, DescribeRequest, DocumentConnection,
+    DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata, DropForeignKeyRequest,
+    DropIndexRequest, DropTypeRequest, ErrorLocation, ExplainRequest, ForeignKeyBuilder,
+    ForeignKeyInfo, FormValues, FormattedError, Icon, IndexData, IndexInfo, IsolationLevel,
+    KeyValueConnection, MutationCapabilities, OrderByColumn, POSTGRES_FORM, PaginationStyle,
+    PlaceholderStyle, QueryCancelHandle, QueryCapabilities, QueryErrorFormatter, QueryGenerator,
+    QueryHandle, QueryLanguage, QueryRequest, QueryResult, ReindexRequest, RelationalConnection,
     RelationalSchema, Row, RowDelete, RowInsert, RowPatch, SchemaFeatures, SchemaForeignKeyBuilder,
-    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
-    SqlMutationGenerator, SqlQueryBuilder, SshTunnelConfig, SslMode, TableInfo, TypeDefinition,
-    Value, ViewInfo, generate_create_table, generate_delete_template, generate_drop_table,
-    generate_insert_template, generate_select_star, generate_truncate, generate_update_template,
-    sanitize_uri,
+    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan,
+    SemanticPlanKind, SemanticRequest, SortDirection, SqlDialect, SqlMutationGenerator,
+    SqlQueryBuilder, SshTunnelConfig, SslMode, SyntaxInfo, TableInfo, TransactionCapabilities,
+    TypeDefinition, Value, ViewInfo, WhereOperator, generate_create_table,
+    generate_delete_template, generate_drop_table, generate_insert_template, generate_select_star,
+    generate_truncate, generate_update_template, render_semantic_filter_sql, sanitize_uri,
 };
 use dbflux_ssh::SshTunnel;
 use native_tls::TlsConnector;
@@ -31,10 +36,10 @@ use serde_json::Value as JsonValue;
 use uuid::Uuid;
 
 /// PostgreSQL driver metadata.
-pub static METADATA: DriverMetadata = DriverMetadata {
-    id: "postgres",
-    display_name: "PostgreSQL",
-    description: "Advanced open-source relational database",
+pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
+    id: "postgres".into(),
+    display_name: "PostgreSQL".into(),
+    description: "Advanced open-source relational database".into(),
     category: DatabaseCategory::Relational,
     query_language: QueryLanguage::Sql,
     capabilities: DriverCapabilities::from_bits_truncate(
@@ -47,15 +52,119 @@ pub static METADATA: DriverMetadata = DriverMetadata {
             | DriverCapabilities::CHECK_CONSTRAINTS.bits()
             | DriverCapabilities::UNIQUE_CONSTRAINTS.bits()
             | DriverCapabilities::CUSTOM_TYPES.bits()
-            | DriverCapabilities::TRIGGERS.bits()
-            | DriverCapabilities::STORED_PROCEDURES.bits()
-            | DriverCapabilities::SEQUENCES.bits()
-            | DriverCapabilities::RETURNING.bits(),
+            | DriverCapabilities::RETURNING.bits()
+            | DriverCapabilities::TRANSACTIONAL_DDL.bits(),
     ),
     default_port: Some(5432),
-    uri_scheme: "postgresql",
+    uri_scheme: "postgresql".into(),
     icon: Icon::Postgres,
-};
+    syntax: Some(SyntaxInfo {
+        identifier_quote: '"',
+        string_quote: '\'',
+        placeholder_style: PlaceholderStyle::DollarNumber,
+        supports_schemas: true,
+        default_schema: Some("public".to_string()),
+        case_sensitive_identifiers: true,
+    }),
+    query: Some(QueryCapabilities {
+        pagination: vec![PaginationStyle::Offset],
+        where_operators: vec![
+            WhereOperator::Eq,
+            WhereOperator::Ne,
+            WhereOperator::Gt,
+            WhereOperator::Gte,
+            WhereOperator::Lt,
+            WhereOperator::Lte,
+            WhereOperator::Like,
+            WhereOperator::ILike,
+            WhereOperator::Regex,
+            WhereOperator::Null,
+            WhereOperator::In,
+            WhereOperator::NotIn,
+            WhereOperator::Contains,
+            WhereOperator::Overlap,
+            WhereOperator::ContainsAll,
+            WhereOperator::ContainsAny,
+            WhereOperator::Size,
+            WhereOperator::And,
+            WhereOperator::Or,
+            WhereOperator::Not,
+        ],
+        supports_order_by: true,
+        supports_group_by: true,
+        supports_having: true,
+        supports_distinct: true,
+        supports_limit: true,
+        supports_offset: true,
+        supports_joins: true,
+        supports_subqueries: true,
+        supports_union: true,
+        supports_intersect: true,
+        supports_except: true,
+        supports_case_expressions: true,
+        supports_window_functions: true,
+        supports_ctes: true,
+        supports_explain: true,
+        max_query_parameters: 32767,
+        max_order_by_columns: 0,
+        max_group_by_columns: 0,
+    }),
+    mutation: Some(MutationCapabilities {
+        supports_insert: true,
+        supports_update: true,
+        supports_delete: true,
+        supports_upsert: true,
+        supports_returning: true,
+        supports_batch: true,
+        supports_bulk_update: true,
+        supports_bulk_delete: true,
+        max_insert_values: 0,
+    }),
+    ddl: Some(DdlCapabilities {
+        supports_create_database: true,
+        supports_drop_database: true,
+        supports_create_table: true,
+        supports_drop_table: true,
+        supports_alter_table: true,
+        supports_create_index: true,
+        supports_drop_index: true,
+        supports_create_view: true,
+        supports_drop_view: true,
+        supports_create_trigger: false,
+        supports_drop_trigger: false,
+        transactional_ddl: true,
+        supports_add_column: true,
+        supports_drop_column: true,
+        supports_rename_column: true,
+        supports_alter_column: true,
+        supports_add_constraint: true,
+        supports_drop_constraint: true,
+    }),
+    transactions: Some(TransactionCapabilities {
+        supports_transactions: true,
+        supported_isolation_levels: vec![
+            IsolationLevel::ReadCommitted,
+            IsolationLevel::RepeatableRead,
+            IsolationLevel::Serializable,
+        ],
+        default_isolation_level: Some(IsolationLevel::ReadCommitted),
+        supports_savepoints: true,
+        supports_nested_transactions: true,
+        supports_read_only: true,
+        supports_deferrable: false,
+    }),
+    limits: Some(DriverLimits {
+        max_query_length: 0,
+        max_parameters: 32767,
+        max_result_rows: 0,
+        max_connections: 0,
+        max_nested_subqueries: 16,
+        max_identifier_length: 63,
+        max_columns: 250,
+        max_indexes_per_table: 32,
+    }),
+    classification_override: None,
+});
 
 /// PostgreSQL SQL dialect implementation.
 pub struct PostgresDialect;
@@ -83,6 +192,77 @@ impl SqlDialect for PostgresDialect {
 
     fn supports_returning(&self) -> bool {
         true
+    }
+
+    fn comparison_column_expr(&self, col_name: &str, col_type: &str) -> String {
+        if needs_postgres_text_comparison_cast(col_type) {
+            format!("({})::text", col_name)
+        } else {
+            col_name.to_string()
+        }
+    }
+
+    fn json_filter_expr(&self, col_name: &str, op: &str, literal: &str, col_type: &str) -> String {
+        if col_type.contains("json") {
+            format!("({})::jsonb {} ({})", col_name, op, literal)
+        } else {
+            format!("{} {} {}", col_name, op, literal)
+        }
+    }
+
+    fn build_upsert_statement(
+        &self,
+        schema: Option<&str>,
+        table: &str,
+        columns: &[String],
+        values: &[Value],
+        conflict_columns: &[String],
+        update_assignments: &[(String, Value)],
+    ) -> Option<String> {
+        if columns.is_empty() || columns.len() != values.len() || conflict_columns.is_empty() {
+            return None;
+        }
+
+        let table = self.qualified_table(schema, table);
+        let columns = columns
+            .iter()
+            .map(|column| self.quote_identifier(column))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let values = values
+            .iter()
+            .map(|value| self.value_to_literal(value))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let conflict_columns = conflict_columns
+            .iter()
+            .map(|column| self.quote_identifier(column))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        if update_assignments.is_empty() {
+            return Some(format!(
+                "INSERT INTO {} ({}) VALUES ({}) ON CONFLICT ({}) DO NOTHING",
+                table, columns, values, conflict_columns
+            ));
+        }
+
+        let update_clause = update_assignments
+            .iter()
+            .map(|(column, value)| {
+                format!(
+                    "{} = {}",
+                    self.quote_identifier(column),
+                    self.value_to_literal(value)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        Some(format!(
+            "INSERT INTO {} ({}) VALUES ({}) ON CONFLICT ({}) DO UPDATE SET {}",
+            table, columns, values, conflict_columns, update_clause
+        ))
     }
 }
 
@@ -248,17 +428,24 @@ impl DbDriver for PostgresDriver {
         DbKind::Postgres
     }
 
-    fn metadata(&self) -> &'static DriverMetadata {
+    fn metadata(&self) -> &DriverMetadata {
         &METADATA
+    }
+
+    fn driver_key(&self) -> dbflux_core::DriverKey {
+        "builtin:postgres".into()
     }
 
     fn connect_with_secrets(
         &self,
         profile: &ConnectionProfile,
-        password: Option<&str>,
-        ssh_secret: Option<&str>,
+        password: Option<&SecretString>,
+        ssh_secret: Option<&SecretString>,
     ) -> Result<Box<dyn Connection>, DbError> {
         let config = extract_postgres_config(&profile.config)?;
+
+        let password = password.map(|value| value.expose_secret());
+        let ssh_secret = ssh_secret.map(|value| value.expose_secret());
 
         if config.use_uri {
             return self.connect_with_uri(config.uri.as_deref().unwrap_or(""), password);
@@ -292,7 +479,7 @@ impl DbDriver for PostgresDriver {
         conn.ping()
     }
 
-    fn form_definition(&self) -> &'static DriverFormDef {
+    fn form_definition(&self) -> &DriverFormDef {
         &POSTGRES_FORM
     }
 
@@ -409,6 +596,33 @@ impl DbDriver for PostgresDriver {
             "postgresql://{}{}:{}/{}",
             credentials, host, port, database
         ))
+    }
+
+    fn with_database(&self, config: &DbConfig, database: &str) -> Option<DbConfig> {
+        match config {
+            DbConfig::Postgres {
+                use_uri,
+                uri,
+                host,
+                port,
+                user,
+                ssl_mode,
+                ssh_tunnel,
+                ssh_tunnel_profile_id,
+                ..
+            } => Some(DbConfig::Postgres {
+                use_uri: *use_uri,
+                uri: uri.clone(),
+                host: host.clone(),
+                port: *port,
+                user: user.clone(),
+                database: database.to_string(),
+                ssl_mode: *ssl_mode,
+                ssh_tunnel: ssh_tunnel.clone(),
+                ssh_tunnel_profile_id: *ssh_tunnel_profile_id,
+            }),
+            _ => None,
+        }
     }
 
     fn parse_uri(&self, uri: &str) -> Option<FormValues> {
@@ -546,8 +760,28 @@ impl PostgresDriver {
     ) -> Result<Box<dyn Connection>, DbError> {
         let uri = inject_password_into_pg_uri(base_uri, password);
 
+        let ssl_mode = parse_pg_uri_sslmode(&uri);
+
+        if ssl_mode == PgUriSslMode::Disable {
+            let client =
+                Client::connect(&uri, NoTls).map_err(|e| format_pg_uri_error(&e, base_uri))?;
+
+            let cancel_token = client.cancel_token();
+            log::info!("[CONNECT] PostgreSQL connection established via URI");
+
+            return Ok(Box::new(PostgresConnection {
+                client: Mutex::new(client),
+                ssh_tunnel: None,
+                cancel_token,
+                active_query: RwLock::new(None),
+                cancelled: Arc::new(AtomicBool::new(false)),
+            }));
+        }
+
+        let accept_invalid_certs = matches!(ssl_mode, PgUriSslMode::Prefer | PgUriSslMode::Require);
+
         let connector = TlsConnector::builder()
-            .danger_accept_invalid_certs(true)
+            .danger_accept_invalid_certs(accept_invalid_certs)
             .build()
             .map_err(|e| DbError::ConnectionFailed(format!("TLS setup failed: {}", e).into()))?;
 
@@ -555,9 +789,10 @@ impl PostgresDriver {
 
         let client = match Client::connect(&uri, tls) {
             Ok(c) => c,
-            Err(_) => {
+            Err(_) if ssl_mode == PgUriSslMode::Prefer => {
                 Client::connect(&uri, NoTls).map_err(|e| format_pg_uri_error(&e, base_uri))?
             }
+            Err(e) => return Err(format_pg_uri_error(&e, base_uri)),
         };
 
         let cancel_token = client.cancel_token();
@@ -689,6 +924,35 @@ impl PostgresDriver {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PgUriSslMode {
+    Disable,
+    Prefer,
+    Require,
+    Verify,
+}
+
+fn parse_pg_uri_sslmode(uri: &str) -> PgUriSslMode {
+    let Some(query_start) = uri.find('?') else {
+        return PgUriSslMode::Prefer;
+    };
+
+    let query = &uri[query_start + 1..];
+
+    let sslmode = query
+        .split('&')
+        .find_map(|pair| pair.split_once('=').filter(|(key, _)| *key == "sslmode"))
+        .map(|(_, value)| value.to_ascii_lowercase());
+
+    match sslmode.as_deref() {
+        Some("disable") => PgUriSslMode::Disable,
+        Some("prefer") | Some("allow") => PgUriSslMode::Prefer,
+        Some("require") => PgUriSslMode::Require,
+        Some("verify-ca") | Some("verify-full") => PgUriSslMode::Verify,
+        _ => PgUriSslMode::Prefer,
+    }
+}
+
 pub struct PostgresConnection {
     client: Mutex<Client>,
     #[allow(dead_code)]
@@ -721,60 +985,227 @@ impl QueryCancelHandle for PostgresCancelHandle {
     }
 }
 
-const POSTGRES_CODE_GENERATORS: &[CodeGeneratorInfo] = &[
-    CodeGeneratorInfo {
-        id: "select_star",
-        label: "SELECT *",
-        scope: CodeGenScope::TableOrView,
-        order: 0,
-        destructive: false,
-    },
-    CodeGeneratorInfo {
-        id: "insert",
-        label: "INSERT INTO",
-        scope: CodeGenScope::Table,
-        order: 5,
-        destructive: false,
-    },
-    CodeGeneratorInfo {
-        id: "update",
-        label: "UPDATE",
-        scope: CodeGenScope::Table,
-        order: 6,
-        destructive: false,
-    },
-    CodeGeneratorInfo {
-        id: "delete",
-        label: "DELETE",
-        scope: CodeGenScope::Table,
-        order: 7,
-        destructive: false,
-    },
-    CodeGeneratorInfo {
-        id: "create_table",
-        label: "CREATE TABLE",
-        scope: CodeGenScope::Table,
-        order: 10,
-        destructive: false,
-    },
-    CodeGeneratorInfo {
-        id: "truncate",
-        label: "TRUNCATE",
-        scope: CodeGenScope::Table,
-        order: 20,
-        destructive: true,
-    },
-    CodeGeneratorInfo {
-        id: "drop_table",
-        label: "DROP TABLE",
-        scope: CodeGenScope::Table,
-        order: 21,
-        destructive: true,
-    },
-];
+fn postgres_code_generators() -> Vec<CodeGeneratorInfo> {
+    vec![
+        CodeGeneratorInfo {
+            id: "create_table".into(),
+            label: "CREATE TABLE".into(),
+            scope: CodeGenScope::Table,
+            order: 10,
+            destructive: false,
+        },
+        CodeGeneratorInfo {
+            id: "truncate".into(),
+            label: "TRUNCATE".into(),
+            scope: CodeGenScope::Table,
+            order: 20,
+            destructive: true,
+        },
+        CodeGeneratorInfo {
+            id: "drop_table".into(),
+            label: "DROP TABLE".into(),
+            scope: CodeGenScope::Table,
+            order: 21,
+            destructive: true,
+        },
+    ]
+}
+
+fn plan_postgres_table_browse(
+    request: &dbflux_core::TableBrowseRequest,
+) -> Result<SemanticPlan, DbError> {
+    let sql = if let Some(filter) = request.semantic_filter.as_ref() {
+        let mut sql = format!(
+            "SELECT * FROM {}",
+            request.table.quoted_with(&POSTGRES_DIALECT)
+        );
+        let where_clause = render_semantic_filter_sql(filter, &POSTGRES_DIALECT)?;
+        sql.push_str(" WHERE ");
+        sql.push_str(&where_clause);
+
+        if !request.order_by.is_empty() {
+            let order_by = request
+                .order_by
+                .iter()
+                .map(|column| {
+                    let direction = match column.direction {
+                        SortDirection::Ascending => "ASC",
+                        SortDirection::Descending => "DESC",
+                    };
+                    format!(
+                        "{} {}",
+                        column.column.quoted_with(&POSTGRES_DIALECT),
+                        direction
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            sql.push_str(" ORDER BY ");
+            sql.push_str(&order_by);
+        }
+
+        sql.push_str(&format!(
+            " LIMIT {} OFFSET {}",
+            request.pagination.limit(),
+            request.pagination.offset()
+        ));
+        sql
+    } else {
+        request.build_sql_with(&POSTGRES_DIALECT)
+    };
+
+    Ok(SemanticPlan::single_query(
+        SemanticPlanKind::Query,
+        dbflux_core::PlannedQuery::new(QueryLanguage::Sql, sql),
+    ))
+}
+
+fn plan_postgres_table_count(
+    request: &dbflux_core::TableCountRequest,
+) -> Result<SemanticPlan, DbError> {
+    let quoted_table = request.table.quoted_with(&POSTGRES_DIALECT);
+    let sql = if let Some(filter) = request.semantic_filter.as_ref() {
+        let where_clause = render_semantic_filter_sql(filter, &POSTGRES_DIALECT)?;
+        format!(
+            "SELECT COUNT(*) FROM {} WHERE {}",
+            quoted_table, where_clause
+        )
+    } else {
+        match request.filter.as_deref().map(str::trim) {
+            Some(filter) if !filter.is_empty() => {
+                format!("SELECT COUNT(*) FROM {} WHERE {}", quoted_table, filter)
+            }
+            _ => format!("SELECT COUNT(*) FROM {}", quoted_table),
+        }
+    };
+
+    Ok(SemanticPlan::single_query(
+        SemanticPlanKind::Query,
+        dbflux_core::PlannedQuery::new(QueryLanguage::Sql, sql),
+    ))
+}
+
+fn plan_postgres_aggregate(
+    request: &dbflux_core::AggregateRequest,
+) -> Result<SemanticPlan, DbError> {
+    let sql = request.build_sql_with(&POSTGRES_DIALECT)?;
+
+    Ok(SemanticPlan::single_query(
+        SemanticPlanKind::Query,
+        dbflux_core::PlannedQuery::new(QueryLanguage::Sql, sql)
+            .with_database(request.target_database.clone()),
+    ))
+}
+
+fn plan_postgres_explain(request: &ExplainRequest) -> SemanticPlan {
+    let query = request.query.clone().unwrap_or_else(|| {
+        format!(
+            "SELECT * FROM {} LIMIT 100",
+            request.table.quoted_with(&POSTGRES_DIALECT)
+        )
+    });
+
+    SemanticPlan::single_query(
+        SemanticPlanKind::Query,
+        dbflux_core::PlannedQuery::new(
+            QueryLanguage::Sql,
+            format!("EXPLAIN (FORMAT JSON) {}", query),
+        ),
+    )
+}
+
+struct ActiveQueryGuard<'a> {
+    active_query: &'a RwLock<Option<Uuid>>,
+}
+
+impl<'a> ActiveQueryGuard<'a> {
+    fn activate(active_query: &'a RwLock<Option<Uuid>>, query_id: Uuid) -> Result<Self, DbError> {
+        let mut active = active_query
+            .write()
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e).into()))?;
+        *active = Some(query_id);
+        drop(active);
+
+        Ok(Self { active_query })
+    }
+}
+
+impl Drop for ActiveQueryGuard<'_> {
+    fn drop(&mut self) {
+        match self.active_query.write() {
+            Ok(mut active) => {
+                *active = None;
+            }
+            Err(error) => {
+                log::warn!(
+                    "[CLEANUP] Failed to clear active PostgreSQL query state: {}",
+                    error
+                );
+            }
+        }
+    }
+}
+
+fn plan_postgres_describe(request: &DescribeRequest) -> SemanticPlan {
+    let schema = request.table.schema.as_deref().unwrap_or("public");
+    let escaped_schema = schema.replace('\'', "''");
+    let escaped_table = request.table.name.replace('\'', "''");
+
+    let sql = format!(
+        "SELECT \
+                a.attname AS column_name, \
+                format_type(a.atttypid, a.atttypmod) AS data_type, \
+                CASE WHEN a.attnotnull THEN 'NO' ELSE 'YES' END AS is_nullable, \
+                pg_get_expr(d.adbin, d.adrelid) AS column_default, \
+                CASE WHEN a.atttypmod > 0 AND t.typname IN ('varchar', 'bpchar') \
+                     THEN a.atttypmod - 4 \
+                     ELSE NULL \
+                END AS character_maximum_length \
+            FROM pg_attribute a \
+            JOIN pg_class c ON c.oid = a.attrelid \
+            JOIN pg_namespace n ON n.oid = c.relnamespace \
+            JOIN pg_type t ON t.oid = a.atttypid \
+            LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum \
+            WHERE n.nspname = '{}' \
+              AND c.relname = '{}' \
+              AND a.attnum > 0 \
+              AND NOT a.attisdropped \
+            ORDER BY a.attnum",
+        escaped_schema, escaped_table
+    );
+
+    SemanticPlan::single_query(
+        SemanticPlanKind::Query,
+        dbflux_core::PlannedQuery::new(QueryLanguage::Sql, sql),
+    )
+}
+
+fn plan_postgres_mutation(
+    mutation: &dbflux_core::MutationRequest,
+) -> Result<SemanticPlan, DbError> {
+    static GENERATOR: SqlMutationGenerator = SqlMutationGenerator::new(&POSTGRES_DIALECT);
+
+    GENERATOR.plan_mutation(mutation).ok_or_else(|| {
+        DbError::NotSupported("PostgreSQL semantic planning does not support this mutation".into())
+    })
+}
+
+fn plan_postgres_semantic_request(request: &SemanticRequest) -> Result<SemanticPlan, DbError> {
+    match request {
+        SemanticRequest::TableBrowse(request) => plan_postgres_table_browse(request),
+        SemanticRequest::TableCount(request) => plan_postgres_table_count(request),
+        SemanticRequest::Aggregate(request) => plan_postgres_aggregate(request),
+        SemanticRequest::Explain(request) => Ok(plan_postgres_explain(request)),
+        SemanticRequest::Describe(request) => Ok(plan_postgres_describe(request)),
+        SemanticRequest::Mutation(mutation) => plan_postgres_mutation(mutation),
+        _ => Err(DbError::NotSupported(
+            "PostgreSQL semantic planning does not support this request".into(),
+        )),
+    }
+}
 
 impl Connection for PostgresConnection {
-    fn metadata(&self) -> &'static DriverMetadata {
+    fn metadata(&self) -> &DriverMetadata {
         &METADATA
     }
 
@@ -798,14 +1229,7 @@ impl Connection for PostgresConnection {
 
         let start = Instant::now();
         let query_id = Uuid::new_v4();
-
-        {
-            let mut active = self
-                .active_query
-                .write()
-                .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e).into()))?;
-            *active = Some(query_id);
-        }
+        let _active_query_guard = ActiveQueryGuard::activate(&self.active_query, query_id)?;
 
         let sql_preview = if req.sql.len() > 80 {
             format!("{}...", &req.sql[..80])
@@ -845,6 +1269,7 @@ impl Connection for PostgresConnection {
                     name: col.name().to_string(),
                     type_name: col.type_().name().to_string(),
                     nullable: true,
+                    is_primary_key: false,
                 })
                 .collect();
 
@@ -860,14 +1285,6 @@ impl Connection for PostgresConnection {
 
             (columns, rows)
         };
-
-        {
-            let mut active = self
-                .active_query
-                .write()
-                .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e).into()))?;
-            *active = None;
-        }
 
         let query_time = start.elapsed();
 
@@ -1146,8 +1563,8 @@ impl Connection for PostgresConnection {
         get_schema_foreign_keys(&mut client, schema_name)
     }
 
-    fn code_generators(&self) -> &'static [CodeGeneratorInfo] {
-        POSTGRES_CODE_GENERATORS
+    fn code_generators(&self) -> Vec<CodeGeneratorInfo> {
+        postgres_code_generators()
     }
 
     fn generate_code(&self, generator_id: &str, table: &TableInfo) -> Result<String, DbError> {
@@ -1290,7 +1707,7 @@ impl Connection for PostgresConnection {
             ),
         };
 
-        let sql = format!("EXPLAIN (FORMAT JSON, ANALYZE) {}", query);
+        let sql = format!("EXPLAIN (FORMAT JSON) {}", query);
         self.execute(&QueryRequest::new(sql))
     }
 
@@ -1336,6 +1753,245 @@ impl Connection for PostgresConnection {
     fn query_generator(&self) -> Option<&dyn QueryGenerator> {
         static GENERATOR: SqlMutationGenerator = SqlMutationGenerator::new(&POSTGRES_DIALECT);
         Some(&GENERATOR)
+    }
+
+    fn plan_semantic_request(&self, request: &SemanticRequest) -> Result<SemanticPlan, DbError> {
+        plan_postgres_semantic_request(request)
+    }
+
+    fn build_select_sql(
+        &self,
+        table: &str,
+        columns: &[String],
+        filter: Option<&Value>,
+        order_by: &[OrderByColumn],
+        limit: u32,
+        offset: u32,
+    ) -> String {
+        let quoted_table = POSTGRES_DIALECT.quote_identifier(table);
+        let cols = if columns.is_empty() {
+            "*".to_string()
+        } else {
+            columns
+                .iter()
+                .map(|c| POSTGRES_DIALECT.quote_identifier(c))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+
+        let mut sql = format!("SELECT {} FROM {}", cols, quoted_table);
+
+        if let Some(f) = filter {
+            let where_clause = translate_filter_to_sql(f);
+            if !where_clause.is_empty() {
+                sql.push_str(" WHERE ");
+                sql.push_str(&where_clause);
+            }
+        }
+
+        if !order_by.is_empty() {
+            sql.push_str(" ORDER BY ");
+            let order_parts = order_by
+                .iter()
+                .map(|col| {
+                    let dir = match col.direction {
+                        SortDirection::Ascending => "ASC",
+                        SortDirection::Descending => "DESC",
+                    };
+                    format!("{} {}", col.column.quoted_with(&POSTGRES_DIALECT), dir)
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            sql.push_str(&order_parts);
+        }
+
+        sql.push_str(&format!(" LIMIT {} OFFSET {}", limit, offset));
+        sql
+    }
+
+    fn build_insert_sql(
+        &self,
+        table: &str,
+        columns: &[String],
+        values: &[Value],
+    ) -> (String, Vec<Value>) {
+        let quoted_table = POSTGRES_DIALECT.quote_identifier(table);
+        let cols = columns
+            .iter()
+            .map(|c| POSTGRES_DIALECT.quote_identifier(c))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let placeholders: Vec<String> = values
+            .iter()
+            .enumerate()
+            .map(|(i, _)| format!("${}", i + 1))
+            .collect();
+        let placeholders_str = placeholders.join(", ");
+
+        let sql = format!(
+            "INSERT INTO {} ({}) VALUES ({})",
+            quoted_table, cols, placeholders_str
+        );
+
+        (sql, values.to_vec())
+    }
+
+    fn build_update_sql(
+        &self,
+        table: &str,
+        set: &[(String, Value)],
+        filter: Option<&Value>,
+    ) -> (String, Vec<Value>) {
+        let quoted_table = POSTGRES_DIALECT.quote_identifier(table);
+
+        let set_parts: Vec<String> = set
+            .iter()
+            .enumerate()
+            .map(|(i, (col, _))| format!("{} = ${}", POSTGRES_DIALECT.quote_identifier(col), i + 1))
+            .collect();
+        let set_str = set_parts.join(", ");
+
+        let mut sql = format!("UPDATE {} SET {}", quoted_table, set_str);
+
+        if let Some(f) = filter {
+            let where_clause = translate_filter_to_sql(f);
+            if !where_clause.is_empty() {
+                sql.push_str(" WHERE ");
+                sql.push_str(&where_clause);
+            }
+        }
+
+        let mut params: Vec<Value> = set.iter().map(|(_, v)| v.clone()).collect();
+        if let Some(f) = filter {
+            collect_filter_values(f, &mut params);
+        }
+
+        (sql, params)
+    }
+
+    fn build_delete_sql(&self, table: &str, filter: Option<&Value>) -> (String, Vec<Value>) {
+        let quoted_table = POSTGRES_DIALECT.quote_identifier(table);
+        let mut sql = format!("DELETE FROM {}", quoted_table);
+        let mut params = Vec::new();
+
+        if let Some(f) = filter {
+            let where_clause = translate_filter_to_sql(f);
+            if !where_clause.is_empty() {
+                sql.push_str(" WHERE ");
+                sql.push_str(&where_clause);
+            }
+            collect_filter_values(f, &mut params);
+        }
+
+        (sql, params)
+    }
+
+    fn build_upsert_sql(
+        &self,
+        table: &str,
+        columns: &[String],
+        values: &[Value],
+        conflict_columns: &[String],
+        update_columns: &[String],
+    ) -> (String, Vec<Value>) {
+        let quoted_table = POSTGRES_DIALECT.quote_identifier(table);
+        let cols = columns
+            .iter()
+            .map(|c| POSTGRES_DIALECT.quote_identifier(c))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let placeholders: Vec<String> = values
+            .iter()
+            .enumerate()
+            .map(|(i, _)| format!("${}", i + 1))
+            .collect();
+        let placeholders_str = placeholders.join(", ");
+
+        let conflict_cols = conflict_columns
+            .iter()
+            .map(|c| POSTGRES_DIALECT.quote_identifier(c))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let update_parts: Vec<String> = update_columns
+            .iter()
+            .map(|col| {
+                let idx = columns.iter().position(|c| c == col).unwrap_or(0) + 1;
+                format!("{} = ${}", POSTGRES_DIALECT.quote_identifier(col), idx)
+            })
+            .collect();
+        let update_str = update_parts.join(", ");
+
+        let sql = format!(
+            "INSERT INTO {} ({}) VALUES ({}) ON CONFLICT ({}) DO UPDATE SET {}",
+            quoted_table, cols, placeholders_str, conflict_cols, update_str
+        );
+
+        (sql, values.to_vec())
+    }
+
+    fn build_count_sql(&self, table: &str, filter: Option<&Value>) -> String {
+        let quoted_table = POSTGRES_DIALECT.quote_identifier(table);
+        let mut sql = format!("SELECT COUNT(*) FROM {}", quoted_table);
+
+        if let Some(f) = filter {
+            let where_clause = translate_filter_to_sql(f);
+            if !where_clause.is_empty() {
+                sql.push_str(" WHERE ");
+                sql.push_str(&where_clause);
+            }
+        }
+
+        sql
+    }
+
+    fn build_truncate_sql(&self, table: &str) -> String {
+        let quoted_table = POSTGRES_DIALECT.quote_identifier(table);
+        format!("TRUNCATE {} RESTART IDENTITY CASCADE", quoted_table)
+    }
+
+    fn build_drop_index_sql(
+        &self,
+        index_name: &str,
+        _table_name: Option<&str>,
+        if_exists: bool,
+    ) -> String {
+        let quoted_index = POSTGRES_DIALECT.quote_identifier(index_name);
+        if if_exists {
+            format!("DROP INDEX IF EXISTS {} CASCADE", quoted_index)
+        } else {
+            format!("DROP INDEX {} CASCADE", quoted_index)
+        }
+    }
+
+    fn version_query(&self) -> &'static str {
+        "SELECT version()"
+    }
+
+    fn supports_transactional_ddl(&self) -> bool {
+        true
+    }
+
+    fn translate_filter(&self, filter: &Value) -> Result<String, DbError> {
+        Ok(translate_filter_to_sql(filter))
+    }
+}
+
+impl RelationalConnection for PostgresConnection {}
+
+impl ConnectionExt for PostgresConnection {
+    fn as_relational(&self) -> Option<&dyn RelationalConnection> {
+        Some(self)
+    }
+
+    fn as_document(&self) -> Option<&dyn DocumentConnection> {
+        None
+    }
+
+    fn as_keyvalue(&self) -> Option<&dyn KeyValueConnection> {
+        None
     }
 }
 
@@ -1898,6 +2554,11 @@ fn get_custom_types(client: &mut Client, schema: &str) -> Result<Vec<CustomTypeI
             })
         })
         .collect())
+}
+
+fn needs_postgres_text_comparison_cast(type_name: &str) -> bool {
+    let normalized = type_name.to_ascii_lowercase();
+    normalized == "uuid" || normalized == "tsvector" || normalized == "tsquery"
 }
 
 /// Convert a Value to a safe PostgreSQL literal string.
@@ -2586,11 +3247,75 @@ fn get_schema_foreign_keys(
     Ok(builder.build_sorted())
 }
 
+/// Translate a Value filter expression to a SQL WHERE clause string for PostgreSQL.
+fn translate_filter_to_sql(filter: &Value) -> String {
+    match filter {
+        Value::Document(doc) => {
+            let mut parts = Vec::new();
+            for (key, value) in doc {
+                let quoted_col = POSTGRES_DIALECT.quote_identifier(key);
+                let expr = match value {
+                    Value::Null => format!("{} IS NULL", quoted_col),
+                    Value::Text(s) => format!("{} = '{}'", quoted_col, pg_escape_string(s)),
+                    Value::Int(i) => format!("{} = {}", quoted_col, i),
+                    Value::Bool(b) => {
+                        format!("{} = {}", quoted_col, if *b { "TRUE" } else { "FALSE" })
+                    }
+                    Value::Float(f) => format!("{} = {}", quoted_col, f),
+                    Value::Array(arr) => {
+                        if arr.is_empty() {
+                            "1=1".to_string()
+                        } else {
+                            let items: Vec<String> = arr.iter().map(value_to_pg_literal).collect();
+                            format!("{} = ANY(ARRAY[{}])", quoted_col, items.join(", "))
+                        }
+                    }
+                    _ => format!("{} = {}", quoted_col, value_to_pg_literal(value)),
+                };
+                parts.push(expr);
+            }
+            if parts.is_empty() {
+                String::new()
+            } else {
+                parts.join(" AND ")
+            }
+        }
+        Value::Text(s) => {
+            // Treat a plain text filter as a raw SQL expression (for advanced users)
+            s.clone()
+        }
+        _ => String::new(),
+    }
+}
+
+/// Collect all Value items from a filter expression into a vector for parameterized queries.
+fn collect_filter_values(filter: &Value, params: &mut Vec<Value>) {
+    if let Value::Document(doc) = filter {
+        for value in doc.values() {
+            match value {
+                Value::Array(arr) => {
+                    for item in arr {
+                        if !matches!(item, Value::Null) {
+                            params.push(item.clone());
+                        }
+                    }
+                }
+                Value::Null => {}
+                _ => params.push(value.clone()),
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{PostgresDialect, PostgresDriver, inject_password_into_pg_uri};
+    use super::{
+        PgUriSslMode, PostgresDialect, PostgresDriver, inject_password_into_pg_uri,
+        parse_pg_uri_sslmode, plan_postgres_semantic_request,
+    };
     use dbflux_core::{
-        DatabaseCategory, DbConfig, DbDriver, DbError, FormValues, QueryLanguage, SqlDialect, Value,
+        DatabaseCategory, DbConfig, DbDriver, DbError, FormValues, MutationRequest, QueryLanguage,
+        RowInsert, SemanticRequest, SqlDialect, TableBrowseRequest, TableRef, Value, WhereOperator,
     };
 
     #[test]
@@ -2717,6 +3442,26 @@ mod tests {
     }
 
     #[test]
+    fn parse_pg_uri_sslmode_uses_reasonable_defaults() {
+        assert_eq!(
+            parse_pg_uri_sslmode("postgresql://localhost:5432/app"),
+            PgUriSslMode::Prefer
+        );
+        assert_eq!(
+            parse_pg_uri_sslmode("postgresql://localhost:5432/app?sslmode=disable"),
+            PgUriSslMode::Disable
+        );
+        assert_eq!(
+            parse_pg_uri_sslmode("postgresql://localhost:5432/app?sslmode=require"),
+            PgUriSslMode::Require
+        );
+        assert_eq!(
+            parse_pg_uri_sslmode("postgresql://localhost:5432/app?sslmode=verify-full"),
+            PgUriSslMode::Verify
+        );
+    }
+
+    #[test]
     fn metadata_and_form_definition_match_postgres_contract() {
         let driver = PostgresDriver::new();
         let metadata = driver.metadata();
@@ -2726,5 +3471,64 @@ mod tests {
         assert_eq!(metadata.default_port, Some(5432));
         assert_eq!(metadata.uri_scheme, "postgresql");
         assert!(!driver.form_definition().tabs.is_empty());
+    }
+
+    #[test]
+    fn semantic_planner_builds_browse_query_from_legacy_request_fields() {
+        let plan = plan_postgres_semantic_request(&SemanticRequest::TableBrowse(
+            TableBrowseRequest::new(TableRef::with_schema("public", "users"))
+                .with_filter("status = 'active'"),
+        ))
+        .expect("postgres planner should handle table browse");
+
+        assert_eq!(plan.kind, dbflux_core::SemanticPlanKind::Query);
+        assert_eq!(plan.queries[0].language, QueryLanguage::Sql);
+        assert_eq!(
+            plan.queries[0].text,
+            "SELECT * FROM \"public\".\"users\" WHERE status = 'active' LIMIT 100 OFFSET 0"
+        );
+    }
+
+    #[test]
+    fn semantic_planner_wraps_sql_mutation_preview() {
+        let plan = plan_postgres_semantic_request(&SemanticRequest::Mutation(
+            MutationRequest::sql_insert(RowInsert::new(
+                "users".to_string(),
+                Some("public".to_string()),
+                vec!["id".to_string()],
+                vec![Value::Int(1)],
+            )),
+        ))
+        .expect("postgres planner should preview sql mutations");
+
+        assert_eq!(plan.kind, dbflux_core::SemanticPlanKind::MutationPreview);
+        assert!(plan.queries[0].text.contains("INSERT INTO"));
+    }
+
+    #[test]
+    fn semantic_planner_builds_aggregate_query() {
+        let request = dbflux_core::AggregateRequest::new(TableRef::with_schema("public", "orders"))
+            .with_group_by(vec![dbflux_core::ColumnRef::new("customer_id")])
+            .with_aggregations(vec![dbflux_core::AggregateSpec::new(
+                dbflux_core::AggregateFunction::Sum,
+                Some(dbflux_core::ColumnRef::new("amount")),
+                "total_amount",
+            )])
+            .with_having(dbflux_core::SemanticFilter::compare(
+                "total_amount",
+                WhereOperator::Gt,
+                Value::Int(100),
+            ))
+            .with_limit(Some(10));
+
+        let plan = plan_postgres_semantic_request(&SemanticRequest::Aggregate(request))
+            .expect("postgres planner should handle aggregate requests");
+
+        assert_eq!(plan.kind, dbflux_core::SemanticPlanKind::Query);
+        assert_eq!(plan.queries[0].language, QueryLanguage::Sql);
+        assert_eq!(
+            plan.queries[0].text,
+            "SELECT \"customer_id\", SUM(\"amount\") AS \"total_amount\" FROM \"public\".\"orders\" GROUP BY \"customer_id\" HAVING \"total_amount\" > 100 LIMIT 10"
+        );
     }
 }

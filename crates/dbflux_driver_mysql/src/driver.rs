@@ -1,54 +1,38 @@
+use std::collections::HashMap;
+use std::sync::LazyLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use std::collections::HashMap;
-
+use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
     AddForeignKeyRequest, CodeGenCapabilities, CodeGenScope, CodeGenerator, CodeGeneratorInfo,
-    ColumnInfo, ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionProfile,
+    ColumnInfo, ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionExt, ConnectionProfile,
     ConstraintInfo, ConstraintKind, CreateIndexRequest, CrudResult, DatabaseCategory, DatabaseInfo,
-    DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DescribeRequest, DriverCapabilities,
-    DriverFormDef, DriverMetadata, DropForeignKeyRequest, DropIndexRequest, ExplainRequest,
-    ForeignKeyBuilder, ForeignKeyInfo, FormValues, FormattedError, Icon, IndexData, IndexInfo,
-    MYSQL_FORM, PlaceholderStyle, QueryCancelHandle, QueryErrorFormatter, QueryGenerator,
-    QueryHandle, QueryLanguage, QueryRequest, QueryResult, RecordIdentity, RelationalSchema, Row,
-    RowDelete, RowInsert, RowPatch, SchemaForeignKeyBuilder, SchemaForeignKeyInfo, SchemaIndexInfo,
-    SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SqlMutationGenerator, SqlQueryBuilder,
-    SshTunnelConfig, SslMode, TableInfo, Value, ViewInfo, generate_delete_template,
-    generate_drop_table, generate_insert_template, generate_select_star, generate_truncate,
-    generate_update_template, sanitize_uri,
+    DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DdlCapabilities, DescribeRequest,
+    DocumentConnection, DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata,
+    DropForeignKeyRequest, DropIndexRequest, ExplainRequest, ForeignKeyBuilder, ForeignKeyInfo,
+    FormValues, FormattedError, Icon, IndexData, IndexInfo, IsolationLevel, KeyValueConnection,
+    MYSQL_FORM, MutationCapabilities, OrderByColumn, PaginationStyle, PlaceholderStyle,
+    QueryCancelHandle, QueryCapabilities, QueryErrorFormatter, QueryGenerator, QueryHandle,
+    QueryLanguage, QueryRequest, QueryResult, RecordIdentity, RelationalConnection,
+    RelationalSchema, Row, RowDelete, RowInsert, RowPatch, SchemaForeignKeyBuilder,
+    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan,
+    SemanticPlanKind, SemanticRequest, SortDirection, SqlDialect, SqlMutationGenerator,
+    SqlQueryBuilder, SshTunnelConfig, SslMode, SyntaxInfo, TableInfo, TransactionCapabilities,
+    Value, ViewInfo, WhereOperator, generate_delete_template, generate_drop_table,
+    generate_insert_template, generate_select_star, generate_truncate, generate_update_template,
+    render_semantic_filter_sql, sanitize_uri,
 };
 use dbflux_ssh::SshTunnel;
 use mysql::prelude::*;
 use mysql::{Conn, Opts, OptsBuilder, SslOpts};
 
 /// MySQL driver metadata.
-pub static MYSQL_METADATA: DriverMetadata = DriverMetadata {
-    id: "mysql",
-    display_name: "MySQL",
-    description: "Popular open-source relational database",
-    category: DatabaseCategory::Relational,
-    query_language: QueryLanguage::Sql,
-    capabilities: DriverCapabilities::from_bits_truncate(
-        DriverCapabilities::RELATIONAL_BASE.bits()
-            | DriverCapabilities::SSH_TUNNEL.bits()
-            | DriverCapabilities::SSL.bits()
-            | DriverCapabilities::AUTHENTICATION.bits()
-            | DriverCapabilities::FOREIGN_KEYS.bits()
-            | DriverCapabilities::TRIGGERS.bits()
-            | DriverCapabilities::STORED_PROCEDURES.bits(),
-    ),
-    default_port: Some(3306),
-    uri_scheme: "mysql",
-    icon: Icon::Mysql,
-};
-
-/// MariaDB driver metadata.
-pub static MARIADB_METADATA: DriverMetadata = DriverMetadata {
-    id: "mariadb",
-    display_name: "MariaDB",
-    description: "Community-developed fork of MySQL",
+pub static MYSQL_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
+    id: "mysql".into(),
+    display_name: "MySQL".into(),
+    description: "Popular open-source relational database".into(),
     category: DatabaseCategory::Relational,
     query_language: QueryLanguage::Sql,
     capabilities: DriverCapabilities::from_bits_truncate(
@@ -58,14 +42,237 @@ pub static MARIADB_METADATA: DriverMetadata = DriverMetadata {
             | DriverCapabilities::AUTHENTICATION.bits()
             | DriverCapabilities::FOREIGN_KEYS.bits()
             | DriverCapabilities::CHECK_CONSTRAINTS.bits()
-            | DriverCapabilities::TRIGGERS.bits()
-            | DriverCapabilities::STORED_PROCEDURES.bits()
-            | DriverCapabilities::SEQUENCES.bits(),
+            | DriverCapabilities::UNIQUE_CONSTRAINTS.bits(),
     ),
     default_port: Some(3306),
-    uri_scheme: "mariadb",
+    uri_scheme: "mysql".into(),
+    icon: Icon::Mysql,
+    syntax: Some(SyntaxInfo {
+        identifier_quote: '`',
+        string_quote: '\'',
+        placeholder_style: PlaceholderStyle::QuestionMark,
+        supports_schemas: false,
+        default_schema: None,
+        case_sensitive_identifiers: false,
+    }),
+    query: Some(QueryCapabilities {
+        pagination: vec![PaginationStyle::Offset],
+        where_operators: vec![
+            WhereOperator::Eq,
+            WhereOperator::Ne,
+            WhereOperator::Gt,
+            WhereOperator::Gte,
+            WhereOperator::Lt,
+            WhereOperator::Lte,
+            WhereOperator::Like,
+            WhereOperator::Null,
+            WhereOperator::In,
+            WhereOperator::NotIn,
+            WhereOperator::Contains,
+            WhereOperator::Overlap,
+            WhereOperator::And,
+            WhereOperator::Or,
+            WhereOperator::Not,
+        ],
+        supports_order_by: true,
+        supports_group_by: true,
+        supports_having: true,
+        supports_distinct: true,
+        supports_limit: true,
+        supports_offset: true,
+        supports_joins: true,
+        supports_subqueries: true,
+        supports_union: true,
+        supports_intersect: true,
+        supports_except: true,
+        supports_case_expressions: true,
+        supports_window_functions: true,
+        supports_ctes: true,
+        supports_explain: true,
+        max_query_parameters: 65535,
+        max_order_by_columns: 0,
+        max_group_by_columns: 0,
+    }),
+    mutation: Some(MutationCapabilities {
+        supports_insert: true,
+        supports_update: true,
+        supports_delete: true,
+        supports_upsert: false,
+        supports_returning: false,
+        supports_batch: true,
+        supports_bulk_update: true,
+        supports_bulk_delete: true,
+        max_insert_values: 0,
+    }),
+    ddl: Some(DdlCapabilities {
+        supports_create_database: true,
+        supports_drop_database: true,
+        supports_create_table: true,
+        supports_drop_table: true,
+        supports_alter_table: true,
+        supports_create_index: true,
+        supports_drop_index: true,
+        supports_create_view: true,
+        supports_drop_view: true,
+        supports_create_trigger: false,
+        supports_drop_trigger: false,
+        transactional_ddl: false,
+        supports_add_column: true,
+        supports_drop_column: false,
+        supports_rename_column: false,
+        supports_alter_column: false,
+        supports_add_constraint: true,
+        supports_drop_constraint: true,
+    }),
+    transactions: Some(TransactionCapabilities {
+        supports_transactions: true,
+        supported_isolation_levels: vec![
+            IsolationLevel::ReadCommitted,
+            IsolationLevel::RepeatableRead,
+            IsolationLevel::Serializable,
+        ],
+        default_isolation_level: Some(IsolationLevel::RepeatableRead),
+        supports_savepoints: true,
+        supports_nested_transactions: true,
+        supports_read_only: true,
+        supports_deferrable: false,
+    }),
+    limits: Some(DriverLimits {
+        max_query_length: 0,
+        max_parameters: 65535,
+        max_result_rows: 0,
+        max_connections: 0,
+        max_nested_subqueries: 16,
+        max_identifier_length: 64,
+        max_columns: 4096,
+        max_indexes_per_table: 64,
+    }),
+    classification_override: None,
+});
+
+/// MariaDB driver metadata.
+pub static MARIADB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
+    id: "mariadb".into(),
+    display_name: "MariaDB".into(),
+    description: "Community-developed fork of MySQL".into(),
+    category: DatabaseCategory::Relational,
+    query_language: QueryLanguage::Sql,
+    capabilities: DriverCapabilities::from_bits_truncate(
+        DriverCapabilities::RELATIONAL_BASE.bits()
+            | DriverCapabilities::SSH_TUNNEL.bits()
+            | DriverCapabilities::SSL.bits()
+            | DriverCapabilities::AUTHENTICATION.bits()
+            | DriverCapabilities::FOREIGN_KEYS.bits()
+            | DriverCapabilities::CHECK_CONSTRAINTS.bits()
+            | DriverCapabilities::UNIQUE_CONSTRAINTS.bits(),
+    ),
+    default_port: Some(3306),
+    uri_scheme: "mariadb".into(),
     icon: Icon::Mariadb,
-};
+    syntax: Some(SyntaxInfo {
+        identifier_quote: '`',
+        string_quote: '\'',
+        placeholder_style: PlaceholderStyle::QuestionMark,
+        supports_schemas: false,
+        default_schema: None,
+        case_sensitive_identifiers: false,
+    }),
+    query: Some(QueryCapabilities {
+        pagination: vec![PaginationStyle::Offset],
+        where_operators: vec![
+            WhereOperator::Eq,
+            WhereOperator::Ne,
+            WhereOperator::Gt,
+            WhereOperator::Gte,
+            WhereOperator::Lt,
+            WhereOperator::Lte,
+            WhereOperator::Like,
+            WhereOperator::ILike,
+            WhereOperator::Null,
+            WhereOperator::In,
+            WhereOperator::NotIn,
+            WhereOperator::Contains,
+            WhereOperator::Overlap,
+            WhereOperator::And,
+            WhereOperator::Or,
+            WhereOperator::Not,
+        ],
+        supports_order_by: true,
+        supports_group_by: true,
+        supports_having: true,
+        supports_distinct: true,
+        supports_limit: true,
+        supports_offset: true,
+        supports_joins: true,
+        supports_subqueries: true,
+        supports_union: true,
+        supports_intersect: true,
+        supports_except: true,
+        supports_case_expressions: true,
+        supports_window_functions: true,
+        supports_ctes: true,
+        supports_explain: true,
+        max_query_parameters: 65535,
+        max_order_by_columns: 0,
+        max_group_by_columns: 0,
+    }),
+    mutation: Some(MutationCapabilities {
+        supports_insert: true,
+        supports_update: true,
+        supports_delete: true,
+        supports_upsert: true,
+        supports_returning: false,
+        supports_batch: true,
+        supports_bulk_update: true,
+        supports_bulk_delete: true,
+        max_insert_values: 0,
+    }),
+    ddl: Some(DdlCapabilities {
+        supports_create_database: true,
+        supports_drop_database: true,
+        supports_create_table: true,
+        supports_drop_table: true,
+        supports_alter_table: true,
+        supports_create_index: true,
+        supports_drop_index: true,
+        supports_create_view: true,
+        supports_drop_view: true,
+        supports_create_trigger: true,
+        supports_drop_trigger: true,
+        transactional_ddl: false,
+        supports_add_column: true,
+        supports_drop_column: true,
+        supports_rename_column: true,
+        supports_alter_column: true,
+        supports_add_constraint: true,
+        supports_drop_constraint: true,
+    }),
+    transactions: Some(TransactionCapabilities {
+        supports_transactions: true,
+        supported_isolation_levels: vec![
+            IsolationLevel::ReadCommitted,
+            IsolationLevel::RepeatableRead,
+            IsolationLevel::Serializable,
+            IsolationLevel::Snapshot,
+        ],
+        default_isolation_level: Some(IsolationLevel::RepeatableRead),
+        supports_savepoints: true,
+        supports_nested_transactions: true,
+        supports_read_only: true,
+        supports_deferrable: false,
+    }),
+    limits: Some(DriverLimits {
+        max_query_length: 0,
+        max_parameters: 65535,
+        max_result_rows: 0,
+        max_connections: 0,
+        max_nested_subqueries: 16,
+        max_identifier_length: 64,
+        max_columns: 4096,
+        max_indexes_per_table: 64,
+    }),
+    classification_override: None,
+});
 
 /// MySQL/MariaDB SQL dialect implementation.
 pub struct MysqlDialect;
@@ -89,6 +296,56 @@ impl SqlDialect for MysqlDialect {
 
     fn placeholder_style(&self) -> PlaceholderStyle {
         PlaceholderStyle::QuestionMark
+    }
+
+    fn build_upsert_statement(
+        &self,
+        schema: Option<&str>,
+        table: &str,
+        columns: &[String],
+        values: &[Value],
+        _conflict_columns: &[String],
+        update_assignments: &[(String, Value)],
+    ) -> Option<String> {
+        if columns.is_empty() || columns.len() != values.len() {
+            return None;
+        }
+
+        let table = self.qualified_table(schema, table);
+        let columns = columns
+            .iter()
+            .map(|column| self.quote_identifier(column))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let values = values
+            .iter()
+            .map(|value| self.value_to_literal(value))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        if update_assignments.is_empty() {
+            return Some(format!(
+                "INSERT INTO {} ({}) VALUES ({})",
+                table, columns, values
+            ));
+        }
+
+        let update_clause = update_assignments
+            .iter()
+            .map(|(column, value)| {
+                format!(
+                    "{} = {}",
+                    self.quote_identifier(column),
+                    self.value_to_literal(value)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        Some(format!(
+            "INSERT INTO {} ({}) VALUES ({}) ON DUPLICATE KEY UPDATE {}",
+            table, columns, values, update_clause
+        ))
     }
 }
 
@@ -217,20 +474,30 @@ impl DbDriver for MysqlDriver {
         self.kind
     }
 
-    fn metadata(&self) -> &'static DriverMetadata {
+    fn metadata(&self) -> &DriverMetadata {
         match self.kind {
             DbKind::MariaDB => &MARIADB_METADATA,
             _ => &MYSQL_METADATA,
         }
     }
 
+    fn driver_key(&self) -> dbflux_core::DriverKey {
+        match self.kind {
+            DbKind::MariaDB => "builtin:mariadb".into(),
+            _ => "builtin:mysql".into(),
+        }
+    }
+
     fn connect_with_secrets(
         &self,
         profile: &ConnectionProfile,
-        password: Option<&str>,
-        ssh_secret: Option<&str>,
+        password: Option<&SecretString>,
+        ssh_secret: Option<&SecretString>,
     ) -> Result<Box<dyn Connection>, DbError> {
         let config = extract_mysql_config(&profile.config)?;
+
+        let password = password.map(|value| value.expose_secret());
+        let ssh_secret = ssh_secret.map(|value| value.expose_secret());
 
         if config.use_uri {
             return self.connect_with_uri(config.uri.as_deref().unwrap_or(""), password);
@@ -264,7 +531,7 @@ impl DbDriver for MysqlDriver {
         conn.ping()
     }
 
-    fn form_definition(&self) -> &'static DriverFormDef {
+    fn form_definition(&self) -> &DriverFormDef {
         &MYSQL_FORM
     }
 
@@ -286,7 +553,7 @@ impl DbDriver for MysqlDriver {
                 port: 3306,
                 user: String::new(),
                 database: None,
-                ssl_mode: SslMode::Disable,
+                ssl_mode: SslMode::Prefer,
                 ssh_tunnel: None,
                 ssh_tunnel_profile_id: None,
             });
@@ -320,7 +587,7 @@ impl DbDriver for MysqlDriver {
             port,
             user,
             database,
-            ssl_mode: SslMode::Disable,
+            ssl_mode: SslMode::Prefer,
             ssh_tunnel: None,
             ssh_tunnel_profile_id: None,
         })
@@ -477,9 +744,12 @@ fn build_mysql_opts(
     password: Option<&str>,
     ssl_mode: SslMode,
 ) -> Opts {
+    let host = normalize_mysql_tcp_host(host);
+
     let mut builder = OptsBuilder::new()
         .ip_or_hostname(Some(host))
         .tcp_port(port)
+        .prefer_socket(false)
         .user(Some(user))
         .pass(password);
 
@@ -505,6 +775,14 @@ fn build_mysql_opts(
     }
 
     builder.into()
+}
+
+fn normalize_mysql_tcp_host(host: &str) -> &str {
+    if host.eq_ignore_ascii_case("localhost") {
+        "127.0.0.1"
+    } else {
+        host
+    }
 }
 
 impl MysqlDriver {
@@ -774,7 +1052,13 @@ impl MysqlErrorFormatter {
         if source.contains("Connection refused") {
             format!("Connection refused at {}:{}. Is MySQL running?", host, port)
         } else if source.contains("Access denied") {
-            "Access denied for user. Check username and password.".to_string()
+            format!(
+                "Access denied at {}:{}.
+MySQL says: {}
+
+If you are using SSM, verify the tunnel target host/port and that the DB user is valid for that target.",
+                host, port, source
+            )
         } else if source.contains("Unknown database") {
             "Database does not exist.".to_string()
         } else if source.contains("caching_sha2_password")
@@ -976,60 +1260,171 @@ impl QueryCancelHandle for MysqlCancelHandle {
     }
 }
 
-const MYSQL_CODE_GENERATORS: &[CodeGeneratorInfo] = &[
-    CodeGeneratorInfo {
-        id: "select_star",
-        label: "SELECT *",
-        scope: CodeGenScope::TableOrView,
-        order: 0,
-        destructive: false,
-    },
-    CodeGeneratorInfo {
-        id: "insert",
-        label: "INSERT INTO",
-        scope: CodeGenScope::Table,
-        order: 5,
-        destructive: false,
-    },
-    CodeGeneratorInfo {
-        id: "update",
-        label: "UPDATE",
-        scope: CodeGenScope::Table,
-        order: 6,
-        destructive: false,
-    },
-    CodeGeneratorInfo {
-        id: "delete",
-        label: "DELETE",
-        scope: CodeGenScope::Table,
-        order: 7,
-        destructive: false,
-    },
-    CodeGeneratorInfo {
-        id: "create_table",
-        label: "CREATE TABLE",
-        scope: CodeGenScope::Table,
-        order: 10,
-        destructive: false,
-    },
-    CodeGeneratorInfo {
-        id: "truncate",
-        label: "TRUNCATE",
-        scope: CodeGenScope::Table,
-        order: 20,
-        destructive: true,
-    },
-    CodeGeneratorInfo {
-        id: "drop_table",
-        label: "DROP TABLE",
-        scope: CodeGenScope::Table,
-        order: 21,
-        destructive: true,
-    },
-];
+fn mysql_code_generators() -> Vec<CodeGeneratorInfo> {
+    vec![
+        CodeGeneratorInfo {
+            id: "create_table".into(),
+            label: "CREATE TABLE".into(),
+            scope: CodeGenScope::Table,
+            order: 10,
+            destructive: false,
+        },
+        CodeGeneratorInfo {
+            id: "truncate".into(),
+            label: "TRUNCATE".into(),
+            scope: CodeGenScope::Table,
+            order: 20,
+            destructive: true,
+        },
+        CodeGeneratorInfo {
+            id: "drop_table".into(),
+            label: "DROP TABLE".into(),
+            scope: CodeGenScope::Table,
+            order: 21,
+            destructive: true,
+        },
+    ]
+}
+
+fn plan_mysql_table_browse(
+    request: &dbflux_core::TableBrowseRequest,
+) -> Result<SemanticPlan, DbError> {
+    let sql = if let Some(filter) = request.semantic_filter.as_ref() {
+        let mut sql = format!(
+            "SELECT * FROM {}",
+            request.table.quoted_with(&MYSQL_DIALECT)
+        );
+        let where_clause = render_semantic_filter_sql(filter, &MYSQL_DIALECT)?;
+        sql.push_str(" WHERE ");
+        sql.push_str(&where_clause);
+
+        if !request.order_by.is_empty() {
+            let order_by = request
+                .order_by
+                .iter()
+                .map(|column| {
+                    let direction = match column.direction {
+                        SortDirection::Ascending => "ASC",
+                        SortDirection::Descending => "DESC",
+                    };
+                    format!(
+                        "{} {}",
+                        column.column.quoted_with(&MYSQL_DIALECT),
+                        direction
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            sql.push_str(" ORDER BY ");
+            sql.push_str(&order_by);
+        }
+
+        sql.push_str(&format!(
+            " LIMIT {} OFFSET {}",
+            request.pagination.limit(),
+            request.pagination.offset()
+        ));
+        sql
+    } else {
+        request.build_sql_with(&MYSQL_DIALECT)
+    };
+
+    Ok(SemanticPlan::single_query(
+        SemanticPlanKind::Query,
+        dbflux_core::PlannedQuery::new(QueryLanguage::Sql, sql)
+            .with_database(request.table.schema.clone()),
+    ))
+}
+
+fn plan_mysql_table_count(
+    request: &dbflux_core::TableCountRequest,
+) -> Result<SemanticPlan, DbError> {
+    let quoted_table = request.table.quoted_with(&MYSQL_DIALECT);
+    let sql = if let Some(filter) = request.semantic_filter.as_ref() {
+        let where_clause = render_semantic_filter_sql(filter, &MYSQL_DIALECT)?;
+        format!(
+            "SELECT COUNT(*) FROM {} WHERE {}",
+            quoted_table, where_clause
+        )
+    } else {
+        match request.filter.as_deref().map(str::trim) {
+            Some(filter) if !filter.is_empty() => {
+                format!("SELECT COUNT(*) FROM {} WHERE {}", quoted_table, filter)
+            }
+            _ => format!("SELECT COUNT(*) FROM {}", quoted_table),
+        }
+    };
+
+    Ok(SemanticPlan::single_query(
+        SemanticPlanKind::Query,
+        dbflux_core::PlannedQuery::new(QueryLanguage::Sql, sql)
+            .with_database(request.table.schema.clone()),
+    ))
+}
+
+fn plan_mysql_aggregate(request: &dbflux_core::AggregateRequest) -> Result<SemanticPlan, DbError> {
+    let sql = request.build_sql_with(&MYSQL_DIALECT)?;
+
+    Ok(SemanticPlan::single_query(
+        SemanticPlanKind::Query,
+        dbflux_core::PlannedQuery::new(QueryLanguage::Sql, sql)
+            .with_database(request.target_database.clone()),
+    ))
+}
+
+fn plan_mysql_explain(request: &ExplainRequest) -> SemanticPlan {
+    let query = request.query.clone().unwrap_or_else(|| {
+        format!(
+            "SELECT * FROM {} LIMIT 100",
+            request.table.quoted_with(&MYSQL_DIALECT)
+        )
+    });
+
+    SemanticPlan::single_query(
+        SemanticPlanKind::Query,
+        dbflux_core::PlannedQuery::new(
+            QueryLanguage::Sql,
+            format!("EXPLAIN FORMAT=JSON {}", query),
+        )
+        .with_database(request.table.schema.clone()),
+    )
+}
+
+fn plan_mysql_describe(request: &DescribeRequest) -> SemanticPlan {
+    SemanticPlan::single_query(
+        SemanticPlanKind::Query,
+        dbflux_core::PlannedQuery::new(
+            QueryLanguage::Sql,
+            format!("DESCRIBE {}", request.table.quoted_with(&MYSQL_DIALECT)),
+        )
+        .with_database(request.table.schema.clone()),
+    )
+}
+
+fn plan_mysql_mutation(mutation: &dbflux_core::MutationRequest) -> Result<SemanticPlan, DbError> {
+    static GENERATOR: SqlMutationGenerator = SqlMutationGenerator::new(&MYSQL_DIALECT);
+
+    GENERATOR.plan_mutation(mutation).ok_or_else(|| {
+        DbError::NotSupported("MySQL semantic planning does not support this mutation".into())
+    })
+}
+
+fn plan_mysql_semantic_request(request: &SemanticRequest) -> Result<SemanticPlan, DbError> {
+    match request {
+        SemanticRequest::TableBrowse(request) => plan_mysql_table_browse(request),
+        SemanticRequest::TableCount(request) => plan_mysql_table_count(request),
+        SemanticRequest::Aggregate(request) => plan_mysql_aggregate(request),
+        SemanticRequest::Explain(request) => Ok(plan_mysql_explain(request)),
+        SemanticRequest::Describe(request) => Ok(plan_mysql_describe(request)),
+        SemanticRequest::Mutation(mutation) => plan_mysql_mutation(mutation),
+        _ => Err(DbError::NotSupported(
+            "MySQL semantic planning does not support this request".into(),
+        )),
+    }
+}
 
 impl Connection for MysqlConnection {
-    fn metadata(&self) -> &'static DriverMetadata {
+    fn metadata(&self) -> &DriverMetadata {
         match self.kind {
             DbKind::MariaDB => &MARIADB_METADATA,
             _ => &MYSQL_METADATA,
@@ -1096,6 +1491,7 @@ impl Connection for MysqlConnection {
                 name: col.name_str().to_string(),
                 type_name: format!("{:?}", col.column_type()),
                 nullable: true,
+                is_primary_key: false,
             })
             .collect();
 
@@ -1312,8 +1708,8 @@ impl Connection for MysqlConnection {
         SchemaLoadingStrategy::LazyPerDatabase
     }
 
-    fn code_generators(&self) -> &'static [CodeGeneratorInfo] {
-        MYSQL_CODE_GENERATORS
+    fn code_generators(&self) -> Vec<CodeGeneratorInfo> {
+        mysql_code_generators()
     }
 
     fn generate_code(&self, generator_id: &str, table: &TableInfo) -> Result<String, DbError> {
@@ -1625,6 +2021,238 @@ impl Connection for MysqlConnection {
     fn query_generator(&self) -> Option<&dyn QueryGenerator> {
         static GENERATOR: SqlMutationGenerator = SqlMutationGenerator::new(&MYSQL_DIALECT);
         Some(&GENERATOR)
+    }
+
+    fn plan_semantic_request(&self, request: &SemanticRequest) -> Result<SemanticPlan, DbError> {
+        plan_mysql_semantic_request(request)
+    }
+
+    fn build_select_sql(
+        &self,
+        table: &str,
+        columns: &[String],
+        filter: Option<&Value>,
+        order_by: &[OrderByColumn],
+        limit: u32,
+        offset: u32,
+    ) -> String {
+        let quoted_table = MYSQL_DIALECT.quote_identifier(table);
+        let cols = if columns.is_empty() {
+            "*".to_string()
+        } else {
+            columns
+                .iter()
+                .map(|c| MYSQL_DIALECT.quote_identifier(c))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+
+        let mut sql = format!("SELECT {} FROM {}", cols, quoted_table);
+
+        if let Some(f) = filter {
+            let (where_clause, _filter_params) = translate_filter_to_sql(f);
+            if !where_clause.is_empty() {
+                sql.push_str(" WHERE ");
+                sql.push_str(&where_clause);
+            }
+        }
+
+        if !order_by.is_empty() {
+            sql.push_str(" ORDER BY ");
+            let order_parts = order_by
+                .iter()
+                .map(|col| {
+                    let dir = match col.direction {
+                        SortDirection::Ascending => "ASC",
+                        SortDirection::Descending => "DESC",
+                    };
+                    format!("{} {}", col.column.quoted_with(&MYSQL_DIALECT), dir)
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            sql.push_str(&order_parts);
+        }
+
+        sql.push_str(&format!(" LIMIT {} OFFSET {}", limit, offset));
+        sql
+    }
+
+    fn build_insert_sql(
+        &self,
+        table: &str,
+        columns: &[String],
+        values: &[Value],
+    ) -> (String, Vec<Value>) {
+        let quoted_table = MYSQL_DIALECT.quote_identifier(table);
+        let cols = columns
+            .iter()
+            .map(|c| MYSQL_DIALECT.quote_identifier(c))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let placeholders: Vec<String> = values.iter().map(|_| "?".to_string()).collect();
+        let placeholders_str = placeholders.join(", ");
+
+        let sql = format!(
+            "INSERT INTO {} ({}) VALUES ({})",
+            quoted_table, cols, placeholders_str
+        );
+
+        (sql, values.to_vec())
+    }
+
+    fn build_update_sql(
+        &self,
+        table: &str,
+        set: &[(String, Value)],
+        filter: Option<&Value>,
+    ) -> (String, Vec<Value>) {
+        let quoted_table = MYSQL_DIALECT.quote_identifier(table);
+
+        let set_parts: Vec<String> = set
+            .iter()
+            .map(|(col, _)| format!("{} = ?", MYSQL_DIALECT.quote_identifier(col)))
+            .collect();
+        let set_str = set_parts.join(", ");
+
+        let mut sql = format!("UPDATE {} SET {}", quoted_table, set_str);
+        let mut params: Vec<Value> = set.iter().map(|(_, v)| v.clone()).collect();
+
+        if let Some(f) = filter {
+            let (where_clause, filter_params) = translate_filter_to_sql(f);
+            if !where_clause.is_empty() {
+                sql.push_str(" WHERE ");
+                sql.push_str(&where_clause);
+            }
+            params.extend(filter_params);
+        }
+
+        (sql, params)
+    }
+
+    fn build_delete_sql(&self, table: &str, filter: Option<&Value>) -> (String, Vec<Value>) {
+        let quoted_table = MYSQL_DIALECT.quote_identifier(table);
+        let mut sql = format!("DELETE FROM {}", quoted_table);
+        let mut params = Vec::new();
+
+        if let Some(f) = filter {
+            let (where_clause, filter_params) = translate_filter_to_sql(f);
+            if !where_clause.is_empty() {
+                sql.push_str(" WHERE ");
+                sql.push_str(&where_clause);
+            }
+            params.extend(filter_params);
+        }
+
+        (sql, params)
+    }
+
+    fn build_upsert_sql(
+        &self,
+        table: &str,
+        columns: &[String],
+        values: &[Value],
+        conflict_columns: &[String],
+        update_columns: &[String],
+    ) -> (String, Vec<Value>) {
+        let quoted_table = MYSQL_DIALECT.quote_identifier(table);
+        let cols = columns
+            .iter()
+            .map(|c| MYSQL_DIALECT.quote_identifier(c))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let placeholders: Vec<String> = values.iter().map(|_| "?".to_string()).collect();
+        let placeholders_str = placeholders.join(", ");
+
+        let _conflict_cols = conflict_columns
+            .iter()
+            .map(|c| MYSQL_DIALECT.quote_identifier(c))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let update_parts: Vec<String> = update_columns
+            .iter()
+            .map(|col| {
+                format!(
+                    "{} = VALUES({})",
+                    MYSQL_DIALECT.quote_identifier(col),
+                    MYSQL_DIALECT.quote_identifier(col)
+                )
+            })
+            .collect();
+        let update_str = update_parts.join(", ");
+
+        let sql = format!(
+            "INSERT INTO {} ({}) VALUES ({}) ON DUPLICATE KEY UPDATE {}",
+            quoted_table, cols, placeholders_str, update_str
+        );
+
+        (sql, values.to_vec())
+    }
+
+    fn build_count_sql(&self, table: &str, filter: Option<&Value>) -> String {
+        let quoted_table = MYSQL_DIALECT.quote_identifier(table);
+        let mut sql = format!("SELECT COUNT(*) FROM {}", quoted_table);
+
+        if let Some(f) = filter {
+            let (where_clause, _filter_params) = translate_filter_to_sql(f);
+            if !where_clause.is_empty() {
+                sql.push_str(" WHERE ");
+                sql.push_str(&where_clause);
+            }
+        }
+
+        sql
+    }
+
+    fn build_truncate_sql(&self, table: &str) -> String {
+        let quoted_table = MYSQL_DIALECT.quote_identifier(table);
+        format!("TRUNCATE TABLE {}", quoted_table)
+    }
+
+    fn build_drop_index_sql(
+        &self,
+        index_name: &str,
+        table_name: Option<&str>,
+        _if_exists: bool,
+    ) -> String {
+        let quoted_index = MYSQL_DIALECT.quote_identifier(index_name);
+        let quoted_table = table_name.map(|t| MYSQL_DIALECT.quote_identifier(t));
+
+        if let Some(table) = quoted_table {
+            format!("DROP INDEX {} ON {}", quoted_index, table)
+        } else {
+            format!("DROP INDEX {} ", quoted_index)
+        }
+    }
+
+    fn version_query(&self) -> &'static str {
+        "SELECT VERSION()"
+    }
+
+    fn supports_transactional_ddl(&self) -> bool {
+        false
+    }
+
+    fn translate_filter(&self, filter: &Value) -> Result<String, DbError> {
+        Ok(translate_filter_to_sql(filter).0)
+    }
+}
+
+impl RelationalConnection for MysqlConnection {}
+
+impl ConnectionExt for MysqlConnection {
+    fn as_relational(&self) -> Option<&dyn RelationalConnection> {
+        Some(self)
+    }
+
+    fn as_document(&self) -> Option<&dyn DocumentConnection> {
+        None
+    }
+
+    fn as_keyvalue(&self) -> Option<&dyn KeyValueConnection> {
+        None
     }
 }
 
@@ -2125,12 +2753,51 @@ fn fetch_foreign_keys(
     Ok(builder.build())
 }
 
+/// Translate a Value filter expression to a SQL WHERE clause string for MySQL.
+/// Returns (SQL string with ? placeholders, parameter values).
+fn translate_filter_to_sql(filter: &Value) -> (String, Vec<Value>) {
+    match filter {
+        Value::Document(doc) => {
+            let mut parts = Vec::new();
+            let mut params = Vec::new();
+            for (key, value) in doc {
+                let quoted_col = MYSQL_DIALECT.quote_identifier(key);
+                match value {
+                    Value::Null => {
+                        parts.push(format!("{} IS NULL", quoted_col));
+                    }
+                    _ => {
+                        parts.push(format!("{} = ?", quoted_col));
+                        params.push(value.clone());
+                    }
+                }
+            }
+            if parts.is_empty() {
+                (String::new(), Vec::new())
+            } else {
+                (parts.join(" AND "), params)
+            }
+        }
+        Value::Text(s) => {
+            // Treat a plain text filter as a raw SQL expression (for advanced users)
+            // WARNING: This is intentionally allowed for power users but is a SQL injection risk
+            // if the filter comes from untrusted input. The caller must validate.
+            (s.clone(), Vec::new())
+        }
+        _ => (String::new(), Vec::new()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{MysqlDialect, MysqlDriver, inject_password_into_mysql_uri};
+    use super::{
+        MysqlDialect, MysqlDriver, inject_password_into_mysql_uri, normalize_mysql_tcp_host,
+        plan_mysql_semantic_request,
+    };
     use dbflux_core::{
-        DatabaseCategory, DbConfig, DbDriver, DbError, DbKind, FormValues, QueryLanguage,
-        SqlDialect, Value,
+        DatabaseCategory, DbConfig, DbDriver, DbError, DbKind, FormValues, MutationRequest,
+        OrderByColumn, QueryLanguage, RowInsert, SemanticRequest, SqlDialect, TableBrowseRequest,
+        TableRef, Value,
     };
 
     #[test]
@@ -2196,6 +2863,41 @@ mod tests {
     }
 
     #[test]
+    fn build_config_defaults_to_prefer_ssl_mode() {
+        let driver = MysqlDriver::new(DbKind::MySQL);
+
+        let mut manual_values = FormValues::new();
+        manual_values.insert("host".to_string(), "localhost".to_string());
+        manual_values.insert("port".to_string(), "3306".to_string());
+        manual_values.insert("user".to_string(), "root".to_string());
+
+        let manual_config = driver.build_config(&manual_values).unwrap();
+        assert!(matches!(
+            manual_config,
+            DbConfig::MySQL {
+                ssl_mode: dbflux_core::SslMode::Prefer,
+                ..
+            }
+        ));
+
+        let mut uri_values = FormValues::new();
+        uri_values.insert("use_uri".to_string(), "true".to_string());
+        uri_values.insert(
+            "uri".to_string(),
+            "mysql://root@localhost:3306/app".to_string(),
+        );
+
+        let uri_config = driver.build_config(&uri_values).unwrap();
+        assert!(matches!(
+            uri_config,
+            DbConfig::MySQL {
+                ssl_mode: dbflux_core::SslMode::Prefer,
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn extract_values_includes_uri_mode_flags() {
         let driver = MysqlDriver::new(DbKind::MySQL);
         let config = DbConfig::MySQL {
@@ -2229,9 +2931,77 @@ mod tests {
     }
 
     #[test]
+    fn semantic_planner_sets_target_database_for_table_browse() {
+        let plan = plan_mysql_semantic_request(&SemanticRequest::TableBrowse(
+            TableBrowseRequest::new(TableRef::with_schema("analytics", "users"))
+                .with_filter("status = 'active'"),
+        ))
+        .expect("mysql planner should handle table browse");
+
+        assert_eq!(plan.kind, dbflux_core::SemanticPlanKind::Query);
+        assert_eq!(
+            plan.queries[0].target_database.as_deref(),
+            Some("analytics")
+        );
+        assert!(plan.queries[0].text.contains("FROM `analytics`.`users`"));
+    }
+
+    #[test]
+    fn semantic_planner_wraps_sql_mutation_preview() {
+        let plan = plan_mysql_semantic_request(&SemanticRequest::Mutation(
+            MutationRequest::sql_insert(RowInsert::new(
+                "users".to_string(),
+                Some("analytics".to_string()),
+                vec!["id".to_string()],
+                vec![Value::Int(1)],
+            )),
+        ))
+        .expect("mysql planner should preview sql mutations");
+
+        assert_eq!(plan.kind, dbflux_core::SemanticPlanKind::MutationPreview);
+        assert!(plan.queries[0].text.contains("INSERT INTO"));
+    }
+
+    #[test]
+    fn semantic_planner_builds_aggregate_query() {
+        let request = dbflux_core::AggregateRequest::new(TableRef::new("orders"))
+            .with_group_by(vec![dbflux_core::ColumnRef::new("customer_id")])
+            .with_aggregations(vec![dbflux_core::AggregateSpec::new(
+                dbflux_core::AggregateFunction::Count,
+                Some(dbflux_core::ColumnRef::new("id")),
+                "order_count",
+            )])
+            .with_order_by(vec![OrderByColumn::desc("order_count")])
+            .with_limit(Some(5))
+            .with_target_database(Some("analytics".to_string()));
+
+        let plan = plan_mysql_semantic_request(&SemanticRequest::Aggregate(request))
+            .expect("mysql planner should handle aggregate requests");
+
+        assert_eq!(plan.kind, dbflux_core::SemanticPlanKind::Query);
+        assert_eq!(plan.queries[0].language, QueryLanguage::Sql);
+        assert_eq!(
+            plan.queries[0].target_database.as_deref(),
+            Some("analytics")
+        );
+        assert_eq!(
+            plan.queries[0].text,
+            "SELECT `customer_id`, COUNT(`id`) AS `order_count` FROM `orders` GROUP BY `customer_id` ORDER BY `order_count` DESC LIMIT 5"
+        );
+    }
+
+    #[test]
     fn inject_password_into_uri_adds_password_for_user_without_one() {
         let uri = inject_password_into_mysql_uri("mysql://root@localhost:3306/app", Some("new p"));
         assert_eq!(uri, "mysql://root:new%20p@localhost:3306/app");
+    }
+
+    #[test]
+    fn normalize_mysql_tcp_host_rewrites_localhost_to_ipv4_loopback() {
+        assert_eq!(normalize_mysql_tcp_host("localhost"), "127.0.0.1");
+        assert_eq!(normalize_mysql_tcp_host("LOCALHOST"), "127.0.0.1");
+        assert_eq!(normalize_mysql_tcp_host("127.0.0.1"), "127.0.0.1");
+        assert_eq!(normalize_mysql_tcp_host("db.internal"), "db.internal");
     }
 
     #[test]

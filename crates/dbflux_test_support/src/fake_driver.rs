@@ -1,12 +1,16 @@
+use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
-    Connection, ConnectionProfile, DatabaseCategory, DbConfig, DbDriver, DbError, DbKind,
-    DriverCapabilities, DriverFormDef, DriverMetadata, FormValues, Icon, MONGODB_FORM, MYSQL_FORM,
-    POSTGRES_FORM, QueryHandle, QueryLanguage, QueryRequest, QueryResult, REDIS_FORM,
-    RedisLanguageService, SQLITE_FORM, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
-    SqlLanguageService,
+    Connection, ConnectionProfile, DYNAMODB_FORM, DatabaseCategory, DbConfig, DbDriver, DbError,
+    DbKind, DdlCapabilities, DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata,
+    FormValues, Icon, MONGODB_FORM, MYSQL_FORM, MutationCapabilities, POSTGRES_FORM,
+    QueryCapabilities, QueryHandle, QueryLanguage, QueryRequest, QueryResult, REDIS_FORM,
+    SQLITE_FORM, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SqlLanguageService, SyntaxInfo,
+    TransactionCapabilities,
 };
 use dbflux_core::{DatabaseInfo, DefaultSqlDialect};
+use dbflux_driver_redis::RedisLanguageService;
 use std::collections::HashMap;
+use std::sync::LazyLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
@@ -127,11 +131,15 @@ impl DbDriver for FakeDriver {
         self.kind
     }
 
-    fn metadata(&self) -> &'static DriverMetadata {
+    fn metadata(&self) -> &DriverMetadata {
         metadata_for_kind(self.kind)
     }
 
-    fn form_definition(&self) -> &'static DriverFormDef {
+    fn driver_key(&self) -> dbflux_core::DriverKey {
+        format!("builtin:fake-{}", self.metadata().id)
+    }
+
+    fn form_definition(&self) -> &DriverFormDef {
         form_for_kind(self.kind)
     }
 
@@ -157,7 +165,10 @@ impl DbDriver for FakeDriver {
                         DbError::InvalidProfile("Missing required field: path".to_string())
                     })?;
 
-                DbConfig::SQLite { path: path.into() }
+                DbConfig::SQLite {
+                    path: path.into(),
+                    connection_id: None,
+                }
             }
             DbKind::MySQL | DbKind::MariaDB => DbConfig::MySQL {
                 use_uri: false,
@@ -192,6 +203,12 @@ impl DbDriver for FakeDriver {
                 ssh_tunnel: None,
                 ssh_tunnel_profile_id: None,
             },
+            DbKind::DynamoDB => DbConfig::DynamoDB {
+                region: get_string(values, "region", "us-east-1"),
+                profile: get_optional_string(values, "profile"),
+                endpoint: get_optional_string(values, "endpoint"),
+                table: get_optional_string(values, "table"),
+            },
         };
 
         Ok(config)
@@ -213,7 +230,7 @@ impl DbDriver for FakeDriver {
                 values.insert("user".to_string(), user.clone());
                 values.insert("database".to_string(), database.clone());
             }
-            DbConfig::SQLite { path } => {
+            DbConfig::SQLite { path, .. } => {
                 values.insert("path".to_string(), path.display().to_string());
             }
             DbConfig::MySQL {
@@ -260,6 +277,20 @@ impl DbDriver for FakeDriver {
                     database.map(|value| value.to_string()).unwrap_or_default(),
                 );
             }
+            DbConfig::DynamoDB {
+                region,
+                profile,
+                endpoint,
+                table,
+            } => {
+                values.insert("region".to_string(), region.clone());
+                values.insert("profile".to_string(), profile.clone().unwrap_or_default());
+                values.insert("endpoint".to_string(), endpoint.clone().unwrap_or_default());
+                values.insert("table".to_string(), table.clone().unwrap_or_default());
+            }
+            DbConfig::External { values: vals, .. } => {
+                values.extend(vals.clone());
+            }
         }
 
         values
@@ -268,8 +299,8 @@ impl DbDriver for FakeDriver {
     fn connect_with_secrets(
         &self,
         profile: &ConnectionProfile,
-        _password: Option<&str>,
-        _ssh_secret: Option<&str>,
+        _password: Option<&SecretString>,
+        _ssh_secret: Option<&SecretString>,
     ) -> Result<Box<dyn Connection>, DbError> {
         if let Some(message) = rwlock_read(&self.state.connect_error).clone() {
             return Err(DbError::connection_failed(message));
@@ -329,7 +360,7 @@ impl FakeConnection {
 }
 
 impl Connection for FakeConnection {
-    fn metadata(&self) -> &'static DriverMetadata {
+    fn metadata(&self) -> &DriverMetadata {
         metadata_for_kind(self.kind)
     }
 
@@ -399,6 +430,7 @@ impl Connection for FakeConnection {
             DbKind::SQLite | DbKind::MongoDB | DbKind::Redis => {
                 SchemaLoadingStrategy::SingleDatabase
             }
+            DbKind::DynamoDB => SchemaLoadingStrategy::SingleDatabase,
         }
     }
 
@@ -417,10 +449,12 @@ impl Connection for FakeConnection {
 fn active_database_from_profile(profile: &ConnectionProfile) -> Option<String> {
     match &profile.config {
         DbConfig::Postgres { database, .. } => Some(database.clone()),
-        DbConfig::SQLite { path } => Some(path.display().to_string()),
+        DbConfig::SQLite { path, .. } => Some(path.display().to_string()),
         DbConfig::MySQL { database, .. } => database.clone(),
         DbConfig::MongoDB { database, .. } => database.clone(),
         DbConfig::Redis { database, .. } => database.map(|value| value.to_string()),
+        DbConfig::DynamoDB { table, .. } => table.clone(),
+        DbConfig::External { values, .. } => values.get("database").cloned(),
     }
 }
 
@@ -432,6 +466,7 @@ fn metadata_for_kind(kind: DbKind) -> &'static DriverMetadata {
         DbKind::MariaDB => &FAKE_MARIADB_METADATA,
         DbKind::MongoDB => &FAKE_MONGODB_METADATA,
         DbKind::Redis => &FAKE_REDIS_METADATA,
+        DbKind::DynamoDB => &FAKE_DYNAMODB_METADATA,
     }
 }
 
@@ -442,6 +477,7 @@ fn form_for_kind(kind: DbKind) -> &'static DriverFormDef {
         DbKind::MySQL | DbKind::MariaDB => &MYSQL_FORM,
         DbKind::MongoDB => &MONGODB_FORM,
         DbKind::Redis => &REDIS_FORM,
+        DbKind::DynamoDB => &DYNAMODB_FORM,
     }
 }
 
@@ -502,77 +538,292 @@ static DEFAULT_SQL_DIALECT: DefaultSqlDialect = DefaultSqlDialect;
 static SQL_LANGUAGE_SERVICE: SqlLanguageService = SqlLanguageService;
 static REDIS_LANGUAGE_SERVICE: RedisLanguageService = RedisLanguageService;
 
-static FAKE_POSTGRES_METADATA: DriverMetadata = DriverMetadata {
-    id: "fake-postgres",
-    display_name: "Fake PostgreSQL",
-    description: "Deterministic fake driver for tests",
+static FAKE_POSTGRES_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
+    id: "fake-postgres".into(),
+    display_name: "Fake PostgreSQL".into(),
+    description: "Deterministic fake driver for tests".into(),
     category: DatabaseCategory::Relational,
     query_language: QueryLanguage::Sql,
     capabilities: DriverCapabilities::RELATIONAL_BASE,
     default_port: Some(5432),
-    uri_scheme: "postgresql",
+    uri_scheme: "postgresql".into(),
     icon: Icon::Postgres,
-};
+    syntax: Some(SyntaxInfo {
+        identifier_quote: '"',
+        string_quote: '\'',
+        placeholder_style: dbflux_core::PlaceholderStyle::DollarNumber,
+        supports_schemas: true,
+        default_schema: Some("public".to_string()),
+        case_sensitive_identifiers: true,
+    }),
+    query: Some(QueryCapabilities::default()),
+    mutation: Some(MutationCapabilities {
+        supports_upsert: true,
+        supports_returning: true,
+        ..Default::default()
+    }),
+    ddl: Some(DdlCapabilities::default()),
+    transactions: Some(TransactionCapabilities::default()),
+    limits: Some(DriverLimits {
+        max_parameters: 32767,
+        max_identifier_length: 63,
+        max_columns: 250,
+        max_indexes_per_table: 32,
+        ..Default::default()
+    }),
+    classification_override: None,
+});
 
-static FAKE_SQLITE_METADATA: DriverMetadata = DriverMetadata {
-    id: "fake-sqlite",
-    display_name: "Fake SQLite",
-    description: "Deterministic fake driver for tests",
+static FAKE_SQLITE_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
+    id: "fake-sqlite".into(),
+    display_name: "Fake SQLite".into(),
+    description: "Deterministic fake driver for tests".into(),
     category: DatabaseCategory::Relational,
     query_language: QueryLanguage::Sql,
     capabilities: DriverCapabilities::RELATIONAL_BASE,
     default_port: None,
-    uri_scheme: "sqlite",
+    uri_scheme: "sqlite".into(),
     icon: Icon::Sqlite,
-};
+    syntax: Some(SyntaxInfo {
+        identifier_quote: '"',
+        string_quote: '\'',
+        placeholder_style: dbflux_core::PlaceholderStyle::QuestionMark,
+        supports_schemas: false,
+        default_schema: None,
+        case_sensitive_identifiers: true,
+    }),
+    query: Some(QueryCapabilities::default()),
+    mutation: Some(MutationCapabilities {
+        supports_upsert: true,
+        supports_returning: true,
+        ..Default::default()
+    }),
+    ddl: Some(DdlCapabilities {
+        supports_alter_table: false,
+        supports_add_column: true,
+        supports_rename_column: true,
+        supports_drop_column: false,
+        supports_alter_column: false,
+        supports_add_constraint: false,
+        supports_drop_constraint: false,
+        transactional_ddl: false,
+        ..Default::default()
+    }),
+    transactions: Some(TransactionCapabilities {
+        supported_isolation_levels: vec![dbflux_core::IsolationLevel::ReadCommitted],
+        default_isolation_level: Some(dbflux_core::IsolationLevel::ReadCommitted),
+        supports_nested_transactions: false,
+        supports_deferrable: true,
+        ..Default::default()
+    }),
+    limits: Some(DriverLimits {
+        max_query_length: 1_000_000_000,
+        max_parameters: 32766,
+        max_identifier_length: 100_000,
+        max_columns: 32766,
+        max_indexes_per_table: 64,
+        ..Default::default()
+    }),
+    classification_override: None,
+});
 
-static FAKE_MYSQL_METADATA: DriverMetadata = DriverMetadata {
-    id: "fake-mysql",
-    display_name: "Fake MySQL",
-    description: "Deterministic fake driver for tests",
+static FAKE_MYSQL_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
+    id: "fake-mysql".into(),
+    display_name: "Fake MySQL".into(),
+    description: "Deterministic fake driver for tests".into(),
     category: DatabaseCategory::Relational,
     query_language: QueryLanguage::Sql,
     capabilities: DriverCapabilities::RELATIONAL_BASE,
     default_port: Some(3306),
-    uri_scheme: "mysql",
+    uri_scheme: "mysql".into(),
     icon: Icon::Mysql,
-};
+    syntax: Some(SyntaxInfo {
+        identifier_quote: '`',
+        string_quote: '\'',
+        placeholder_style: dbflux_core::PlaceholderStyle::QuestionMark,
+        supports_schemas: false,
+        default_schema: None,
+        case_sensitive_identifiers: false,
+    }),
+    query: Some(QueryCapabilities::default()),
+    mutation: Some(MutationCapabilities::default()),
+    ddl: Some(DdlCapabilities {
+        transactional_ddl: false,
+        supports_rename_column: false,
+        supports_drop_column: false,
+        ..Default::default()
+    }),
+    transactions: Some(TransactionCapabilities::default()),
+    limits: Some(DriverLimits {
+        max_parameters: 65535,
+        max_identifier_length: 64,
+        max_columns: 4096,
+        max_indexes_per_table: 64,
+        ..Default::default()
+    }),
+    classification_override: None,
+});
 
-static FAKE_MARIADB_METADATA: DriverMetadata = DriverMetadata {
-    id: "fake-mariadb",
-    display_name: "Fake MariaDB",
-    description: "Deterministic fake driver for tests",
+static FAKE_MARIADB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
+    id: "fake-mariadb".into(),
+    display_name: "Fake MariaDB".into(),
+    description: "Deterministic fake driver for tests".into(),
     category: DatabaseCategory::Relational,
     query_language: QueryLanguage::Sql,
     capabilities: DriverCapabilities::RELATIONAL_BASE,
     default_port: Some(3306),
-    uri_scheme: "mysql",
+    uri_scheme: "mysql".into(),
     icon: Icon::Mariadb,
-};
+    syntax: Some(SyntaxInfo {
+        identifier_quote: '`',
+        string_quote: '\'',
+        placeholder_style: dbflux_core::PlaceholderStyle::QuestionMark,
+        supports_schemas: false,
+        default_schema: None,
+        case_sensitive_identifiers: false,
+    }),
+    query: Some(QueryCapabilities::default()),
+    mutation: Some(MutationCapabilities::default()),
+    ddl: Some(DdlCapabilities {
+        transactional_ddl: false,
+        supports_rename_column: false,
+        supports_drop_column: false,
+        ..Default::default()
+    }),
+    transactions: Some(TransactionCapabilities::default()),
+    limits: Some(DriverLimits {
+        max_parameters: 65535,
+        max_identifier_length: 64,
+        max_columns: 4096,
+        max_indexes_per_table: 64,
+        ..Default::default()
+    }),
+    classification_override: None,
+});
 
-static FAKE_MONGODB_METADATA: DriverMetadata = DriverMetadata {
-    id: "fake-mongodb",
-    display_name: "Fake MongoDB",
-    description: "Deterministic fake driver for tests",
+static FAKE_MONGODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
+    id: "fake-mongodb".into(),
+    display_name: "Fake MongoDB".into(),
+    description: "Deterministic fake driver for tests".into(),
     category: DatabaseCategory::Document,
     query_language: QueryLanguage::MongoQuery,
     capabilities: DriverCapabilities::DOCUMENT_BASE,
     default_port: Some(27017),
-    uri_scheme: "mongodb",
+    uri_scheme: "mongodb".into(),
     icon: Icon::Mongodb,
-};
+    syntax: None,
+    query: Some(QueryCapabilities {
+        pagination: vec![
+            dbflux_core::PaginationStyle::Cursor,
+            dbflux_core::PaginationStyle::PageToken,
+        ],
+        where_operators: vec![
+            dbflux_core::WhereOperator::Eq,
+            dbflux_core::WhereOperator::Ne,
+            dbflux_core::WhereOperator::Gt,
+            dbflux_core::WhereOperator::Gte,
+            dbflux_core::WhereOperator::Lt,
+            dbflux_core::WhereOperator::Lte,
+            dbflux_core::WhereOperator::In,
+            dbflux_core::WhereOperator::NotIn,
+            dbflux_core::WhereOperator::And,
+            dbflux_core::WhereOperator::Or,
+            dbflux_core::WhereOperator::Not,
+        ],
+        supports_joins: false,
+        supports_union: false,
+        supports_intersect: false,
+        supports_except: false,
+        supports_ctes: false,
+        ..Default::default()
+    }),
+    mutation: None,
+    ddl: None,
+    transactions: Some(TransactionCapabilities {
+        supports_transactions: false,
+        supported_isolation_levels: vec![],
+        default_isolation_level: None,
+        supports_savepoints: false,
+        supports_nested_transactions: false,
+        supports_read_only: false,
+        supports_deferrable: false,
+    }),
+    limits: None,
+    classification_override: None,
+});
 
-static FAKE_REDIS_METADATA: DriverMetadata = DriverMetadata {
-    id: "fake-redis",
-    display_name: "Fake Redis",
-    description: "Deterministic fake driver for tests",
+static FAKE_REDIS_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
+    id: "fake-redis".into(),
+    display_name: "Fake Redis".into(),
+    description: "Deterministic fake driver for tests".into(),
     category: DatabaseCategory::KeyValue,
     query_language: QueryLanguage::RedisCommands,
     capabilities: DriverCapabilities::KEYVALUE_BASE,
     default_port: Some(6379),
-    uri_scheme: "redis",
+    uri_scheme: "redis".into(),
     icon: Icon::Redis,
-};
+    syntax: None,
+    query: Some(QueryCapabilities {
+        pagination: vec![dbflux_core::PaginationStyle::Cursor],
+        where_operators: vec![],
+        supports_order_by: false,
+        supports_group_by: false,
+        supports_having: false,
+        supports_distinct: false,
+        supports_limit: false,
+        supports_offset: false,
+        supports_joins: false,
+        supports_subqueries: false,
+        supports_union: false,
+        supports_intersect: false,
+        supports_except: false,
+        supports_case_expressions: false,
+        supports_window_functions: false,
+        supports_ctes: false,
+        supports_explain: false,
+        ..Default::default()
+    }),
+    mutation: None,
+    ddl: None,
+    transactions: Some(TransactionCapabilities {
+        supports_transactions: false,
+        supported_isolation_levels: vec![],
+        default_isolation_level: None,
+        supports_savepoints: false,
+        supports_nested_transactions: false,
+        supports_read_only: false,
+        supports_deferrable: false,
+    }),
+    limits: None,
+    classification_override: None,
+});
+
+static FAKE_DYNAMODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
+    id: "fake-dynamodb".into(),
+    display_name: "Fake DynamoDB".into(),
+    description: "Deterministic fake driver for tests".into(),
+    category: DatabaseCategory::Document,
+    query_language: QueryLanguage::Custom("DynamoDB".into()),
+    capabilities: DriverCapabilities::DOCUMENT_BASE,
+    default_port: None,
+    uri_scheme: "dynamodb".into(),
+    icon: Icon::Dynamodb,
+    syntax: None,
+    query: None,
+    mutation: None,
+    ddl: None,
+    transactions: Some(TransactionCapabilities {
+        supports_transactions: false,
+        supported_isolation_levels: vec![],
+        default_isolation_level: None,
+        supports_savepoints: false,
+        supports_nested_transactions: false,
+        supports_read_only: false,
+        supports_deferrable: false,
+    }),
+    limits: None,
+    classification_override: None,
+});
 
 #[cfg(test)]
 mod tests {
@@ -709,6 +960,7 @@ mod tests {
             (DbKind::SQLite, SchemaLoadingStrategy::SingleDatabase),
             (DbKind::MongoDB, SchemaLoadingStrategy::SingleDatabase),
             (DbKind::Redis, SchemaLoadingStrategy::SingleDatabase),
+            (DbKind::DynamoDB, SchemaLoadingStrategy::SingleDatabase),
         ];
 
         for (kind, expected_strategy) in cases {
@@ -718,6 +970,7 @@ mod tests {
                 DbKind::Postgres => DbConfig::default_postgres(),
                 DbKind::SQLite => DbConfig::SQLite {
                     path: "/tmp/fake.db".into(),
+                    connection_id: None,
                 },
                 DbKind::MySQL | DbKind::MariaDB => DbConfig::MySQL {
                     use_uri: false,
@@ -732,6 +985,7 @@ mod tests {
                 },
                 DbKind::MongoDB => DbConfig::default_mongodb(),
                 DbKind::Redis => DbConfig::default_redis(),
+                DbKind::DynamoDB => DbConfig::default_dynamodb(),
             };
 
             let profile = ConnectionProfile::new("fake", config);

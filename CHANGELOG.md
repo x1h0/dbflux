@@ -2,6 +2,62 @@
 
 All notable changes to DBFlux will be documented in this file.
 
+## [0.4.0] – 2026-04-05
+
+### Architecture
+
+* Codebase split into `dbflux_app` (pure domain, no GPUI) and `dbflux_ui` (all GPUI/UI code); `dbflux` binary is now a thin shell
+* `AppState` extracted as a plain struct in `dbflux_app`; `AppStateEntity` wrapper with GPUI event emission lives in `dbflux_ui`
+* `dbflux_core` reorganized from 50 flat files into 10 thematic subdirectories (`core/`, `driver/`, `schema/`, `sql/`, `query/`, `connection/`, `storage/`, `data/`, `config/`, `facade/`)
+
+### Drivers
+
+* **DynamoDB**: built-in driver with full CRUD, SSM tunnel integration, and AWS SSO auth
+* **PostgreSQL, MySQL, SQLite, MongoDB, Redis**: driver stability fixes, schema introspection, filter translation, pagination, and aggregate handling
+* Driver crates now include README files documenting features and limitations
+
+### MCP Governance
+
+* Policy engine with roles, trusted clients, and tool policies
+* Approval service for deferred destructive/write operations
+* SQLite-backed audit logging with CloudWatch-like viewer
+* Standalone MCP server (`dbflux mcp`) integrated as optional CLI subcommand
+* Granular MCP tools for query, schema, DDL preview, and more
+
+### Connection Infrastructure
+
+* Proxy tunnel support: SOCKS5 and HTTP CONNECT with per-connection selection
+* SSH tunnel with adaptive sleep and host key verification
+* Connection hooks: reusable Bash/Python/Lua scripts bound to PreConnect, PostConnect, PreDisconnect, PostDisconnect phases
+* Unified SQLite storage in `~/.local/share/dbflux/dbflux.db`
+
+### UI/UX
+
+* Tab context menu (Close, Close Others, Close All, Duplicate)
+* Settings sidebar with collapsible categories (TreeNav component)
+* Audit viewer with full keyboard navigation (`j/k`, `g/G`, `]/[`, `m` for context menu)
+* Language-specific script icons in sidebar
+* X11 window rendering fixes and platform-aware floating windows
+* Live output streaming for script execution
+
+### Security
+
+* `SecretString` end-to-end across core, drivers, and IPC handoff
+* Per-process authentication tokens for local IPC and driver RPC
+* URI passwords sanitized before persistence
+* Lua VM memory capped at 16 MiB
+
+### AWS
+
+* In-app AWS SSO login flow with account/role discovery wizard
+* Provider-agnostic auth with runtime-registered `AuthProviderRegistry` (AWS SSO, Static, Shared credentials)
+* Managed access via AWS SSM port-forward tunnels (no SSH key needed for RDS/EC2)
+* Value sources for managed access fields: SSM Parameter Store, Secrets Manager, environment variables
+* SSO auth profiles write back to `~/.aws/config` for compatibility with other AWS tools
+* DynamoDB driver uses same managed access pipeline for seamless AWS integration
+
+---
+
 ## [0.3.7] – 2026-03-06
 
 ### Added
@@ -43,8 +99,6 @@ All notable changes to DBFlux will be documented in this file.
 * MySQL constraint introspection panic where `GROUP_CONCAT` over a `LEFT JOIN` returns NULL for CHECK constraints without key columns
 * Windows portable builds no longer open a CMD console window when launched outside a terminal
 * CI integration test job now installs required system dependencies (`libdbus-1-dev`, `libxkbcommon-dev`)
-
----
 
 ## [0.3.5] – 2026-02-26
 

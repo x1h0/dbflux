@@ -1,161 +1,168 @@
 #![allow(clippy::result_large_err)]
 
-mod code_generation;
-mod connection_tree;
-mod connection_tree_store;
-mod crud;
-mod data_view;
-mod driver_capabilities;
-mod driver_form;
-mod error;
-mod error_formatter;
-mod execution_context;
-mod history;
-mod key_value;
-mod language_service;
-mod profile;
+pub mod access;
+pub mod auth;
+mod config;
+mod connection;
+mod core;
+mod data;
+mod driver;
+mod facade;
+pub mod observability;
+pub mod pipeline;
 mod query;
-mod query_generator;
-mod query_safety;
-mod recent_files;
-mod refresh_policy;
-mod saved_query;
 mod schema;
-mod schema_builder;
-pub mod schema_node_id;
-mod scripts_directory;
-mod secrets;
-mod session_store;
-mod shutdown;
-mod sql_dialect;
-mod sql_generation;
-mod sql_query_builder;
-mod store;
-mod table_browser;
-mod task;
-mod traits;
-mod value;
+mod sql;
+mod storage;
+pub mod values;
 
-pub mod connection_manager;
-pub mod connection_tree_manager;
-pub mod history_manager;
-pub mod profile_manager;
-pub mod saved_query_manager;
-pub mod secret_manager;
-pub mod session_facade;
-pub mod ssh_tunnel_manager;
+pub use access::{AccessHandle, AccessKind, AccessManager};
 
-pub use code_generation::{
-    AddEnumValueRequest, AddForeignKeyRequest, CodeGenCapabilities, CodeGenerator,
-    CreateIndexRequest, CreateTypeRequest, DropForeignKeyRequest, DropIndexRequest,
-    DropTypeRequest, NoOpCodeGenerator, ReindexRequest, TypeDefinition,
+pub use auth::{
+    AuthFormDef, AuthProfile, AuthProfileSummary, AuthProvider, AuthSession, AuthSessionState,
+    DynAuthProvider, ImportableProfile, ResolvedCredentials,
 };
-pub use connection_tree::{ConnectionTree, ConnectionTreeNode, ConnectionTreeNodeKind};
-pub use connection_tree_store::ConnectionTreeStore;
-pub use crud::{
-    CrudResult, DocumentDelete, DocumentFilter, DocumentInsert, DocumentUpdate, MutationRequest,
-    RecordIdentity, RowDelete, RowIdentity, RowInsert, RowPatch, RowState,
+
+pub use config::{
+    AppConfig, AppConfigStore, DangerousAction, DriverKey, EffectiveSettings, GeneralSettings,
+    GlobalOverrides, GovernanceSettings, PolicyRoleConfig, RefreshPolicy, RefreshPolicySetting,
+    ScriptEntry, ScriptsDirectory, ServiceConfig, StartupFocus, ThemeSetting, ToolPolicyConfig,
+    TrustedClientConfig, all_script_extensions, driver_maps_differ, filter_entries,
+    hook_script_path, is_openable_script, migrate_app_config,
 };
-pub use data_view::DataViewKind;
-pub use driver_capabilities::{
-    DatabaseCategory, DriverCapabilities, DriverMetadata, Icon, QueryLanguage,
+
+pub use connection::{
+    AuthProfileManager, CacheEntry, CacheKey, ConnectProfileParams, ConnectProfileResult,
+    ConnectedProfile, ConnectionHook, ConnectionHookBindings, ConnectionHooks, ConnectionManager,
+    ConnectionMcpGovernance, ConnectionMcpPolicyBinding, ConnectionProfile,
+    ConnectionResolutionError, ConnectionTree, ConnectionTreeManager, ConnectionTreeNode,
+    ConnectionTreeNodeKind, ConnectionTreeStore, DatabaseConnection, DbConfig, DbKind,
+    DetachedProcessHandle, DetachedProcessReceiver, DetachedProcessSender, ExecutionContext,
+    FetchDatabaseSchemaParams, FetchDatabaseSchemaResult, FetchSchemaForeignKeysParams,
+    FetchSchemaForeignKeysResult, FetchSchemaIndexesParams, FetchSchemaIndexesResult,
+    FetchSchemaTypesParams, FetchSchemaTypesResult, FetchTableDetailsParams,
+    FetchTableDetailsResult, HookContext, HookExecution, HookExecutionContext, HookExecutionMode,
+    HookExecutor, HookFailureMode, HookKind, HookPhase, HookPhaseOutcome, HookResult, HookRunner,
+    Identifiable, ItemManager, LuaCapabilities, OutputEvent, OutputReceiver, OutputSender,
+    OutputStreamKind, OwnedCacheEntry, PendingOperation, ProcessExecutionError, ProcessExecutor,
+    ProfileManager, ProxyAuth, ProxyKind, ProxyManager, ProxyProfile, RedisKeyCache,
+    RedisKeyCacheEntry, ResolvedProxy, SchemaCacheKey, ScriptLanguage, ScriptSource, SshAuthMethod,
+    SshTunnelConfig, SshTunnelManager, SshTunnelProfile, SslMode, SwitchDatabaseParams,
+    SwitchDatabaseResult, TreeStore, detached_process_channel, execute_streaming_process,
+    output_channel,
 };
-pub use driver_form::{
-    DriverFormDef, FormFieldDef, FormFieldKind, FormSection, FormTab, FormValues, MONGODB_FORM,
-    MYSQL_FORM, POSTGRES_FORM, REDIS_FORM, SQLITE_FORM,
+
+pub use core::{
+    CancelToken, CodeGenScope, CodeGeneratorInfo, Connection, ConnectionErrorFormatter,
+    ConnectionExt, ConnectionOverrides, DbDriver, DbError, DefaultErrorFormatter,
+    DocumentConnection, ErrorLocation, FormattedError, KeyValueApi, KeyValueConnection,
+    NoopCancelHandle, QueryCancelHandle, QueryErrorFormatter, RelationalConnection, SchemaFeatures,
+    SchemaLoadingStrategy, ShutdownCoordinator, ShutdownPhase, TaskId, TaskKind, TaskManager,
+    TaskSlot, TaskSnapshot, TaskStatus, TaskTarget, Value, sanitize_uri,
 };
-pub use error::DbError;
-pub use error_formatter::{
-    ConnectionErrorFormatter, DefaultErrorFormatter, ErrorLocation, FormattedError,
-    QueryErrorFormatter, sanitize_uri,
-};
-pub use execution_context::ExecutionContext;
-pub use history::{HistoryEntry, HistoryStore};
-pub use key_value::{
+
+pub use data::{
+    CrudResult, DataViewKind, DocumentDelete, DocumentFilter, DocumentInsert, DocumentUpdate,
     HashDeleteRequest, HashSetRequest, KeyBulkGetRequest, KeyDeleteRequest, KeyEntry,
     KeyExistsRequest, KeyExpireRequest, KeyGetRequest, KeyGetResult, KeyPersistRequest,
     KeyRenameRequest, KeyScanPage, KeyScanRequest, KeySetRequest, KeyTtlRequest, KeyType,
-    KeyTypeRequest, ListEnd, ListPushRequest, ListRemoveRequest, ListSetRequest, SetAddRequest,
-    SetCondition, SetRemoveRequest, StreamAddRequest, StreamDeleteRequest, StreamEntryId,
-    StreamMaxLen, ValueRepr, ZSetAddRequest, ZSetRemoveRequest,
+    KeyTypeRequest, ListEnd, ListPushRequest, ListRemoveRequest, ListSetRequest, MutationRequest,
+    RecordIdentity, RowDelete, RowIdentity, RowInsert, RowPatch, RowState, SetAddRequest,
+    SetCondition, SetRemoveRequest, SqlDeleteRequest, SqlUpdateRequest, SqlUpsertRequest,
+    StreamAddRequest, StreamDeleteRequest, StreamEntryId, StreamMaxLen, ValueRepr, ZSetAddRequest,
+    ZSetRemoveRequest,
 };
-pub use language_service::{
-    DangerousQueryKind, Diagnostic, DiagnosticSeverity, EditorDiagnostic, LanguageService,
-    RedisLanguageService, SqlLanguageService, TextPosition, TextPositionRange, TextRange,
-    ValidationResult, detect_dangerous_mongo, detect_dangerous_query, detect_dangerous_redis,
-    detect_dangerous_sql, strip_leading_comments,
+
+pub use driver::{
+    DYNAMODB_FORM, DatabaseCategory, DdlCapabilities, DriverCapabilities, DriverFormDef,
+    DriverLimits, DriverMetadata, DriverMetadataBuilder, ExecutionClassification, FormFieldDef,
+    FormFieldKind, FormSection, FormTab, FormValues, Icon, IsolationLevel, MONGODB_FORM,
+    MYSQL_FORM, MutationCapabilities, OperationClassifier, POSTGRES_FORM, PaginationStyle,
+    QueryCapabilities, QueryLanguage, REDIS_FORM, SQLITE_FORM, SelectOption, SyntaxInfo,
+    TransactionCapabilities, WhereOperator, field_file_path, field_password, field_use_uri,
+    ssh_tab,
 };
-pub use profile::{
-    ConnectionProfile, DbConfig, DbKind, SshAuthMethod, SshTunnelConfig, SshTunnelProfile, SslMode,
+
+pub use facade::{DangerousQuerySuppressions, SessionFacade};
+
+pub use query::{
+    AggregateFunction, AggregateRequest, AggregateSpec, CollectionBrowseRequest,
+    CollectionCountRequest, CollectionRef, ColumnMeta, ColumnRef, DangerousQueryKind,
+    DescribeRequest, Diagnostic, DiagnosticSeverity, EditorDiagnostic, ExplainRequest,
+    GeneratedQuery, LanguageService, MutationCategory, MutationTemplateOperation,
+    MutationTemplateRequest, OrderByColumn, Pagination, PlannedQuery, QueryGenerator, QueryHandle,
+    QueryRequest, QueryResult, QueryResultShape, ReadTemplateOperation, ReadTemplateRequest, Row,
+    SemanticFieldRef, SemanticFilter, SemanticPlan, SemanticPlanKind, SemanticPlanner,
+    SemanticPredicate, SemanticRequest, SemanticRequestKind, SortDirection, SqlLanguageService,
+    SqlMutationGenerator, TableBrowseRequest, TableCountRequest, TableRef, TextPosition,
+    TextPositionRange, TextRange, ValidationResult, classify_query_for_governance,
+    classify_query_for_language, classify_sql_execution, detect_dangerous_mongo,
+    detect_dangerous_query, detect_dangerous_redis, detect_dangerous_sql, is_safe_read_query,
+    parse_semantic_filter_json, render_semantic_filter_sql, strip_leading_comments,
 };
-pub use query::{ColumnMeta, QueryHandle, QueryRequest, QueryResult, QueryResultShape, Row};
-pub use query_generator::{GeneratedQuery, MutationCategory, QueryGenerator, SqlMutationGenerator};
-pub use query_safety::is_safe_read_query;
-pub use recent_files::{RecentFile, RecentFilesStore};
-pub use refresh_policy::RefreshPolicy;
-pub use saved_query::{SavedQuery, SavedQueryStore};
+
+pub use schema::node_id as schema_node_id;
 pub use schema::{
     CollectionIndexInfo, CollectionInfo, ColumnFamilyInfo, ColumnInfo, ConstraintInfo,
     ConstraintKind, ContainerInfo, CustomTypeInfo, CustomTypeKind, DataStructure, DatabaseInfo,
-    DbSchemaInfo, DocumentSchema, FieldInfo, ForeignKeyInfo, GraphInfo, GraphSchema, IndexData,
-    IndexDirection, IndexInfo, KeyInfo, KeySpaceInfo, KeyValueSchema, MeasurementInfo,
-    MultiModelCapabilities, MultiModelSchema, NodeLabelInfo, PropertyInfo, RelationalSchema,
-    RelationshipTypeInfo, RetentionPolicyInfo, SchemaForeignKeyInfo, SchemaIndexInfo,
-    SchemaSnapshot, SearchIndexInfo, SearchMappingInfo, SearchSchema, TableInfo,
-    TimeSeriesFieldInfo, TimeSeriesSchema, VectorCollectionInfo, VectorMetadataField, VectorMetric,
-    VectorSchema, ViewInfo, WideColumnInfo, WideColumnKeyspaceInfo, WideColumnSchema,
+    DbSchemaInfo, DocumentSchema, FieldInfo, ForeignKeyBuilder, ForeignKeyInfo, GraphInfo,
+    GraphSchema, IndexBuilder, IndexData, IndexDirection, IndexInfo, KeyInfo, KeySpaceInfo,
+    KeyValueSchema, MeasurementInfo, MultiModelCapabilities, MultiModelSchema, NodeLabelInfo,
+    ParseSchemaNodeIdError, PropertyInfo, RelationalSchema, RelationshipTypeInfo,
+    RetentionPolicyInfo, SchemaForeignKeyBuilder, SchemaForeignKeyInfo, SchemaIndexBuilder,
+    SchemaIndexInfo, SchemaNodeId, SchemaNodeKind, SchemaSnapshot, SearchIndexInfo,
+    SearchMappingInfo, SearchSchema, TableInfo, TimeSeriesFieldInfo, TimeSeriesSchema,
+    VectorCollectionInfo, VectorMetadataField, VectorMetric, VectorSchema, ViewInfo,
+    WideColumnInfo, WideColumnKeyspaceInfo, WideColumnSchema,
 };
-pub use schema_node_id::{ParseSchemaNodeIdError, SchemaNodeId, SchemaNodeKind};
-pub use scripts_directory::{ScriptEntry, ScriptsDirectory, all_script_extensions, filter_entries};
-pub use secrets::{
-    KeyringSecretStore, NoopSecretStore, SecretStore, connection_secret_ref, create_secret_store,
-    ssh_tunnel_secret_ref,
+
+pub use sql::{
+    AddEnumValueRequest, AddForeignKeyRequest, CodeGenCapabilities, CodeGenerator,
+    CreateIndexRequest, CreateTypeRequest, DefaultSqlDialect, DropForeignKeyRequest,
+    DropIndexRequest, DropTypeRequest, NoOpCodeGenerator, PlaceholderStyle, ReindexRequest,
+    SqlDialect, SqlGenerationOptions, SqlGenerationRequest, SqlOperation, SqlQueryBuilder,
+    SqlValueMode, TypeDefinition, generate_create_table, generate_delete_template,
+    generate_drop_table, generate_insert_template, generate_select_star, generate_sql,
+    generate_truncate, generate_update_template,
 };
-pub use session_store::{SessionManifest, SessionStore, SessionTab, SessionTabKind};
-pub use shutdown::{ShutdownCoordinator, ShutdownPhase};
-pub use store::{ProfileStore, SshTunnelStore};
-pub use table_browser::{
-    CollectionBrowseRequest, CollectionCountRequest, CollectionRef, DescribeRequest,
-    ExplainRequest, OrderByColumn, Pagination, SortDirection, TableBrowseRequest,
-    TableCountRequest, TableRef,
+
+pub use pipeline::{
+    PipelineError, PipelineInput, PipelineOutput, PipelineState, StateSender, StateWatcher,
+    pipeline_state_channel, resolve_profile_values, run_pipeline,
 };
-pub use task::{
-    CancelToken, TaskId, TaskKind, TaskManager, TaskSlot, TaskSnapshot, TaskStatus, TaskTarget,
+pub use values::{
+    CachedValue, CompositeValueResolver, DynParameterProvider, DynSecretProvider, FieldValue,
+    ParameterProvider, ProviderError, ResolveContext, ResolvedValue, SecretProvider, ValueCache,
+    ValueCacheKey, ValueOrigin, ValueRef,
 };
-pub use traits::{
-    CodeGenScope, CodeGeneratorInfo, Connection, DbDriver, KeyValueApi, NoopCancelHandle,
-    QueryCancelHandle, SchemaFeatures, SchemaLoadingStrategy,
-};
-pub use value::Value;
 
 pub use chrono;
+pub use secrecy;
+pub use storage::{
+    AuthProfileStore, HasSecretRef, HistoryEntry, HistoryManager, HistoryStore, JsonStore,
+    KeyringSecretStore, NoopSecretStore, ProfileStore, ProxyStore, RecentFile, RecentFilesStore,
+    SavedQuery, SavedQueryManager, SavedQueryStore, SecretManager, SecretStore, SessionManifest,
+    SessionStore, SessionTab, SessionTabKind, SshTunnelStore, UiState, UiStateStore,
+    connection_secret_ref, create_secret_store, proxy_secret_ref, ssh_tunnel_secret_ref,
+};
 
-pub use schema_builder::{
-    ForeignKeyBuilder, IndexBuilder, SchemaForeignKeyBuilder, SchemaIndexBuilder,
+pub use observability::{
+    EventActorType, EventCapturePolicy, EventCategory, EventDetail, EventObjectRef, EventOutcome,
+    EventPage, EventQuery, EventRecord, EventRetentionPolicy, EventSeverity, EventSink,
+    EventSinkError, EventSource, EventSourceError, EventSourceId,
 };
-pub use sql_dialect::{DefaultSqlDialect, PlaceholderStyle, SqlDialect};
-pub use sql_generation::{
-    SqlGenerationOptions, SqlGenerationRequest, SqlOperation, SqlValueMode, generate_create_table,
-    generate_delete_template, generate_drop_table, generate_insert_template, generate_select_star,
-    generate_sql, generate_truncate, generate_update_template,
-};
-pub use sql_query_builder::SqlQueryBuilder;
 
-pub use connection_manager::{
-    CacheEntry, CacheKey, ConnectProfileParams, ConnectProfileResult, ConnectedProfile,
-    ConnectionManager, DatabaseConnection, FetchDatabaseSchemaParams, FetchDatabaseSchemaResult,
-    FetchSchemaForeignKeysParams, FetchSchemaForeignKeysResult, FetchSchemaIndexesParams,
-    FetchSchemaIndexesResult, FetchSchemaTypesParams, FetchSchemaTypesResult,
-    FetchTableDetailsParams, FetchTableDetailsResult, OwnedCacheEntry, PendingOperation,
-    RedisKeyCache, RedisKeyCacheEntry, SchemaCacheKey, SwitchDatabaseParams, SwitchDatabaseResult,
-};
-pub use connection_tree_manager::ConnectionTreeManager;
-pub use history_manager::HistoryManager;
-pub use profile_manager::ProfileManager;
-pub use saved_query_manager::SavedQueryManager;
-pub use secret_manager::SecretManager;
-pub use session_facade::{DangerousQuerySuppressions, SessionFacade};
-pub use ssh_tunnel_manager::SshTunnelManager;
+// Backward-compatible public module paths for external crates that use
+// `dbflux_core::connection_manager::*` etc.
+pub use connection::manager as connection_manager;
+pub use connection::profile_manager;
+pub use connection::proxy_manager;
+pub use connection::ssh_tunnel_manager;
+pub use connection::tree_manager as connection_tree_manager;
+pub use facade::session as session_facade;
+pub use storage::history_manager;
+pub use storage::saved_query_manager;
+pub use storage::secret_manager;
 
 /// Safely truncate a string at a character boundary, appending "..." if truncated.
 pub fn truncate_string_safe(s: &str, max_len: usize) -> String {
