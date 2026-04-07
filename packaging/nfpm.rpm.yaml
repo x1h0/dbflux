@@ -11,11 +11,10 @@ description: |
 homepage: https://github.com/0xErwin1/dbflux
 license: MIT
 depends:
-  - libc6
-  - libdbus
+  - dbus-libs
   - libgcc
   - openssl-libs
-  - libsystemd0
+  - systemd-libs
   - libxcb
   - libxkbcommon
   - libxkbcommon-x11
