@@ -24,10 +24,7 @@ use tokio::sync::RwLock;
 fn build_runtime_with_role(connection_id: &str, role_id: &str) -> McpRuntime {
     let audit_path = dbflux_audit::temp_sqlite_path(&format!(
         "integration_test_{}.sqlite",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("system clock before unix epoch")
-            .as_nanos()
+        uuid::Uuid::new_v4()
     ));
     let audit_service = dbflux_audit::AuditService::new_sqlite(&audit_path)
         .expect("failed to create test audit service");
