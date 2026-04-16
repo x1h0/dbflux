@@ -62,8 +62,8 @@ impl Render for AboutSection {
                                 .child(
                                     svg()
                                         .path(AppIcon::DbFlux.path())
-                                        .size(px(48.0))
-                                        .text_color(theme.foreground),
+                                        .size(px(65.0))
+                                        .text_color(theme.primary),
                                 )
                                 .child(
                                     div()

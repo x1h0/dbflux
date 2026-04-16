@@ -1,3 +1,4 @@
+use crate::ui::theme::ghost_border_color;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::scroll::ScrollableElement;
@@ -11,19 +12,22 @@ pub(super) fn section_header(
     let subtitle: SharedString = subtitle.into();
 
     div()
-        .p_4()
+        .px_6()
+        .py_5()
         .border_b_1()
-        .border_color(theme.border)
+        .border_color(ghost_border_color())
         .child(
             div()
-                .text_lg()
+                .text_xl()
                 .font_weight(FontWeight::SEMIBOLD)
+                .text_color(theme.foreground)
                 .child(title),
         )
         .child(
             div()
                 .text_sm()
                 .text_color(theme.muted_foreground)
+                .mt_1()
                 .child(subtitle),
         )
 }
