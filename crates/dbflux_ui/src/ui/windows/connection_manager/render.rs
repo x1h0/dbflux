@@ -6,6 +6,7 @@ use crate::ui::windows::ssh_shared::SshAuthSelection;
 use dbflux_components::controls::Button;
 use dbflux_components::controls::{GpuiInput as Input, InputState};
 use dbflux_components::primitives::{Icon as AppIconElement, Label, Text, focus_frame};
+use dbflux_components::typography::{Body, Headline};
 use dbflux_core::{FormFieldDef, FormFieldKind, FormTab};
 use gpui::prelude::*;
 use gpui::*;
@@ -149,7 +150,7 @@ impl ConnectionManagerWindow {
                                             cx.notify();
                                         })),
                                 )
-                                .child(div().text_sm().child("Save")),
+                                .child(Body::new("Save")),
                         )
                     }),
             )
@@ -180,7 +181,11 @@ impl ConnectionManagerWindow {
             .flex()
             .flex_col()
             .gap_2()
-            .child(Text::caption(title.to_uppercase()))
+            .child(
+                Text::subsection_label(title.to_uppercase())
+                    .font_size(FontSizes::SM)
+                    .font_weight(FontWeight::NORMAL),
+            )
             .child(content)
     }
 
@@ -270,7 +275,7 @@ impl ConnectionManagerWindow {
                                         .color(theme.foreground),
                                 )
                             })
-                            .child(Text::heading(title).font_size(FontSizes::LG))
+                            .child(Headline::new(title).xl())
                     })
                     .child(div().flex_1())
                     .child(self.form_field_input_inline(
@@ -808,7 +813,7 @@ impl ConnectionManagerWindow {
                     .flex()
                     .flex_col()
                     .gap_2()
-                    .child(Text::caption(section.title.to_uppercase()))
+                    .child(Body::new(section.title.to_uppercase()).muted(cx))
                     .children(field_elements)
                     .into_any_element(),
             );

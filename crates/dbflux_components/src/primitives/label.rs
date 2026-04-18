@@ -1,5 +1,5 @@
 use gpui::prelude::*;
-use gpui::{div, App, Hsla, SharedString, Window};
+use gpui::{App, Hsla, SharedString, Window, div};
 
 use crate::primitives::Text;
 use crate::typography::RequiredMarker;

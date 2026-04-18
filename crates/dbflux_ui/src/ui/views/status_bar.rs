@@ -1,6 +1,8 @@
 use crate::app::{AppStateChanged, AppStateEntity};
 use crate::ui::theme::ghost_border_color;
-use dbflux_components::primitives::{Icon, Text};
+use dbflux_components::primitives::Icon;
+use dbflux_components::tokens::FontSizes;
+use dbflux_components::typography::{MonoCaption, MonoMeta};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -107,6 +109,14 @@ impl StatusBar {
             Self::format_elapsed(task.elapsed_secs)
         )
     }
+
+    fn metadata_text(text: impl Into<SharedString>) -> MonoMeta {
+        MonoMeta::new(text)
+    }
+
+    fn status_text(text: impl Into<SharedString>) -> MonoCaption {
+        MonoCaption::new(text).font_size(FontSizes::SM)
+    }
 }
 
 impl Render for StatusBar {
@@ -162,11 +172,7 @@ impl Render for StatusBar {
                                         .bg(cx.theme().success)
                                         .flex_shrink_0(),
                                 )
-                                .child(
-                                    div()
-                                        .font_family("monospace")
-                                        .child(Text::caption(connection_name)),
-                                )
+                                .child(div().child(Self::metadata_text(connection_name)))
                             })
                             .when(!is_connected, |this| {
                                 this.child(
@@ -177,11 +183,7 @@ impl Render for StatusBar {
                                         .bg(cx.theme().muted_foreground)
                                         .flex_shrink_0(),
                                 )
-                                .child(
-                                    div()
-                                        .font_family("monospace")
-                                        .child(Text::caption("disconnected")),
-                                )
+                                .child(div().child(Self::metadata_text("disconnected")))
                             }),
                     )
                     // Running task info
@@ -192,15 +194,15 @@ impl Render for StatusBar {
                                 .flex()
                                 .items_center()
                                 .gap_1()
-                                .child(Text::caption("|"))
-                                .child(Text::caption(description))
+                                .child(Self::status_text("|"))
+                                .child(Self::status_text(description))
                                 .child(
-                                    div().font_family("monospace").child(
-                                        Text::caption(format!(
+                                    div().child(
+                                        Self::metadata_text(format!(
                                             "({})",
                                             Self::format_elapsed(task.elapsed_secs)
                                         ))
-                                        .primary(),
+                                        .color(cx.theme().primary),
                                     ),
                                 ),
                         )
@@ -211,8 +213,8 @@ impl Render for StatusBar {
                                 .flex()
                                 .items_center()
                                 .gap_1()
-                                .child(Text::caption("|"))
-                                .child(Text::caption(Self::format_completed_task(&task))),
+                                .child(Self::status_text("|"))
+                                .child(Self::status_text(Self::format_completed_task(&task))),
                         )
                     }),
             )
@@ -238,12 +240,46 @@ impl Render for StatusBar {
                                     .size(px(12.0))
                                     .primary(),
                             )
-                            .child(Text::caption(format!("{} running", running_count)))
+                            .child(Self::status_text(format!("{} running", running_count)))
                         })
                         .when(running_count == 0, |this| {
-                            this.child(Text::caption("Tasks"))
+                            this.child(Self::status_text("Tasks"))
                         }),
                 ),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::StatusBar;
+    use dbflux_components::tokens::FontSizes;
+    use dbflux_components::typography::AppFonts;
+
+    #[test]
+    fn status_bar_metadata_uses_small_mono_meta_role() {
+        let inspection = StatusBar::metadata_text("dbflux-postgres").inspect();
+
+        assert_eq!(inspection.family, Some(AppFonts::MONO));
+        assert_eq!(inspection.fallbacks, &[AppFonts::MONO_FALLBACK]);
+        assert_eq!(inspection.size_override, Some(FontSizes::SM));
+        assert_eq!(inspection.weight_override, None);
+        assert!(inspection.uses_muted_foreground_override);
+        assert!(!inspection.has_custom_color_override);
+    }
+
+    #[test]
+    fn status_bar_copy_keeps_mono_family_with_readable_small_size() {
+        let running = StatusBar::status_text("2 running").inspect();
+        let divider = StatusBar::status_text("|").inspect();
+
+        for inspection in [running, divider] {
+            assert_eq!(inspection.family, Some(AppFonts::MONO));
+            assert_eq!(inspection.fallbacks, &[AppFonts::MONO_FALLBACK]);
+            assert_eq!(inspection.size_override, Some(FontSizes::SM));
+            assert_eq!(inspection.weight_override, None);
+            assert!(inspection.uses_muted_foreground_override);
+            assert!(!inspection.has_custom_color_override);
+        }
     }
 }

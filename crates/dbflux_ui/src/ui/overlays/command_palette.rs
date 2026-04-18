@@ -1,8 +1,9 @@
 use crate::keymap::ContextId;
-use crate::ui::tokens::{FontSizes, Radii, Spacing};
+use crate::ui::tokens::{Radii, Spacing};
 use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
 use dbflux_components::helpers::text_color_for_selected;
-use dbflux_components::primitives::{Text, surface_panel};
+use dbflux_components::primitives::surface_panel;
+use dbflux_components::typography::{Body, KeyHint, MonoCaption, MonoLabel};
 use dbflux_core::{CollectionRef, TableRef};
 use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
@@ -258,23 +259,31 @@ struct FilteredItem {
 const VISIBLE_ITEMS: usize = 8;
 
 fn palette_item_name(
+    item: &PaletteItem,
     name: impl Into<SharedString>,
     is_selected: bool,
     theme: &gpui_component::theme::Theme,
-) -> Text {
-    Text::label_sm(name).color(if is_selected {
+) -> AnyElement {
+    let color = if is_selected {
         theme.primary_foreground
     } else {
         theme.foreground
-    })
+    };
+
+    match item {
+        PaletteItem::Resource(_) | PaletteItem::Script { .. } => {
+            MonoLabel::new(name).color(color).into_any_element()
+        }
+        _ => Body::new(name).color(color).into_any_element(),
+    }
 }
 
 fn palette_category_text(
     label: impl Into<SharedString>,
     is_selected: bool,
     theme: &gpui_component::theme::Theme,
-) -> Text {
-    Text::caption(label).color(if is_selected {
+) -> MonoCaption {
+    MonoCaption::new(label).color(if is_selected {
         theme.primary_foreground.opacity(0.7)
     } else {
         theme.muted_foreground
@@ -285,8 +294,8 @@ fn palette_qualifier_text(
     label: impl Into<SharedString>,
     is_selected: bool,
     theme: &gpui_component::theme::Theme,
-) -> Text {
-    Text::caption(label).color(if is_selected {
+) -> MonoCaption {
+    MonoCaption::new(label).color(if is_selected {
         theme.primary_foreground.opacity(0.6)
     } else {
         theme.muted_foreground
@@ -297,10 +306,8 @@ fn palette_shortcut_text(
     shortcut: impl Into<SharedString>,
     is_selected: bool,
     theme: &gpui_component::theme::Theme,
-) -> Text {
-    Text::caption(shortcut)
-        .font_size(FontSizes::XS)
-        .color(text_color_for_selected(is_selected, theme))
+) -> MonoCaption {
+    MonoCaption::new(shortcut).color(text_color_for_selected(is_selected, theme))
 }
 
 pub struct CommandPalette {
@@ -311,6 +318,60 @@ pub struct CommandPalette {
     scroll_offset: usize,
     input_state: Entity<InputState>,
     matcher: SkimMatcherV2,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PaletteCommand, palette_qualifier_text, palette_shortcut_text};
+    use crate::ui::theme;
+    use dbflux_components::tokens::FontSizes;
+    use dbflux_components::typography::AppFonts;
+    use gpui::TestAppContext;
+    use gpui_component::theme::Theme;
+
+    #[gpui::test]
+    fn action_shortcuts_use_mono_caption_instead_of_bold_key_hint(cx: &mut TestAppContext) {
+        cx.update(theme::init);
+
+        let theme = cx.update(|cx| Theme::global(cx).clone());
+
+        let shortcut = palette_shortcut_text("ctrl-k", false, &theme).inspect();
+        let selected_shortcut = palette_shortcut_text("enter", true, &theme).inspect();
+
+        for inspection in [shortcut, selected_shortcut] {
+            assert_eq!(inspection.family, Some(AppFonts::MONO));
+            assert_eq!(inspection.fallbacks, &[AppFonts::MONO_FALLBACK]);
+            assert_eq!(inspection.size_override, Some(FontSizes::XS));
+            assert_eq!(inspection.weight_override, None);
+            assert!(inspection.has_custom_color_override);
+            assert!(!inspection.uses_muted_foreground_override);
+        }
+    }
+
+    #[test]
+    fn palette_commands_still_preserve_explicit_shortcuts() {
+        let command = PaletteCommand::new("id", "Open", "Action").with_shortcut("ctrl-k");
+
+        assert_eq!(command.shortcut, Some("ctrl-k"));
+    }
+
+    #[gpui::test]
+    fn qualifiers_use_mono_caption_role(cx: &mut TestAppContext) {
+        cx.update(theme::init);
+
+        let theme = cx.update(|cx| Theme::global(cx).clone());
+
+        let qualifier = palette_qualifier_text("prod / analytics", false, &theme).inspect();
+        let selected = palette_qualifier_text("scripts/admin", true, &theme).inspect();
+
+        for inspection in [qualifier, selected] {
+            assert_eq!(inspection.family, Some(AppFonts::MONO));
+            assert_eq!(inspection.fallbacks, &[AppFonts::MONO_FALLBACK]);
+            assert_eq!(inspection.size_override, Some(FontSizes::XS));
+            assert_eq!(inspection.weight_override, None);
+            assert!(inspection.has_custom_color_override);
+        }
+    }
 }
 
 /// Event emitted when the user selects a palette item.
@@ -613,7 +674,6 @@ impl CommandPalette {
                     .px(Spacing::SM)
                     .py(Spacing::XS)
                     .rounded(Radii::SM)
-                    .font_family("monospace")
                     .when(is_selected, |d| d.bg(theme.primary_foreground.opacity(0.2)))
                     .when(!is_selected, |d| d.bg(theme.secondary))
                     .child(palette_shortcut_text(s, is_selected, theme))
@@ -665,7 +725,7 @@ impl CommandPalette {
                     .items_center()
                     .gap(Spacing::SM)
                     .child(palette_category_text(category, is_selected, theme))
-                    .child(palette_item_name(name, is_selected, theme)),
+                    .child(palette_item_name(item, name, is_selected, theme)),
             )
             .when_some(right_el, |d, el| d.child(el))
     }
@@ -777,7 +837,7 @@ impl Render for CommandPalette {
                                         .py(Spacing::LG)
                                         .flex()
                                         .justify_center()
-                                        .child(Text::muted("No matching items")),
+                                        .child(Body::new("No matching items").muted(cx)),
                                 )
                             }),
                     )
@@ -795,11 +855,11 @@ impl Render for CommandPalette {
                                     .flex()
                                     .items_center()
                                     .gap(Spacing::MD)
-                                    .child(Text::caption("↑↓/C-jk Navigate"))
-                                    .child(Text::caption("↵ Execute"))
-                                    .child(Text::caption("Esc Close")),
+                                    .child(KeyHint::new("↑↓/C-jk Navigate"))
+                                    .child(KeyHint::new("↵ Execute"))
+                                    .child(KeyHint::new("Esc Close")),
                             )
-                            .child(Text::caption(format!("{} items", self.filtered.len()))),
+                            .child(MonoCaption::new(format!("{} items", self.filtered.len()))),
                     ),
             )
             .into_any_element()

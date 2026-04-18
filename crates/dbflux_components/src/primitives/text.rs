@@ -1,5 +1,5 @@
 use gpui::prelude::*;
-use gpui::{div, font, App, FontFallbacks, FontWeight, Hsla, SharedString, Window};
+use gpui::{App, FontFallbacks, FontWeight, Hsla, SharedString, Window, div, font};
 use gpui_component::ActiveTheme;
 
 use crate::tokens::FontSizes;
@@ -7,6 +7,18 @@ use crate::typography::AppFonts;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum TextColorOverride {
+    Custom(Hsla),
+    Danger,
+    Warning,
+    Success,
+    Primary,
+    Link,
+    MutedForeground,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum TextColorSelection {
+    RoleDefault(TextDefaultColor),
     Custom(Hsla),
     Danger,
     Warning,
@@ -253,17 +265,27 @@ impl Text {
         self
     }
 
-    #[cfg(test)]
     pub(crate) fn role_contract(&self) -> TextRoleContract {
         self.variant.role_contract()
     }
 
-    #[cfg(test)]
     pub(crate) fn uses_role_default_color(&self) -> bool {
         self.color_override.is_none()
     }
 
-    #[cfg(test)]
+    pub(crate) fn color_selection(&self) -> TextColorSelection {
+        match self.color_override {
+            Some(TextColorOverride::Custom(color)) => TextColorSelection::Custom(color),
+            Some(TextColorOverride::Danger) => TextColorSelection::Danger,
+            Some(TextColorOverride::Warning) => TextColorSelection::Warning,
+            Some(TextColorOverride::Success) => TextColorSelection::Success,
+            Some(TextColorOverride::Primary) => TextColorSelection::Primary,
+            Some(TextColorOverride::Link) => TextColorSelection::Link,
+            Some(TextColorOverride::MutedForeground) => TextColorSelection::MutedForeground,
+            None => TextColorSelection::RoleDefault(self.variant.role_contract().color),
+        }
+    }
+
     pub(crate) fn uses_muted_foreground_override(&self) -> bool {
         matches!(
             self.color_override,
@@ -274,6 +296,18 @@ impl Text {
     #[cfg(test)]
     pub(crate) fn uses_danger_override(&self) -> bool {
         matches!(self.color_override, Some(TextColorOverride::Danger))
+    }
+
+    pub(crate) fn font_size_override(&self) -> Option<gpui::Pixels> {
+        self.size_override
+    }
+
+    pub(crate) fn font_weight_override(&self) -> Option<FontWeight> {
+        self.weight_override
+    }
+
+    pub(crate) fn has_custom_color_override(&self) -> bool {
+        matches!(self.color_override, Some(TextColorOverride::Custom(_)))
     }
 }
 

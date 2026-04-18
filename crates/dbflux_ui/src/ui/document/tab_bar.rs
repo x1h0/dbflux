@@ -7,6 +7,7 @@ use crate::ui::components::context_menu::MenuItem;
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{Radii, Spacing};
 use dbflux_components::primitives::{Icon, Text};
+use dbflux_components::typography::MonoMeta;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -237,6 +238,18 @@ impl Render for TabBar {
 }
 
 impl TabBar {
+    fn tab_title_text(
+        title: SharedString,
+        is_active: bool,
+        theme: &gpui_component::Theme,
+    ) -> MonoMeta {
+        MonoMeta::new(title).color(if is_active {
+            theme.foreground
+        } else {
+            theme.muted_foreground
+        })
+    }
+
     fn render_tab(
         &self,
         meta: DocumentMetaSnapshot,
@@ -339,11 +352,11 @@ impl TabBar {
                 cx.theme().muted_foreground
             }))
             // Title
-            .child(div().flex_1().truncate().child(if is_active {
-                Text::caption(title).color(cx.theme().foreground)
-            } else {
-                Text::caption(title)
-            }))
+            .child(div().flex_1().truncate().child(Self::tab_title_text(
+                title.into(),
+                is_active,
+                cx.theme(),
+            )))
             // Spinner or close button
             .child(self.render_tab_action(id, is_executing, cx))
     }
@@ -430,6 +443,11 @@ mod tests {
         TAB_MENU_CLOSE_RIGHT, TAB_MENU_SEPARATOR, TabBar, next_actionable_index,
         prev_actionable_index,
     };
+    use crate::ui::theme;
+    use dbflux_components::tokens::FontSizes;
+    use dbflux_components::typography::AppFonts;
+    use gpui::TestAppContext;
+    use gpui_component::theme::Theme;
 
     #[test]
     fn build_tab_menu_items_returns_correct_structure() {
@@ -505,5 +523,23 @@ mod tests {
     fn prev_actionable_stays_at_start() {
         let items = TabBar::build_tab_menu_items();
         assert_eq!(prev_actionable_index(0, &items), 0);
+    }
+
+    #[gpui::test]
+    fn tab_titles_use_mono_meta_role(cx: &mut TestAppContext) {
+        cx.update(theme::init);
+
+        let theme = cx.update(|cx| Theme::global(cx).clone());
+
+        let active = TabBar::tab_title_text("query.sql".into(), true, &theme).inspect();
+        let inactive = TabBar::tab_title_text("table/users".into(), false, &theme).inspect();
+
+        for inspection in [active, inactive] {
+            assert_eq!(inspection.family, Some(AppFonts::MONO));
+            assert_eq!(inspection.fallbacks, &[AppFonts::MONO_FALLBACK]);
+            assert_eq!(inspection.size_override, Some(FontSizes::SM));
+            assert_eq!(inspection.weight_override, None);
+            assert!(inspection.has_custom_color_override);
+        }
     }
 }
