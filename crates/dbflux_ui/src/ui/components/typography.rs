@@ -2,5 +2,6 @@
 
 pub use dbflux_components::typography::{
     AppButton, AppInput, AppPanel, AppSection, AppTab, Body, Caption, Code, FieldLabel, Headline,
-    HeadlineSize, KeyHint, RequiredMarker, SectionDivider, SidebarGroupLabel, SubSectionLabel,
+    HeadlineSize, KeyHint, MonoCaption, MonoLabel, MonoMeta, RequiredMarker, SectionDivider,
+    SidebarGroupLabel, SubSectionLabel,
 };

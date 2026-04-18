@@ -18,3 +18,4 @@ pub use surface::{
     surface_raised,
 };
 pub use text::{Text, TextVariant};
+pub(crate) use text::{TextColorSelection, TextDefaultColor};

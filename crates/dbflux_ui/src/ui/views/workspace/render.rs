@@ -2,6 +2,8 @@ use super::*;
 use crate::platform;
 use crate::ui::tokens::FontSizes;
 use dbflux_components::primitives::{Icon, Text, overlay_bg};
+use dbflux_components::typography::{Body, MonoCaption};
+use gpui::FontWeight;
 
 impl Workspace {
     fn render_panel_header(
@@ -52,15 +54,14 @@ impl Workspace {
             )
     }
 
-    fn panel_header_title(title: &'static str, is_focused: bool, color: Hsla) -> Text {
-        Text::label_sm(title)
-            .font_size(FontSizes::XS)
-            .font_weight(if is_focused {
-                FontWeight::BOLD
-            } else {
-                FontWeight::MEDIUM
-            })
-            .color(color)
+    fn panel_header_title(title: &'static str, is_focused: bool, color: Hsla) -> MonoCaption {
+        let weight = if is_focused {
+            FontWeight::BOLD
+        } else {
+            FontWeight::MEDIUM
+        };
+
+        MonoCaption::new(title).font_weight(weight).color(color)
     }
 
     /// Renders the active document from TabManager (v0.3).
@@ -238,7 +239,7 @@ impl Render for Workspace {
                                         .size(px(64.0))
                                         .color(muted_fg.opacity(0.5)),
                                 )
-                                .child(Text::muted("No documents open"))
+                                .child(Body::new("No documents open").muted(cx))
                                 .child(Text::dim_secondary("Press Ctrl+N to create a new query")),
                         ),
                 )
@@ -888,5 +889,31 @@ impl Render for Workspace {
                     )
                 },
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Workspace;
+    use dbflux_components::tokens::FontSizes;
+    use dbflux_components::typography::AppFonts;
+    use gpui::FontWeight;
+
+    #[test]
+    fn panel_headers_keep_mono_family_and_focus_weight_difference() {
+        let focused =
+            Workspace::panel_header_title("Background Tasks", true, gpui::blue()).inspect();
+        let unfocused =
+            Workspace::panel_header_title("Background Tasks", false, gpui::red()).inspect();
+
+        for inspection in [focused, unfocused] {
+            assert_eq!(inspection.family, Some(AppFonts::MONO));
+            assert_eq!(inspection.fallbacks, &[AppFonts::MONO_FALLBACK]);
+            assert_eq!(inspection.size_override, Some(FontSizes::XS));
+            assert!(inspection.has_custom_color_override);
+        }
+
+        assert_eq!(focused.weight_override, Some(FontWeight::BOLD));
+        assert_eq!(unfocused.weight_override, Some(FontWeight::MEDIUM));
     }
 }

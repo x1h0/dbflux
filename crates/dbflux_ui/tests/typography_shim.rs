@@ -22,6 +22,18 @@ fn ui_typography_re_exports_shared_typography_types() {
         TypeId::of::<shared_typography::KeyHint>()
     );
     assert_eq!(
+        TypeId::of::<ui_typography::MonoLabel>(),
+        TypeId::of::<shared_typography::MonoLabel>()
+    );
+    assert_eq!(
+        TypeId::of::<ui_typography::MonoCaption>(),
+        TypeId::of::<shared_typography::MonoCaption>()
+    );
+    assert_eq!(
+        TypeId::of::<ui_typography::MonoMeta>(),
+        TypeId::of::<shared_typography::MonoMeta>()
+    );
+    assert_eq!(
         TypeId::of::<ui_typography::FieldLabel>(),
         TypeId::of::<shared_typography::FieldLabel>()
     );

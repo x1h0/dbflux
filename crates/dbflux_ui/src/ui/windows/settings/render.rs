@@ -1,9 +1,10 @@
 use crate::platform;
 use crate::ui::components::tree_nav::{self, FlatRow};
 use crate::ui::theme::ghost_border_color;
-use crate::ui::tokens::{FontSizes, Heights};
+use crate::ui::tokens::Heights;
 use dbflux_components::controls::Button;
-use dbflux_components::primitives::{Icon, Text};
+use dbflux_components::primitives::Icon;
+use dbflux_components::typography::{Body, FieldLabel, MonoCaption, SubSectionLabel};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -17,11 +18,15 @@ use super::{
 const INDENT_PX: f32 = 16.0;
 
 impl SettingsCoordinator {
-    fn settings_nav_row_label(label: SharedString, is_active: bool, text_color: Hsla) -> Text {
+    fn settings_nav_row_label(
+        label: SharedString,
+        is_active: bool,
+        text_color: Hsla,
+    ) -> AnyElement {
         if is_active {
-            Text::label_sm(label).color(text_color)
+            FieldLabel::new(label).color(text_color).into_any_element()
         } else {
-            Text::body(label).font_size(FontSizes::SM).color(text_color)
+            Body::new(label).color(text_color).into_any_element()
         }
     }
 
@@ -129,11 +134,7 @@ impl SettingsCoordinator {
                 let _ = this.sidebar_tree.activate();
                 cx.notify();
             }))
-            .child(
-                Text::heading(row.label.to_uppercase())
-                    .font_size(FontSizes::XS)
-                    .muted_foreground(),
-            )
+            .child(SubSectionLabel::new(row.label.clone()))
             .into_any_element()
     }
 
@@ -280,7 +281,7 @@ impl Render for SettingsCoordinator {
                             });
                             true
                         })
-                        .child(div().text_sm().child(format!(
+                        .child(Body::new(format!(
                             "You have unsaved changes. Discard them and switch to {}?",
                             section_name
                         ))),
@@ -348,12 +349,7 @@ impl SettingsCoordinator {
             .border_t_1()
             .border_color(ghost_border_color())
             .bg(cx.theme().background)
-            .child(
-                div()
-                    .text_xs()
-                    .font_family("monospace")
-                    .child(Text::muted(format!("v{} | UTF-8", VERSION)).font_size(FontSizes::XS)),
-            )
+            .child(div().child(MonoCaption::new(format!("v{} | UTF-8", VERSION))))
             .child(
                 div().flex().items_center().gap_2().child(
                     Button::new("settings-close", "Close")

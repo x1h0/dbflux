@@ -1,16 +1,20 @@
-use super::render_tree::{TreeRenderParams, render_tree_item};
+use super::render_tree::{render_tree_item, TreeRenderParams};
 use super::*;
 use dbflux_components::primitives::Text;
 use dbflux_components::tokens::SyntaxColors;
+use dbflux_components::typography::{Body, MonoCaption};
+use gpui::FontWeight;
 
-fn sidebar_tab_text(label: &'static str, active: bool, focused: bool, color: Hsla) -> Text {
-    if active && focused {
-        Text::title(label).font_size(FontSizes::XS).color(color)
+fn sidebar_tab_text(label: &'static str, active: bool, focused: bool, color: Hsla) -> MonoCaption {
+    let weight = if active && focused {
+        FontWeight::BOLD
     } else if active {
-        Text::heading(label).font_size(FontSizes::XS).color(color)
+        FontWeight::SEMIBOLD
     } else {
-        Text::label_sm(label).font_size(FontSizes::XS).color(color)
-    }
+        FontWeight::MEDIUM
+    };
+
+    MonoCaption::new(label).font_weight(weight).color(color)
 }
 
 impl Sidebar {
@@ -199,8 +203,8 @@ impl Sidebar {
                         .justify_center()
                         .gap(Spacing::SM)
                         .px(Spacing::MD)
-                        .child(Text::muted("No connections yet"))
-                        .child(Text::caption("Use + to add a new connection")),
+                        .child(Body::new("No connections yet").muted(cx))
+                        .child(Body::new("Use + to add a new connection").muted(cx)),
                 )
             })
     }
@@ -301,12 +305,39 @@ impl Sidebar {
                         .justify_center()
                         .gap(Spacing::SM)
                         .px(Spacing::MD)
-                        .child(Text::muted("No scripts yet"))
-                        .child(Text::caption(
-                            "Use + to create a new script or import an existing file",
-                        )),
+                        .child(Body::new("No scripts yet").muted(cx))
+                        .child(
+                            Body::new("Use + to create a new script or import an existing file")
+                                .muted(cx),
+                        ),
                 )
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sidebar_tab_text;
+    use dbflux_components::tokens::FontSizes;
+    use dbflux_components::typography::AppFonts;
+    use gpui::FontWeight;
+
+    #[test]
+    fn sidebar_tabs_keep_mono_family_and_stateful_weight_hierarchy() {
+        let inactive = sidebar_tab_text("CONNECTIONS", false, false, gpui::blue()).inspect();
+        let active = sidebar_tab_text("SCRIPTS", true, false, gpui::red()).inspect();
+        let focused = sidebar_tab_text("SCRIPTS", true, true, gpui::green()).inspect();
+
+        for inspection in [inactive, active, focused] {
+            assert_eq!(inspection.family, Some(AppFonts::MONO));
+            assert_eq!(inspection.fallbacks, &[AppFonts::MONO_FALLBACK]);
+            assert_eq!(inspection.size_override, Some(FontSizes::XS));
+            assert!(inspection.has_custom_color_override);
+        }
+
+        assert_eq!(inactive.weight_override, Some(FontWeight::MEDIUM));
+        assert_eq!(active.weight_override, Some(FontWeight::SEMIBOLD));
+        assert_eq!(focused.weight_override, Some(FontWeight::BOLD));
     }
 }
 

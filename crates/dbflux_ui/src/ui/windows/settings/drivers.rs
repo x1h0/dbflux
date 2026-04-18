@@ -7,11 +7,11 @@ use super::section_trait::SectionFocusEvent;
 use crate::ui::components::form_renderer;
 use crate::ui::components::toast::ToastExt;
 use crate::ui::icons::AppIcon;
-use crate::ui::theme::AppFonts;
 use crate::ui::tokens::FontSizes;
 use dbflux_components::controls::InputEvent;
 use dbflux_components::controls::{Button, Checkbox, Input};
 use dbflux_components::primitives::{Icon, Label, Text};
+use dbflux_components::typography::{MonoLabel, MonoMeta};
 use dbflux_core::{
     DriverCapabilities, FormFieldKind, FormValues, GlobalOverrides, RefreshPolicySetting,
 };
@@ -82,6 +82,14 @@ fn bool_override_index(value: Option<bool>) -> usize {
         Some(true) => 1,
         Some(false) => 2,
     }
+}
+
+fn driver_entry_name_text(text: impl Into<SharedString>) -> MonoLabel {
+    MonoLabel::new(text)
+}
+
+fn driver_entry_key_text(text: impl Into<SharedString>) -> MonoMeta {
+    MonoMeta::new(text)
 }
 
 impl DriversSection {
@@ -700,7 +708,6 @@ impl DriversSection {
             .min_h_0()
             .border_r_1()
             .border_color(theme.border)
-            .font_family(AppFonts::CODE)
             .flex()
             .flex_col()
             .overflow_hidden()
@@ -759,8 +766,10 @@ impl DriversSection {
                                             .flex()
                                             .flex_col()
                                             .gap_1()
-                                            .child(Label::new(entry.metadata.display_name.clone()))
-                                            .child(Text::caption(entry.driver_key.clone())),
+                                            .child(driver_entry_name_text(
+                                                entry.metadata.display_name.clone(),
+                                            ))
+                                            .child(driver_entry_key_text(entry.driver_key.clone())),
                                     ),
                             )
                     })),
@@ -1354,5 +1363,37 @@ impl DriversSection {
                             }))
                     }),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{driver_entry_key_text, driver_entry_name_text};
+    use dbflux_components::tokens::FontSizes;
+    use dbflux_components::typography::{AppFonts, MonoColorSelection, MonoDefaultColor};
+
+    #[test]
+    fn driver_list_preserves_prominent_names_and_deemphasized_keys() {
+        let name = driver_entry_name_text("PostgreSQL").inspect();
+        let key = driver_entry_key_text("postgres").inspect();
+
+        assert_eq!(name.family, Some(AppFonts::MONO));
+        assert_eq!(name.fallbacks, &[AppFonts::MONO_FALLBACK]);
+        assert_eq!(name.size_override, Some(FontSizes::BASE));
+        assert_eq!(name.weight_override, None);
+        assert_eq!(
+            name.color_selection,
+            MonoColorSelection::RoleDefault(MonoDefaultColor::Foreground)
+        );
+        assert!(name.uses_role_default_color);
+        assert!(!name.has_custom_color_override);
+
+        assert_eq!(key.family, Some(AppFonts::MONO));
+        assert_eq!(key.fallbacks, &[AppFonts::MONO_FALLBACK]);
+        assert_eq!(key.size_override, Some(FontSizes::SM));
+        assert_eq!(key.weight_override, None);
+        assert_eq!(key.color_selection, MonoColorSelection::MutedForeground);
+        assert!(key.uses_muted_foreground_override);
+        assert!(!key.has_custom_color_override);
     }
 }
