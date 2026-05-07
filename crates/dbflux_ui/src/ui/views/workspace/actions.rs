@@ -150,6 +150,22 @@ impl Workspace {
                         crate::ui::windows::settings::SettingsEvent::OpenScript { path } => {
                             this.open_script_from_path(path.clone(), cx);
                         }
+                        crate::ui::windows::settings::SettingsEvent::OpenLoginModal {
+                            provider_name,
+                            profile_name,
+                            url,
+                        } => {
+                            // Find a window context to open the modal with.
+                            // The login modal lives in the workspace window; we
+                            // need to call open_manual which requires `window`.
+                            // Store the pending args and consume in next render.
+                            this.pending_login_modal_open = Some((
+                                provider_name.clone(),
+                                profile_name.clone(),
+                                url.clone(),
+                            ));
+                            cx.notify();
+                        }
                     });
                 },
             )

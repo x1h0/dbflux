@@ -43,6 +43,13 @@ impl Render for Workspace {
             self.focus_handle.focus(window);
         }
 
+        // Open the login modal on behalf of a settings-window auth-profile login.
+        if let Some((provider_name, profile_name, url)) = self.pending_login_modal_open.take() {
+            self.login_modal.update(cx, |modal, cx| {
+                modal.open_manual(provider_name, profile_name, url, window, cx);
+            });
+        }
+
         let sidebar_dock = self.sidebar_dock.clone();
         let status_bar = self.status_bar.clone();
         let tasks_panel = self.tasks_panel.clone();

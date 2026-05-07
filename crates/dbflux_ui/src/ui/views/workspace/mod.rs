@@ -270,6 +270,12 @@ pub struct Workspace {
     /// Background task handle for periodic audit purge.
     /// Kept to ensure the task stays alive for the workspace lifetime.
     _background_purge_task: Option<Task<()>>,
+
+    /// Pending login modal open request from a settings window auth-profile
+    /// login flow. Consumed in render() to call `login_modal.open_manual`.
+    ///
+    /// Fields: `(provider_name, profile_name, url)`.
+    pending_login_modal_open: Option<(String, String, Option<String>)>,
 }
 
 #[cfg(feature = "mcp")]
@@ -694,6 +700,7 @@ impl Workspace {
             #[cfg(feature = "mcp")]
             active_governance_panel: None,
             _background_purge_task: None,
+            pending_login_modal_open: None,
         };
 
         {
