@@ -362,11 +362,11 @@ impl Connection for CloudWatchConnection {
         if filter.most_recent
             && filter.filter_pattern.is_none()
             && let Some(stream_names) = filter.log_stream_names.as_ref()
-            && stream_names.len() == 1
+            && let [single_stream] = stream_names.as_slice()
         {
             return self.fetch_recent_stream_events(
                 request.collection.name.as_str(),
-                stream_names[0].as_str(),
+                single_stream.as_str(),
                 &filter,
                 limit,
                 offset,
@@ -1081,7 +1081,7 @@ fn i64_field(
     value.as_i64().map(Some).ok_or_else(|| {
         DbError::query_failed(format!(
             "CloudWatch collection filter field '{}' must be an integer",
-            keys[0]
+            keys.first().copied().unwrap_or("?")
         ))
     })
 }
@@ -1097,7 +1097,7 @@ fn string_array_field(
     let array = value.as_array().ok_or_else(|| {
         DbError::query_failed(format!(
             "CloudWatch collection filter field '{}' must be an array of strings",
-            keys[0]
+            keys.first().copied().unwrap_or("?")
         ))
     })?;
 
@@ -1106,7 +1106,7 @@ fn string_array_field(
         let item = item.as_str().ok_or_else(|| {
             DbError::query_failed(format!(
                 "CloudWatch collection filter field '{}' must contain only strings",
-                keys[0]
+                keys.first().copied().unwrap_or("?")
             ))
         })?;
 
@@ -1130,7 +1130,7 @@ fn bool_field(
     value.as_bool().ok_or_else(|| {
         DbError::query_failed(format!(
             "CloudWatch collection filter field '{}' must be a boolean",
-            keys[0]
+            keys.first().copied().unwrap_or("?")
         ))
     })
 }
