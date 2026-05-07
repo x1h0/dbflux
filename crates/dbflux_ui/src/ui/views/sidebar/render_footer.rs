@@ -64,6 +64,9 @@ impl Sidebar {
                                                 crate::ui::windows::settings::SettingsEvent::OpenScript { path } => {
                                                     cx.emit(SidebarEvent::OpenScript { path: path.clone() });
                                                 }
+                                                // OpenLoginModal is handled by the workspace window
+                                                // subscription only; the sidebar does not route URLs.
+                                                crate::ui::windows::settings::SettingsEvent::OpenLoginModal { .. } => {}
                                             }
                                         });
                                     },

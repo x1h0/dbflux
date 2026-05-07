@@ -13,14 +13,16 @@ pub use auth::{
     write_app_control_token,
 };
 pub use auth_provider_client::{
-    IpcServiceLaunchConfig, RpcAuthProvider, negotiate_auth_provider_version,
+    IpcServiceLaunchConfig, RpcAuthProvider, build_fetch_dependencies, hash_dependencies,
+    negotiate_auth_provider_version,
 };
 pub use auth_provider_protocol::{
     AuthProviderHelloRequest, AuthProviderHelloResponse, AuthProviderHelloResponseV1_1,
-    AuthProviderRequestBody, AuthProviderRequestEnvelope, AuthProviderResponseBody,
-    AuthProviderResponseEnvelope, AuthProviderRpcError, AuthProviderRpcErrorCode, AuthSessionDto,
-    AuthSessionStateDto, LoginRequest, LoginUrlProgress, ResolveCredentialsRequest,
-    ResolvedCredentialsDto, ValidateSessionRequest, parse_auth_profile,
+    AuthProviderHelloResponseV1_2, AuthProviderRequestBody, AuthProviderRequestEnvelope,
+    AuthProviderResponseBody, AuthProviderResponseEnvelope, AuthProviderRpcError,
+    AuthProviderRpcErrorCode, AuthSessionDto, AuthSessionStateDto, FetchFieldOptionsError,
+    FetchFieldOptionsRequest, FetchFieldOptionsResponse, LoginRequest, LoginUrlProgress,
+    ResolveCredentialsRequest, ResolvedCredentialsDto, ValidateSessionRequest, parse_auth_profile,
 };
 pub use driver_protocol::{
     DriverCapability, DriverHelloRequest, DriverHelloResponse, DriverRequestBody,
