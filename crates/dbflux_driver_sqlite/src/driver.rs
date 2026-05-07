@@ -351,9 +351,16 @@ impl DbDriver for SqliteDriver {
         if is_memory {
             if let Some(id) = connection_id.as_ref() {
                 let pool_key = format!("{}:{}", profile.id, id);
-                if let Some(conn) = POOL.lock().unwrap().get(&pool_key) {
+                let pool = POOL
+                    .lock()
+                    .map_err(|_| DbError::connection_failed("connection pool mutex poisoned"))?;
+                if let Some(conn) = pool.get(&pool_key) {
                     let conn = conn.clone();
-                    let interrupt_handle = conn.lock().unwrap().get_interrupt_handle();
+                    drop(pool);
+                    let interrupt_handle = conn
+                        .lock()
+                        .map_err(|_| DbError::connection_failed("connection mutex poisoned"))?
+                        .get_interrupt_handle();
                     drop(pool_key);
                     return Ok(Box::new(SqliteConnection {
                         conn,
@@ -376,7 +383,9 @@ impl DbDriver for SqliteDriver {
             if let Some(id) = &connection_id {
                 let pool_key = format!("{}:{}", profile.id, id);
                 let pooled_conn: Arc<Mutex<RusqliteConnection>> = Arc::new(Mutex::new(conn));
-                POOL.lock().unwrap().insert(pool_key, pooled_conn.clone());
+                POOL.lock()
+                    .map_err(|_| DbError::connection_failed("connection pool mutex poisoned"))?
+                    .insert(pool_key, pooled_conn.clone());
                 return Ok(Box::new(SqliteConnection {
                     conn: pooled_conn,
                     interrupt_handle,
@@ -755,6 +764,10 @@ impl Connection for SqliteConnection {
         Ok(())
     }
 
+    // Invariant: trait returns Arc<dyn QueryCancelHandle> with no Result — cannot propagate.
+    // Mutex poison only occurs if another thread panicked while holding this lock, which is
+    // already a fatal application state.
+    #[allow(clippy::expect_used)]
     fn cancel_handle(&self) -> Arc<dyn QueryCancelHandle> {
         Arc::new(SqliteCancelHandle {
             cancelled: self.cancelled.clone(),
@@ -1816,6 +1829,8 @@ fn sqlite_generate_create_table(table: &TableInfo) -> String {
     let pk_columns: Vec<&ColumnInfo> = cols.iter().filter(|c| c.is_primary_key).collect();
 
     // SQLite: INTEGER PRIMARY KEY has special rowid semantics when inline
+    // Invariant: [0] is guarded by `len() == 1 &&` short-circuit in the same expression.
+    #[allow(clippy::indexing_slicing)]
     let single_integer_pk =
         pk_columns.len() == 1 && pk_columns[0].type_name.eq_ignore_ascii_case("INTEGER");
 
