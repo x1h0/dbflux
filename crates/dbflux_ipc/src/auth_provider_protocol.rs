@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 
+use dbflux_core::SelectOption;
 use dbflux_core::auth::{
     AuthFormDef, AuthProfile, AuthProviderCapabilities, AuthSession, AuthSessionState,
     ResolvedCredentials,
 };
 use dbflux_core::chrono;
-use dbflux_core::SelectOption;
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -272,10 +272,16 @@ pub enum AuthProviderResponseBody {
     HelloV1_1(AuthProviderHelloResponseV1_1),
     /// Hello response for protocol v1.2, carrying `secret_dependency_opt_in`.
     HelloV1_2(AuthProviderHelloResponseV1_2),
-    SessionState { state: AuthSessionStateDto },
+    SessionState {
+        state: AuthSessionStateDto,
+    },
     LoginUrlProgress(LoginUrlProgress),
-    LoginResult { session: AuthSessionDto },
-    Credentials { credentials: ResolvedCredentialsDto },
+    LoginResult {
+        session: AuthSessionDto,
+    },
+    Credentials {
+        credentials: ResolvedCredentialsDto,
+    },
     /// Successful response to `FetchDynamicOptions` (protocol v1.2+).
     DynamicOptions(FetchFieldOptionsResponse),
     Error(AuthProviderRpcError),
@@ -539,8 +545,8 @@ mod tests {
     /// non-JSON data (e.g. `Arc<SdkConfig>`) are expected to produce `None`.
     #[test]
     fn auth_session_json_data_survives_dto_round_trip() {
-        use std::sync::Arc;
         use dbflux_core::auth::AuthSession;
+        use std::sync::Arc;
 
         let original_data = serde_json::json!({"access_token": "tok-xyz", "expires_in": 3600});
 

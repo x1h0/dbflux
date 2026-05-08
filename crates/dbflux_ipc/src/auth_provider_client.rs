@@ -6,11 +6,11 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use dbflux_core::DbError;
+use dbflux_core::FormFieldKind;
 use dbflux_core::auth::{
     AuthFormDef, AuthProfile, AuthProviderCapabilities, AuthSession, AuthSessionState,
     DynAuthProvider, ResolvedCredentials, UrlCallback,
 };
-use dbflux_core::FormFieldKind;
 use interprocess::local_socket::{Stream as IpcStream, prelude::*};
 
 use crate::auth::AUTH_PROVIDER_RPC_AUTH_TOKEN_ENV;
@@ -264,21 +264,20 @@ impl RpcAuthProvider {
             FetchFieldOptionsError::Permanent(format!("could not serialize profile: {error}"))
         })?;
 
-        let request_body =
-            AuthProviderRequestBody::FetchDynamicOptions(FetchFieldOptionsRequest {
-                profile_json,
-                field_id: field_id.to_string(),
-                dependencies,
-                session,
-            });
+        let request_body = AuthProviderRequestBody::FetchDynamicOptions(FetchFieldOptionsRequest {
+            profile_json,
+            field_id: field_id.to_string(),
+            dependencies,
+            session,
+        });
 
         let responses = self
             .send_request(request_body)
             .map_err(|error| FetchFieldOptionsError::Transient(error.to_string()))?;
 
-        let last = responses.last().ok_or_else(|| {
-            FetchFieldOptionsError::SessionExpired
-        })?;
+        let last = responses
+            .last()
+            .ok_or(FetchFieldOptionsError::SessionExpired)?;
 
         match &last.body {
             AuthProviderResponseBody::DynamicOptions(response) => Ok(response.clone()),
@@ -792,10 +791,7 @@ mod tests {
                             id: "environment".to_string(),
                             label: "Environment".to_string(),
                             kind: FormFieldKind::DynamicSelect {
-                                depends_on: vec![
-                                    "region".to_string(),
-                                    "api_key".to_string(),
-                                ],
+                                depends_on: vec!["region".to_string(), "api_key".to_string()],
                                 refresh: RefreshTrigger::OnDependencyChange,
                                 requires_session: false,
                                 allow_freeform: false,

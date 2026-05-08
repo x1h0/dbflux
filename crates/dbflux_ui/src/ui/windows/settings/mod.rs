@@ -330,7 +330,9 @@ impl EventEmitter<DismissEvent> for SettingsCoordinator {}
 
 #[derive(Clone, Debug)]
 pub enum SettingsEvent {
-    OpenScript { path: std::path::PathBuf },
+    OpenScript {
+        path: std::path::PathBuf,
+    },
     /// An auth-provider login flow produced a URL to open in the login modal.
     ///
     /// Fields: `(provider_name, profile_name, url)`.

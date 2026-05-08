@@ -159,11 +159,8 @@ impl Workspace {
                             // The login modal lives in the workspace window; we
                             // need to call open_manual which requires `window`.
                             // Store the pending args and consume in next render.
-                            this.pending_login_modal_open = Some((
-                                provider_name.clone(),
-                                profile_name.clone(),
-                                url.clone(),
-                            ));
+                            this.pending_login_modal_open =
+                                Some((provider_name.clone(), profile_name.clone(), url.clone()));
                             cx.notify();
                         }
                     });

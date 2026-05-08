@@ -140,23 +140,23 @@ impl SettingsCoordinator {
 
                 // Forward login-URL events from the auth profiles section up to
                 // the workspace, which owns the login modal.
-                let login_sub = cx.subscribe(
-                    &section,
-                    |this, _, event: &AuthProfilesSectionEvent, cx| match event {
-                        AuthProfilesSectionEvent::OpenLoginModal {
-                            provider_name,
-                            profile_name,
-                            url,
-                        } => {
-                            cx.emit(SettingsEvent::OpenLoginModal {
-                                provider_name: provider_name.clone(),
-                                profile_name: profile_name.clone(),
-                                url: url.clone(),
-                            });
-                            let _ = this;
+                let login_sub =
+                    cx.subscribe(&section, |this, _, event: &AuthProfilesSectionEvent, cx| {
+                        match event {
+                            AuthProfilesSectionEvent::OpenLoginModal {
+                                provider_name,
+                                profile_name,
+                                url,
+                            } => {
+                                cx.emit(SettingsEvent::OpenLoginModal {
+                                    provider_name: provider_name.clone(),
+                                    profile_name: profile_name.clone(),
+                                    url: url.clone(),
+                                });
+                                let _ = this;
+                            }
                         }
-                    },
-                );
+                    });
 
                 (
                     ActiveSettingsSection::AuthProfiles(section),

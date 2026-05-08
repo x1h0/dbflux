@@ -543,7 +543,10 @@ impl AuthProfilesSection {
 
                             this.options_cache.insert(
                                 (provider_id.clone(), field_id.clone(), dep_hash),
-                                CachedOptions { options, expires_at },
+                                CachedOptions {
+                                    options,
+                                    expires_at,
+                                },
                             );
 
                             // Sync cached options into the dropdown entity.
@@ -573,7 +576,8 @@ impl AuthProfilesSection {
                         Err(error) => {
                             log::debug!(
                                 "fetch_dynamic_options for field '{}': {}",
-                                field_id, error
+                                field_id,
+                                error
                             );
                         }
                     }
@@ -610,9 +614,8 @@ impl AuthProfilesSection {
                 field.placeholder.clone()
             };
             let dropdown_id = format!("auth-dynamic-{}", field_id);
-            let dropdown = cx.new(|_cx| {
-                Dropdown::new(SharedString::from(dropdown_id)).placeholder(placeholder)
-            });
+            let dropdown = cx
+                .new(|_cx| Dropdown::new(SharedString::from(dropdown_id)).placeholder(placeholder));
             self.dynamic_dropdowns.insert(field_id.clone(), dropdown);
         }
 
@@ -624,9 +627,9 @@ impl AuthProfilesSection {
                 FormFieldKind::DynamicSelect { depends_on, .. } => depends_on
                     .iter()
                     .filter_map(|dep_id| {
-                        self.form_inputs.get(dep_id).map(|input| {
-                            (dep_id.clone(), input.read(cx).value().to_string())
-                        })
+                        self.form_inputs
+                            .get(dep_id)
+                            .map(|input| (dep_id.clone(), input.read(cx).value().to_string()))
                     })
                     .collect(),
                 _ => HashMap::new(),
@@ -648,9 +651,7 @@ impl AuthProfilesSection {
                     .map(|opt| DropdownItem::with_value(opt.label.clone(), opt.value.clone()))
                     .collect();
 
-                let selected_index = items
-                    .iter()
-                    .position(|item| item.value == current_value);
+                let selected_index = items.iter().position(|item| item.value == current_value);
 
                 dropdown.update(cx, |d, cx| {
                     d.set_items(items, cx);
@@ -1526,7 +1527,8 @@ impl AuthProfilesSection {
             .enumerate()
             .map(|(idx, field)| {
                 if matches!(field.kind, FormFieldKind::DynamicSelect { .. }) {
-                    self.render_dynamic_dropdown_row(field, cx).into_any_element()
+                    self.render_dynamic_dropdown_row(field, cx)
+                        .into_any_element()
                 } else if let Some(input) = self.form_inputs.get(&field.id) {
                     let form_field = AuthFormField::DynamicField(idx);
                     let is_focused = self.auth_form_field == form_field
