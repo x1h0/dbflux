@@ -45,7 +45,9 @@ pub enum FormFieldKind {
     Number,
     FilePath,
     Checkbox,
-    Select { options: Vec<SelectOption> },
+    Select {
+        options: Vec<SelectOption>,
+    },
     /// A dropdown whose options are fetched at runtime via the provider's
     /// `fetch_dynamic_options` method. Older clients that do not recognize this
     /// variant will fail loudly at parse time (no silent fallback).
@@ -643,7 +645,10 @@ mod tests {
         // A future variant unknown to this binary must NOT silently deserialize.
         let json = r#"{"QuantumField": {"some": "data"}}"#;
         let result = serde_json::from_str::<FormFieldKind>(json);
-        assert!(result.is_err(), "expected deserialization to fail for unknown variant");
+        assert!(
+            result.is_err(),
+            "expected deserialization to fail for unknown variant"
+        );
     }
 
     #[test]

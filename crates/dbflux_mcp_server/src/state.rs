@@ -1016,7 +1016,8 @@ mod tests {
             }),
             resolve_credentials: FakeAuthRpcResult::Ok(credentials),
             fetch_dynamic_options: FakeAuthRpcResult::Err(dbflux_ipc::AuthProviderRpcError {
-                code: dbflux_ipc::auth_provider_protocol::AuthProviderRpcErrorCode::UnsupportedMethod,
+                code:
+                    dbflux_ipc::auth_provider_protocol::AuthProviderRpcErrorCode::UnsupportedMethod,
                 message: "fetch_dynamic_options not configured".to_string(),
                 retriable: false,
             }),
@@ -1133,7 +1134,8 @@ mod tests {
                 retriable: false,
             }),
             fetch_dynamic_options: FakeAuthRpcResult::Err(dbflux_ipc::AuthProviderRpcError {
-                code: dbflux_ipc::auth_provider_protocol::AuthProviderRpcErrorCode::UnsupportedMethod,
+                code:
+                    dbflux_ipc::auth_provider_protocol::AuthProviderRpcErrorCode::UnsupportedMethod,
                 message: "fetch_dynamic_options not configured".to_string(),
                 retriable: false,
             }),
@@ -1200,7 +1202,8 @@ mod tests {
                 retriable: false,
             }),
             fetch_dynamic_options: FakeAuthRpcResult::Err(dbflux_ipc::AuthProviderRpcError {
-                code: dbflux_ipc::auth_provider_protocol::AuthProviderRpcErrorCode::UnsupportedMethod,
+                code:
+                    dbflux_ipc::auth_provider_protocol::AuthProviderRpcErrorCode::UnsupportedMethod,
                 message: "fetch_dynamic_options not configured".to_string(),
                 retriable: false,
             }),
@@ -1278,7 +1281,8 @@ mod tests {
                 retriable: false,
             }),
             fetch_dynamic_options: FakeAuthRpcResult::Err(dbflux_ipc::AuthProviderRpcError {
-                code: dbflux_ipc::auth_provider_protocol::AuthProviderRpcErrorCode::UnsupportedMethod,
+                code:
+                    dbflux_ipc::auth_provider_protocol::AuthProviderRpcErrorCode::UnsupportedMethod,
                 message: "fetch_dynamic_options not configured".to_string(),
                 retriable: false,
             }),
@@ -1322,7 +1326,8 @@ mod tests {
                 retriable: false,
             }),
             fetch_dynamic_options: FakeAuthRpcResult::Err(dbflux_ipc::AuthProviderRpcError {
-                code: dbflux_ipc::auth_provider_protocol::AuthProviderRpcErrorCode::UnsupportedMethod,
+                code:
+                    dbflux_ipc::auth_provider_protocol::AuthProviderRpcErrorCode::UnsupportedMethod,
                 message: "fetch_dynamic_options not configured".to_string(),
                 retriable: false,
             }),

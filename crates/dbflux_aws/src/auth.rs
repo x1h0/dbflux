@@ -996,32 +996,30 @@ impl dbflux_core::auth::DynAuthProvider for AwsSsoAuthProvider {
 
         std::thread::spawn(move || {
             let result = match field_id.as_str() {
-                "sso_account_id" => {
-                    crate::accounts::list_sso_accounts_blocking(
-                        &profile_name,
-                        &region,
-                        &sso_start_url,
-                    )
-                    .map(|accounts| {
-                        let options = accounts
-                            .iter()
-                            .map(|account| {
-                                let label = if account.account_name.trim().is_empty() {
-                                    account.account_id.clone()
-                                } else {
-                                    format!("{} ({})", account.account_name, account.account_id)
-                                };
-                                SelectOption::new(account.account_id.clone(), label)
-                            })
-                            .collect();
+                "sso_account_id" => crate::accounts::list_sso_accounts_blocking(
+                    &profile_name,
+                    &region,
+                    &sso_start_url,
+                )
+                .map(|accounts| {
+                    let options = accounts
+                        .iter()
+                        .map(|account| {
+                            let label = if account.account_name.trim().is_empty() {
+                                account.account_id.clone()
+                            } else {
+                                format!("{} ({})", account.account_name, account.account_id)
+                            };
+                            SelectOption::new(account.account_id.clone(), label)
+                        })
+                        .collect();
 
-                        FetchOptionsResponse {
-                            options,
-                            cache_hint_seconds: Some(300),
-                        }
-                    })
-                    .map_err(|err| map_fetch_error(err.to_string()))
-                }
+                    FetchOptionsResponse {
+                        options,
+                        cache_hint_seconds: Some(300),
+                    }
+                })
+                .map_err(|err| map_fetch_error(err.to_string())),
                 "sso_role_name" => {
                     let account_id = account_id_for_roles.unwrap_or_default();
                     crate::accounts::list_sso_account_roles_blocking(
