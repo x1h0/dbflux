@@ -1,3 +1,4 @@
+use crate::ui::tokens::Radii;
 use super::*;
 use dbflux_components::primitives::Text;
 use gpui::prelude::FluentBuilder;
@@ -171,7 +172,7 @@ impl ConnectionManagerWindow {
                 let theme = cx.theme();
                 this.child(
                     div()
-                        .rounded(px(4.0))
+                        .rounded(Radii::SM)
                         .border_1()
                         .border_color(theme.warning.opacity(0.3))
                         .bg(theme.warning.opacity(0.1))

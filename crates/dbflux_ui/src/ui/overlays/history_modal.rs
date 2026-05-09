@@ -461,7 +461,8 @@ impl HistoryModal {
             }))
             .child(
                 surface_modal_container(cx)
-                    .w(px(620.0))
+                    .w_full()
+                    .max_w(px(620.0))
                     .max_h(px(520.0))
                     .shadow_lg()
                     .overflow_hidden()
@@ -803,7 +804,8 @@ impl HistoryModal {
             }))
             .child(
                 surface_modal_container(cx)
-                    .w(px(420.0))
+                    .w_full()
+                    .max_w(px(420.0))
                     .shadow_lg()
                     .overflow_hidden()
                     .on_mouse_down(MouseButton::Left, |_, _, cx| {

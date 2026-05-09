@@ -1,3 +1,4 @@
+use crate::ui::tokens::Radii;
 use super::SettingsSection;
 use super::SettingsSectionId;
 use super::section_trait::SectionFocusEvent;
@@ -654,7 +655,7 @@ impl AuditSection {
             .gap_2()
             .px_2()
             .py_1()
-            .rounded(px(4.0))
+            .rounded(Radii::SM)
             .border_1()
             .border_color(gpui::transparent_black())
             .child(div().size_2().rounded_full().bg(if is_enabled {
@@ -690,7 +691,7 @@ impl AuditSection {
             .gap_2()
             .px_2()
             .py_1()
-            .rounded(px(4.0))
+            .rounded(Radii::SM)
             .border_1()
             .border_color(if is_focused {
                 primary
@@ -750,7 +751,7 @@ impl AuditSection {
             .gap_2()
             .px_2()
             .py_1()
-            .rounded(px(4.0))
+            .rounded(Radii::SM)
             .border_1()
             .border_color(if is_focused {
                 primary
@@ -803,7 +804,7 @@ impl AuditSection {
             .child(
                 div()
                     .w(px(200.0))
-                    .rounded(px(4.0))
+                    .rounded(Radii::SM)
                     .border_1()
                     .border_color(if is_focused {
                         primary

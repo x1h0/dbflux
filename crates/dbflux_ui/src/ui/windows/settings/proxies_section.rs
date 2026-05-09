@@ -1,3 +1,4 @@
+use crate::ui::tokens::Radii;
 use super::SettingsSection;
 use super::SettingsSectionId;
 use super::form_section::FormSection;
@@ -15,6 +16,7 @@ use gpui::prelude::*;
 use gpui::*;
 use gpui_component::checkbox::Checkbox;
 use gpui_component::dialog::Dialog;
+use crate::ui::icons::AppIcon;
 use gpui_component::{ActiveTheme, Icon, IconName, Sizable};
 use uuid::Uuid;
 
@@ -215,9 +217,9 @@ impl ProxiesSection {
         theme: &gpui_component::theme::Theme,
     ) -> Stateful<Div> {
         let icon_name = if show {
-            IconName::EyeOff
+            AppIcon::EyeOff
         } else {
-            IconName::Eye
+            AppIcon::Eye
         };
 
         div()
@@ -227,7 +229,7 @@ impl ProxiesSection {
             .flex()
             .items_center()
             .justify_center()
-            .rounded(px(4.0))
+            .rounded(Radii::SM)
             .cursor_pointer()
             .hover({
                 let secondary = theme.secondary;
@@ -307,7 +309,7 @@ impl ProxiesSection {
                         .gap_2()
                         .px_2()
                         .py_1()
-                        .rounded(px(4.0))
+                        .rounded(Radii::SM)
                         .cursor_pointer()
                         .border_1()
                         .border_color(if is_focused {
@@ -364,7 +366,7 @@ impl ProxiesSection {
                             .gap_2()
                             .px_2()
                             .py_1()
-                            .rounded(px(4.0))
+                            .rounded(Radii::SM)
                             .cursor_pointer()
                             .border_1()
                             .border_color(if is_none_focused {
@@ -392,7 +394,7 @@ impl ProxiesSection {
                             .gap_2()
                             .px_2()
                             .py_1()
-                            .rounded(px(4.0))
+                            .rounded(Radii::SM)
                             .cursor_pointer()
                             .border_1()
                             .border_color(if is_basic_focused {
@@ -437,7 +439,7 @@ impl ProxiesSection {
                     .pb(px(2.0))
                     .px_2()
                     .py_1()
-                    .rounded(px(4.0))
+                    .rounded(Radii::SM)
                     .border_1()
                     .border_color(if is_save_secret_focused {
                         primary
@@ -522,7 +524,7 @@ impl ProxiesSection {
             .child(
                 div().p_2().border_b_1().border_color(theme.border).child(
                     div()
-                        .rounded(px(4.0))
+                        .rounded(Radii::SM)
                         .border_1()
                         .border_color(if is_new_button_focused {
                             theme.primary
@@ -531,7 +533,7 @@ impl ProxiesSection {
                         })
                         .child(
                             Button::new("new-proxy", "New Proxy")
-                                .icon(Icon::new(IconName::Plus))
+                                .icon(Icon::new(AppIcon::Plus))
                                 .small()
                                 .w_full()
                                 .on_click(cx.listener(|this, _, window, cx| {
@@ -570,7 +572,7 @@ impl ProxiesSection {
                             .id(SharedString::from(format!("proxy-item-{}", proxy_id)))
                             .px_3()
                             .py_2()
-                            .rounded(px(4.0))
+                            .rounded(Radii::SM)
                             .bg(theme.list_even)
                             .cursor_pointer()
                             .border_1()
@@ -714,7 +716,7 @@ impl ProxiesSection {
                         .gap_2()
                         .px_2()
                         .py_1()
-                        .rounded(px(4.0))
+                        .rounded(Radii::SM)
                         .border_1()
                         .border_color(if is_enabled_focused {
                             primary

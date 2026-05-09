@@ -852,7 +852,8 @@ impl Render for CommandPalette {
             .child(
                 surface_modal_container(cx)
                     .id("command-palette-container")
-                    .w(px(500.0))
+                    .w_full()
+                    .max_w(px(500.0))
                     .max_h(px(400.0))
                     .shadow_lg()
                     .flex()

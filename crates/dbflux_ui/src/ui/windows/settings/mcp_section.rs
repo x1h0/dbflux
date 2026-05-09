@@ -1,3 +1,4 @@
+use crate::ui::tokens::Radii;
 use super::section_trait::SectionFocusEvent;
 use super::{SettingsSection, SettingsSectionId, layout};
 use crate::app::{AppStateChanged, AppStateEntity, McpRuntimeEventRaised};
@@ -770,7 +771,7 @@ impl McpSection {
                         div()
                             .id(SharedString::from(format!("client-{}", client.id)))
                             .p_2()
-                            .rounded(px(4.0))
+                            .rounded(Radii::SM)
                             .border_1()
                             .border_color(if is_selected {
                                 theme.primary
@@ -894,7 +895,7 @@ impl McpSection {
                         div()
                             .id(SharedString::from(format!("role-{}", role.id)))
                             .p_2()
-                            .rounded(px(4.0))
+                            .rounded(Radii::SM)
                             .border_1()
                             .border_color(if is_selected {
                                 theme.primary
@@ -1033,7 +1034,7 @@ impl McpSection {
                         div()
                             .id(SharedString::from(format!("policy-{}", policy.id)))
                             .p_2()
-                            .rounded(px(4.0))
+                            .rounded(Radii::SM)
                             .border_1()
                             .border_color(if is_selected {
                                 theme.primary

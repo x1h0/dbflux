@@ -12,7 +12,7 @@ use gpui_component::ActiveTheme;
 use gpui_component::Sizable;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::checkbox::Checkbox;
-use gpui_component::{Icon, IconName};
+use gpui_component::Icon;
 use std::collections::HashMap;
 
 use super::layout;
@@ -910,7 +910,7 @@ impl ServicesSection {
             .child(
                 div().p_2().border_b_1().border_color(theme.border).child(
                     div()
-                        .rounded(px(4.0))
+                        .rounded(Radii::SM)
                         .border_1()
                         .border_color(if is_new_button_focused {
                             theme.primary
@@ -919,7 +919,7 @@ impl ServicesSection {
                         })
                         .child(
                             Button::new("new-service")
-                                .icon(Icon::new(IconName::Plus))
+                                .icon(Icon::new(AppIcon::Plus))
                                 .label(new_service_button_label())
                                 .small()
                                 .w_full()
@@ -961,7 +961,7 @@ impl ServicesSection {
                             .id(SharedString::from(format!("svc-item-{}", idx)))
                             .px_3()
                             .py_2()
-                            .rounded(px(4.0))
+                            .rounded(Radii::SM)
                             .bg(theme.list_even)
                             .cursor_pointer()
                             .border_1()
@@ -1145,7 +1145,7 @@ impl ServicesSection {
             .child(Label::new(label.to_string()))
             .child(
                 div()
-                    .rounded(px(4.0))
+                    .rounded(Radii::SM)
                     .border_1()
                     .border_color(if is_focused {
                         primary
@@ -1181,7 +1181,7 @@ impl ServicesSection {
             .gap_2()
             .px_2()
             .py_1()
-            .rounded(px(4.0))
+            .rounded(Radii::SM)
             .border_1()
             .border_color(if is_focused {
                 primary
@@ -1252,7 +1252,7 @@ impl ServicesSection {
                             .gap_2()
                             .px_2()
                             .py_1()
-                            .rounded(px(4.0))
+                            .rounded(Radii::SM)
                             .cursor_pointer()
                             .border_1()
                             .border_color(if is_focused {
@@ -1315,7 +1315,7 @@ impl ServicesSection {
                     .child(
                         div()
                             .flex_1()
-                            .rounded(px(4.0))
+                            .rounded(Radii::SM)
                             .border_1()
                             .border_color(if input_focused {
                                 primary
@@ -1341,7 +1341,7 @@ impl ServicesSection {
                     )
                     .child(
                         div()
-                            .rounded(px(4.0))
+                            .rounded(Radii::SM)
                             .border_1()
                             .border_color(if remove_focused {
                                 primary
@@ -1362,7 +1362,7 @@ impl ServicesSection {
             .child(
                 div().flex().justify_center().child(
                     div()
-                        .rounded(px(4.0))
+                        .rounded(Radii::SM)
                         .border_1()
                         .border_color(if is_add_focused {
                             primary
@@ -1434,7 +1434,7 @@ impl ServicesSection {
                             .child(
                                 div()
                                     .flex_1()
-                                    .rounded(px(4.0))
+                                    .rounded(Radii::SM)
                                     .border_1()
                                     .border_color(if key_focused {
                                         primary
@@ -1462,7 +1462,7 @@ impl ServicesSection {
                             .child(
                                 div()
                                     .flex_1()
-                                    .rounded(px(4.0))
+                                    .rounded(Radii::SM)
                                     .border_1()
                                     .border_color(if value_focused {
                                         primary
@@ -1488,7 +1488,7 @@ impl ServicesSection {
                             )
                             .child(
                                 div()
-                                    .rounded(px(4.0))
+                                    .rounded(Radii::SM)
                                     .border_1()
                                     .border_color(if remove_focused {
                                         primary
@@ -1510,7 +1510,7 @@ impl ServicesSection {
             .child(
                 div().flex().justify_center().child(
                     div()
-                        .rounded(px(4.0))
+                        .rounded(Radii::SM)
                         .border_1()
                         .border_color(if is_add_focused {
                             primary

@@ -1,3 +1,4 @@
+use crate::ui::tokens::Radii;
 use super::drivers_section::{
     DriverEditorField, DriverSettingsEntry, DriversFocus, DriversSection,
 };
@@ -724,7 +725,7 @@ impl DriversSection {
                             )))
                             .px_3()
                             .py_2()
-                            .rounded(px(4.0))
+                            .rounded(Radii::SM)
                             .bg(theme.list_even)
                             .cursor_pointer()
                             .border_1()
@@ -818,7 +819,7 @@ impl DriversSection {
                         div()
                             .px_2()
                             .py_1()
-                            .rounded(px(4.0))
+                            .rounded(Radii::SM)
                             .bg(theme.secondary)
                             .child(MonoCaption::new(entry.metadata.category.display_name())),
                     )
@@ -826,7 +827,7 @@ impl DriversSection {
                         div()
                             .px_2()
                             .py_1()
-                            .rounded(px(4.0))
+                            .rounded(Radii::SM)
                             .bg(theme.secondary)
                             .child(MonoCaption::new(
                                 entry.metadata.query_language.display_name().to_string(),
@@ -890,7 +891,7 @@ impl DriversSection {
                             div()
                                 .px_2()
                                 .py_1()
-                                .rounded(px(4.0))
+                                .rounded(Radii::SM)
                                 .border_1()
                                 .border_color(theme.border)
                                 .bg(if supported {
@@ -949,7 +950,7 @@ impl DriversSection {
                             .gap_3()
                             .child(
                                 div()
-                                    .rounded(px(4.0))
+                                    .rounded(Radii::SM)
                                     .border_1()
                                     .border_color(
                                         if editor_focused
@@ -994,7 +995,7 @@ impl DriversSection {
                             .child(
                                 div()
                                     .min_w(px(160.0))
-                                    .rounded(px(4.0))
+                                    .rounded(Radii::SM)
                                     .border_1()
                                     .border_color(
                                         if editor_focused
@@ -1037,7 +1038,7 @@ impl DriversSection {
                             .gap_3()
                             .child(
                                 div()
-                                    .rounded(px(4.0))
+                                    .rounded(Radii::SM)
                                     .border_1()
                                     .border_color(
                                         if editor_focused
@@ -1086,7 +1087,7 @@ impl DriversSection {
                             .child(
                                 div()
                                     .w(px(160.0))
-                                    .rounded(px(4.0))
+                                    .rounded(Radii::SM)
                                     .border_1()
                                     .border_color(
                                         if editor_focused
@@ -1139,7 +1140,7 @@ impl DriversSection {
                             .child(
                                 div()
                                     .w(px(160.0))
-                                    .rounded(px(4.0))
+                                    .rounded(Radii::SM)
                                     .border_1()
                                     .border_color(
                                         if editor_focused
@@ -1179,7 +1180,7 @@ impl DriversSection {
                             .child(
                                 div()
                                     .w(px(160.0))
-                                    .rounded(px(4.0))
+                                    .rounded(Radii::SM)
                                     .border_1()
                                     .border_color(
                                         if editor_focused
@@ -1219,7 +1220,7 @@ impl DriversSection {
                             .child(
                                 div()
                                     .w(px(160.0))
-                                    .rounded(px(4.0))
+                                    .rounded(Radii::SM)
                                     .border_1()
                                     .border_color(
                                         if editor_focused
@@ -1303,7 +1304,7 @@ impl DriversSection {
                                             div()
                                                 .px_2()
                                                 .py_1()
-                                                .rounded(px(4.0))
+                                                .rounded(Radii::SM)
                                                 .opacity(if enabled { 1.0 } else { 0.6 })
                                                 .child(
                                                     Checkbox::new(SharedString::from(format!(

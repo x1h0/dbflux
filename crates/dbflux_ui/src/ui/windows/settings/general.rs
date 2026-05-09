@@ -1,3 +1,4 @@
+use crate::ui::tokens::Radii;
 use crate::keymap::{KeyChord, Modifiers, key_chord_from_gpui};
 use crate::ui::components::dropdown::Dropdown;
 use crate::ui::components::toast::ToastExt;
@@ -606,7 +607,7 @@ impl GeneralSection {
             .gap_2()
             .px_2()
             .py_1()
-            .rounded(px(4.0))
+            .rounded(Radii::SM)
             .border_1()
             .border_color(if is_focused {
                 primary
@@ -651,7 +652,7 @@ impl GeneralSection {
             .justify_between()
             .px_2()
             .py_1()
-            .rounded(px(4.0))
+            .rounded(Radii::SM)
             .border_1()
             .border_color(if is_focused {
                 primary
@@ -692,7 +693,7 @@ impl GeneralSection {
             .child(FieldLabel::new(label.to_string()))
             .child(
                 div()
-                    .rounded(px(4.0))
+                    .rounded(Radii::SM)
                     .border_1()
                     .border_color(if is_focused {
                         primary

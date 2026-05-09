@@ -1,3 +1,4 @@
+use crate::ui::tokens::Radii;
 use crate::app::AppStateChanged;
 use crate::keymap::{Modifiers, key_chord_from_gpui};
 use crate::ui::components::toast::ToastExt;
@@ -1188,7 +1189,7 @@ impl HooksSection {
             .child(
                 div().p_2().border_b_1().border_color(theme.border).child(
                     div()
-                        .rounded(px(4.0))
+                        .rounded(Radii::SM)
                         .border_1()
                         .border_color(if is_new_button_focused {
                             theme.primary
@@ -1230,7 +1231,7 @@ impl HooksSection {
                             .id(SharedString::from(format!("hook-item-{}", hook_id)))
                             .px_3()
                             .py_2()
-                            .rounded(px(4.0))
+                            .rounded(Radii::SM)
                             .bg(theme.list_even)
                             .cursor_pointer()
                             .border_1()
