@@ -1,3 +1,4 @@
+use crate::ui::tokens::Radii;
 use crate::app::{AppStateChanged, AppStateEntity, McpRuntimeEventRaised};
 use dbflux_components::controls::Button;
 use dbflux_components::primitives::Text;
@@ -202,7 +203,7 @@ impl Render for McpApprovalsView {
                                 div()
                                     .id(SharedString::from(format!("pending-{}", entry.id)))
                                     .p_2()
-                                    .rounded(px(4.0))
+                                    .rounded(Radii::SM)
                                     .border_1()
                                     .border_color(if is_selected {
                                         theme.primary

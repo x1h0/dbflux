@@ -1,11 +1,12 @@
+use crate::ui::tokens::Radii;
 use crate::keymap::{ContextId, KeyChord, default_keymap};
 use dbflux_components::controls::Input;
 use dbflux_components::primitives::Icon as FluxIcon;
 use dbflux_components::typography::{Body, FieldLabel, KeyHint, MonoCaption};
 use gpui::prelude::*;
 use gpui::*;
+use crate::ui::icons::AppIcon;
 use gpui_component::ActiveTheme;
-use gpui_component::IconName;
 
 use super::keybindings_section::{KeybindingsListItem, KeybindingsSection, KeybindingsSelection};
 
@@ -115,7 +116,7 @@ impl KeybindingsSection {
                         .items_center()
                         .gap_2()
                         .child(
-                            FluxIcon::new(IconName::Search)
+                            FluxIcon::new(AppIcon::Search)
                                 .size(px(16.0))
                                 .color(muted_foreground),
                         )
@@ -160,7 +161,7 @@ impl KeybindingsSection {
                                 .px_3()
                                 .py_2()
                                 .mt_1()
-                                .rounded(px(4.0))
+                                .rounded(Radii::SM)
                                 .cursor_pointer()
                                 .bg(if is_selected {
                                     secondary
@@ -188,9 +189,9 @@ impl KeybindingsSection {
                                         .justify_center()
                                         .child(
                                             FluxIcon::new(if is_expanded {
-                                                IconName::ChevronDown
+                                                AppIcon::ChevronDown
                                             } else {
-                                                IconName::ChevronRight
+                                                AppIcon::ChevronRight
                                             })
                                             .size(px(16.0))
                                             .color(muted_foreground),
@@ -296,7 +297,7 @@ impl KeybindingsSection {
                     div()
                         .px_2()
                         .py(px(2.0))
-                        .rounded(px(4.0))
+                        .rounded(Radii::SM)
                         .bg(secondary)
                         .child(MonoCaption::new("inherited")),
                 )
@@ -347,7 +348,7 @@ impl KeybindingsSection {
         div()
             .px_2()
             .py(px(2.0))
-            .rounded(px(4.0))
+            .rounded(Radii::SM)
             .bg(secondary)
             .border_1()
             .border_color(muted_foreground.opacity(0.3))

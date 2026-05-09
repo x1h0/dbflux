@@ -3033,7 +3033,7 @@ impl AuditDocument {
                             div()
                                 .bg(theme.secondary)
                                 .p_2()
-                                .rounded(px(4.0))
+                                .rounded(Radii::SM)
                                 .child(Text::code(Self::pretty_json(&value))),
                         ),
                 )
@@ -3137,7 +3137,7 @@ impl AuditDocument {
                         .gap_1p5()
                         .child(Label::new("Details"))
                         .child(
-                            div().bg(theme.secondary).p_2().rounded(px(4.0)).child(
+                            div().bg(theme.secondary).p_2().rounded(Radii::SM).child(
                                 ReadonlyTextView::new(&details_input)
                                     .w_full()
                                     .h(Self::event_text_height(details_rows)),

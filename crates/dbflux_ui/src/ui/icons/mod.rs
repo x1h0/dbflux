@@ -444,3 +444,9 @@ impl From<AppIcon> for IconSource {
         IconSource::Svg(icon.path().into())
     }
 }
+
+impl From<AppIcon> for gpui_component::Icon {
+    fn from(icon: AppIcon) -> Self {
+        gpui_component::Icon::default().path(icon.path())
+    }
+}

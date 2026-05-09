@@ -1,7 +1,7 @@
 use crate::platform;
 use crate::ui::components::tree_nav::{self, FlatRow};
 use crate::ui::theme::ghost_border_color;
-use crate::ui::tokens::Heights;
+use crate::ui::tokens::{Heights, Radii};
 use dbflux_components::controls::Button;
 use dbflux_components::primitives::Icon;
 use dbflux_components::typography::{Body, FieldLabel, SubSectionLabel};
@@ -185,7 +185,7 @@ impl SettingsCoordinator {
             .px_2()
             .flex()
             .items_center()
-            .rounded(px(4.0))
+            .rounded(Radii::SM)
             .cursor_pointer()
             .border_1()
             .border_color(if is_cursor {

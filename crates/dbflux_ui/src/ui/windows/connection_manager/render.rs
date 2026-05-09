@@ -1,3 +1,4 @@
+use crate::ui::tokens::Radii;
 use crate::keymap::ContextId;
 use crate::platform;
 use crate::ui::icons::AppIcon;
@@ -70,7 +71,7 @@ impl ConnectionManagerWindow {
                     .child(
                         div()
                             .w(px(170.0))
-                            .rounded(px(4.0))
+                            .rounded(Radii::SM)
                             .border_2()
                             .when(selector_focused, |d| d.border_color(ring_color))
                             .when(!selector_focused, |d| {
@@ -92,7 +93,7 @@ impl ConnectionManagerWindow {
                     .child(
                         div()
                             .flex_1()
-                            .rounded(px(4.0))
+                            .rounded(Radii::SM)
                             .border_2()
                             .when(password_focused, |d| d.border_color(ring_color))
                             .when(!password_focused, |d| {
@@ -110,7 +111,7 @@ impl ConnectionManagerWindow {
                     .when(password_source_is_literal, |d| {
                         d.child(
                             div()
-                                .rounded(px(4.0))
+                                .rounded(Radii::SM)
                                 .border_2()
                                 .when(toggle_focused, |dd| dd.border_color(ring_color))
                                 .when(!toggle_focused, |dd| {
@@ -137,7 +138,7 @@ impl ConnectionManagerWindow {
                                 .flex()
                                 .items_center()
                                 .gap_2()
-                                .rounded(px(4.0))
+                                .rounded(Radii::SM)
                                 .border_2()
                                 .when(checkbox_focused, |dd| dd.border_color(ring_color))
                                 .when(!checkbox_focused, |dd| {
@@ -301,7 +302,7 @@ impl ConnectionManagerWindow {
                     .when(!validation_errors.is_empty(), |d| {
                         d.child(
                             div().child(
-                                div().p_2().rounded(px(4.0)).bg(danger_bg).child(
+                                div().p_2().rounded(Radii::SM).bg(danger_bg).child(
                                     div().flex().flex_col().gap_1().children(
                                         validation_errors
                                             .iter()
@@ -344,7 +345,7 @@ impl ConnectionManagerWindow {
                         d.child(
                             div()
                                 .p_2()
-                                .rounded(px(4.0))
+                                .rounded(Radii::SM)
                                 .bg(bg)
                                 .child(Text::body(message).color(text_color)),
                         )
@@ -357,7 +358,7 @@ impl ConnectionManagerWindow {
                             .gap_2()
                             .child(
                                 div()
-                                    .rounded(px(4.0))
+                                    .rounded(Radii::SM)
                                     .border_2()
                                     .when(test_focused, |d| d.border_color(ring_color))
                                     .when(!test_focused, |d| {
@@ -376,7 +377,7 @@ impl ConnectionManagerWindow {
                             )
                             .child(
                                 div()
-                                    .rounded(px(4.0))
+                                    .rounded(Radii::SM)
                                     .border_2()
                                     .when(save_focused, |d| d.border_color(ring_color))
                                     .when(!save_focused, |d| {
@@ -480,7 +481,7 @@ impl ConnectionManagerWindow {
                                 .child(
                                     div()
                                         .w(px(170.0))
-                                        .rounded(px(4.0))
+                                        .rounded(Radii::SM)
                                         .border_2()
                                         .when(selector_focused, |d| d.border_color(ring_color))
                                         .when(!selector_focused, |d| {
@@ -504,7 +505,7 @@ impl ConnectionManagerWindow {
                                 .child(
                                     div()
                                         .flex_1()
-                                        .rounded(px(4.0))
+                                        .rounded(Radii::SM)
                                         .border_2()
                                         .when(input_focused, |d| d.border_color(ring_color))
                                         .when(!input_focused, |d| {
@@ -532,7 +533,7 @@ impl ConnectionManagerWindow {
                 let fallback_input_focus = input_state.clone();
 
                 div()
-                    .rounded(px(4.0))
+                    .rounded(Radii::SM)
                     .border_2()
                     .when(focused, |d| d.border_color(ring_color))
                     .when(!focused, |d| d.border_color(gpui::transparent_black()))
@@ -607,7 +608,7 @@ impl ConnectionManagerWindow {
                             .child(
                                 div()
                                     .flex_1()
-                                    .rounded(px(4.0))
+                                    .rounded(Radii::SM)
                                     .border_2()
                                     .when(focused, |d| d.border_color(ring_color))
                                     .when(!focused, |d| d.border_color(gpui::transparent_black()))
@@ -624,7 +625,7 @@ impl ConnectionManagerWindow {
                             )
                             .child(
                                 div()
-                                    .rounded(px(4.0))
+                                    .rounded(Radii::SM)
                                     .border_2()
                                     .when(browse_focused, |d| d.border_color(ring_color))
                                     .when(!browse_focused, |d| {
@@ -656,7 +657,7 @@ impl ConnectionManagerWindow {
 
                 let checkbox_id = gpui::SharedString::from(field_id.clone());
                 div()
-                    .rounded(px(4.0))
+                    .rounded(Radii::SM)
                     .border_2()
                     .when(focused, |d| d.border_color(ring_color))
                     .when(!focused, |d| d.border_color(gpui::transparent_black()))
@@ -898,7 +899,7 @@ impl ConnectionManagerWindow {
                     .child(
                         div()
                             .w(px(170.0))
-                            .rounded(px(4.0))
+                            .rounded(Radii::SM)
                             .border_2()
                             .when(selector_focused, |d| d.border_color(ring_color))
                             .when(!selector_focused, |d| {
@@ -922,7 +923,7 @@ impl ConnectionManagerWindow {
                     .child(
                         div()
                             .flex_1()
-                            .rounded(px(4.0))
+                            .rounded(Radii::SM)
                             .border_2()
                             .when(input_focused, |d| d.border_color(ring_color))
                             .when(!input_focused, |d| {
@@ -943,7 +944,7 @@ impl ConnectionManagerWindow {
                         d.child(
                             div()
                                 .w(px(110.0))
-                                .rounded(px(4.0))
+                                .rounded(Radii::SM)
                                 .border_2()
                                 .when(port_focused, |dd| dd.border_color(ring_color))
                                 .when(!port_focused, |dd| {
@@ -981,7 +982,7 @@ impl ConnectionManagerWindow {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         div()
-            .rounded(px(4.0))
+            .rounded(Radii::SM)
             .border_2()
             .when(focused, |d| d.border_color(ring_color))
             .when(!focused, |d| d.border_color(gpui::transparent_black()))
@@ -1020,7 +1021,7 @@ impl ConnectionManagerWindow {
             .child(
                 div()
                     .w(px(200.0))
-                    .rounded(px(4.0))
+                    .rounded(Radii::SM)
                     .border_2()
                     .when(focused, |d| d.border_color(ring_color))
                     .when(!focused, |d| d.border_color(gpui::transparent_black()))
@@ -1052,7 +1053,7 @@ impl ConnectionManagerWindow {
             .flex()
             .items_center()
             .justify_center()
-            .rounded(px(4.0))
+            .rounded(Radii::SM)
             .cursor_pointer()
             .hover(move |d| d.bg(secondary))
             .child(

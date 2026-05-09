@@ -1,3 +1,4 @@
+use crate::ui::tokens::Radii;
 use super::SettingsSection;
 use super::SettingsSectionId;
 use super::form_section::{FormSection, create_blur_subscription};
@@ -17,7 +18,8 @@ use dbflux_core::{
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::dialog::Dialog;
-use gpui_component::{ActiveTheme, Icon, IconName};
+use crate::ui::icons::AppIcon;
+use gpui_component::{ActiveTheme, Icon};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -1391,7 +1393,7 @@ impl AuthProfilesSection {
                     .items_start()
                     .gap_2()
                     .child(
-                        FluxIcon::new(IconName::Info)
+                        FluxIcon::new(AppIcon::Info)
                             .size(px(16.0))
                             .color(theme.primary),
                     )
@@ -1518,7 +1520,7 @@ impl AuthProfilesSection {
                     .child(Label::new("Profiles"))
                     .child(
                         Button::new("new-auth-profile", "New Auth Profile")
-                            .icon(Icon::new(IconName::Plus))
+                            .icon(Icon::new(AppIcon::Plus))
                             .small()
                             .w_full()
                             .on_click(cx.listener(|this, _, window, cx| {
@@ -1552,7 +1554,7 @@ impl AuthProfilesSection {
                         div()
                             .px_3()
                             .py_2()
-                            .rounded(px(4.0))
+                            .rounded(Radii::SM)
                             .bg(theme.list_even)
                             .cursor_pointer()
                             .border_1()

@@ -747,7 +747,8 @@ impl Render for NewKeyModal {
                 )
                 .child(
                     div()
-                        .w(px(200.0))
+                        .flex_1()
+                        .min_w(px(120.0))
                         .flex()
                         .flex_col()
                         .gap(Spacing::XS)

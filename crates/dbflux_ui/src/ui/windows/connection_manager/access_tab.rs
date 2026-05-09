@@ -1,3 +1,4 @@
+use crate::ui::tokens::Radii;
 use crate::ui::components::dropdown::DropdownItem;
 use crate::ui::windows::ssh_shared::{self, SshAuthSelection};
 use dbflux_components::controls::{Button, Input};
@@ -6,6 +7,7 @@ use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::checkbox::Checkbox;
+use crate::ui::icons::AppIcon;
 use gpui_component::{Icon, IconName};
 
 use super::{AccessTabMode, ActiveTab, ConnectionManagerWindow, EditState, FormFocus, TestStatus};
@@ -491,7 +493,7 @@ impl ConnectionManagerWindow {
                     .when(has_selection, |d| {
                         d.child(
                             div()
-                                .rounded(px(4.0))
+                                .rounded(Radii::SM)
                                 .border_2()
                                 .when(proxy_clear_focused, |dd| dd.border_color(ring_color))
                                 .when(!proxy_clear_focused, |dd| {
@@ -537,7 +539,7 @@ impl ConnectionManagerWindow {
                     .child(
                         div()
                             .mt_1()
-                            .rounded(px(4.0))
+                            .rounded(Radii::SM)
                             .border_2()
                             .when(edit_focused, |d| d.border_color(ring_color))
                             .when(!edit_focused, |d| d.border_color(gpui::transparent_black()))
@@ -577,7 +579,7 @@ impl ConnectionManagerWindow {
             .flex()
             .items_center()
             .gap_2()
-            .rounded(px(4.0))
+            .rounded(Radii::SM)
             .border_2()
             .when(ssh_enabled_focused, |d| d.border_color(ring_color))
             .when(!ssh_enabled_focused, |d| {
@@ -636,7 +638,7 @@ impl ConnectionManagerWindow {
                             .when(selected_tunnel_name.is_some(), |d| {
                                 d.child(
                                     div()
-                                        .rounded(px(4.0))
+                                        .rounded(Radii::SM)
                                         .border_2()
                                         .when(tunnel_clear_focused, |dd| {
                                             dd.border_color(ring_color)
@@ -701,7 +703,7 @@ impl ConnectionManagerWindow {
                         .child(
                             div()
                                 .mt_1()
-                                .rounded(px(4.0))
+                                .rounded(Radii::SM)
                                 .border_2()
                                 .when(edit_focused, |d| d.border_color(ring_color))
                                 .when(!edit_focused, |d| d.border_color(gpui::transparent_black()))
@@ -799,7 +801,7 @@ impl ConnectionManagerWindow {
 
             let test_ssh_focused = show_focus && focus == FormFocus::TestSsh;
             let test_button = div()
-                .rounded(px(4.0))
+                .rounded(Radii::SM)
                 .border_2()
                 .when(test_ssh_focused, |d| d.border_color(ring_color))
                 .when(!test_ssh_focused, |d| {
@@ -840,7 +842,7 @@ impl ConnectionManagerWindow {
                 let save_tunnel_focused = show_focus && focus == FormFocus::SaveAsTunnel;
                 Some(
                     div()
-                        .rounded(px(4.0))
+                        .rounded(Radii::SM)
                         .border_2()
                         .when(save_tunnel_focused, |d| d.border_color(ring_color))
                         .when(!save_tunnel_focused, |d| {
@@ -848,7 +850,7 @@ impl ConnectionManagerWindow {
                         })
                         .child(
                             Button::new("save-ssh-tunnel", "Save as tunnel")
-                                .icon(Icon::new(IconName::Plus))
+                                .icon(Icon::new(AppIcon::Plus))
                                 .small()
                                 .ghost()
                                 .on_click(cx.listener(|this, _, _, cx| {
@@ -956,7 +958,7 @@ impl ConnectionManagerWindow {
                     .items_center()
                     .gap_2()
                     .cursor_pointer()
-                    .rounded(px(4.0))
+                    .rounded(Radii::SM)
                     .border_2()
                     .when(private_key_focused, |d| d.border_color(ring_color))
                     .when(!private_key_focused, |d| {
@@ -978,7 +980,7 @@ impl ConnectionManagerWindow {
                     .items_center()
                     .gap_2()
                     .cursor_pointer()
-                    .rounded(px(4.0))
+                    .rounded(Radii::SM)
                     .border_2()
                     .when(password_focused, |d| d.border_color(ring_color))
                     .when(!password_focused, |d| {
@@ -1060,7 +1062,7 @@ impl ConnectionManagerWindow {
                                 .child(
                                     div()
                                         .flex_1()
-                                        .rounded(px(4.0))
+                                        .rounded(Radii::SM)
                                         .border_2()
                                         .when(key_path_focused, |d| d.border_color(ring_color))
                                         .when(!key_path_focused, |d| {
@@ -1081,7 +1083,7 @@ impl ConnectionManagerWindow {
                                 )
                                 .child(
                                     div()
-                                        .rounded(px(4.0))
+                                        .rounded(Radii::SM)
                                         .border_2()
                                         .when(key_browse_focused, |d| d.border_color(ring_color))
                                         .when(!key_browse_focused, |d| {
@@ -1116,7 +1118,7 @@ impl ConnectionManagerWindow {
                                 .child(
                                     div()
                                         .flex_1()
-                                        .rounded(px(4.0))
+                                        .rounded(Radii::SM)
                                         .border_2()
                                         .when(passphrase_focused, |d| d.border_color(ring_color))
                                         .when(!passphrase_focused, |d| {
@@ -1151,7 +1153,7 @@ impl ConnectionManagerWindow {
                                 .when_some(passphrase_checkbox, |d, checkbox| {
                                     d.child(
                                         div()
-                                            .rounded(px(4.0))
+                                            .rounded(Radii::SM)
                                             .border_2()
                                             .when(save_secret_focused, |d| {
                                                 d.border_color(ring_color)
@@ -1192,7 +1194,7 @@ impl ConnectionManagerWindow {
                                 .child(
                                     div()
                                         .flex_1()
-                                        .rounded(px(4.0))
+                                        .rounded(Radii::SM)
                                         .border_2()
                                         .when(password_focused, |d| d.border_color(ring_color))
                                         .when(!password_focused, |d| {
@@ -1227,7 +1229,7 @@ impl ConnectionManagerWindow {
                                 .when_some(password_checkbox, |d, checkbox| {
                                     d.child(
                                         div()
-                                            .rounded(px(4.0))
+                                            .rounded(Radii::SM)
                                             .border_2()
                                             .when(save_secret_focused, |d| {
                                                 d.border_color(ring_color)

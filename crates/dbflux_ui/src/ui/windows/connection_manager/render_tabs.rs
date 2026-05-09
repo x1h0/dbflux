@@ -1,3 +1,4 @@
+use crate::ui::tokens::Radii;
 use crate::ui::components::form_renderer;
 use crate::ui::icons::AppIcon;
 use dbflux_components::controls::Input;
@@ -175,7 +176,7 @@ impl ConnectionManagerWindow {
                     .flex()
                     .items_center()
                     .gap_3()
-                    .rounded(px(4.0))
+                    .rounded(Radii::SM)
                     .border_2()
                     .when(
                         show_focus && focus == FormFocus::SettingsRefreshPolicy,
@@ -224,7 +225,7 @@ impl ConnectionManagerWindow {
                     .flex()
                     .items_center()
                     .gap_3()
-                    .rounded(px(4.0))
+                    .rounded(Radii::SM)
                     .border_2()
                     .when(
                         show_focus && focus == FormFocus::SettingsRefreshInterval,
@@ -269,7 +270,7 @@ impl ConnectionManagerWindow {
                     .flex()
                     .items_center()
                     .gap_3()
-                    .rounded(px(4.0))
+                    .rounded(Radii::SM)
                     .border_2()
                     .when(
                         show_focus && focus == FormFocus::SettingsConfirmDangerous,
@@ -306,7 +307,7 @@ impl ConnectionManagerWindow {
                     .flex()
                     .items_center()
                     .gap_3()
-                    .rounded(px(4.0))
+                    .rounded(Radii::SM)
                     .border_2()
                     .when(
                         show_focus && focus == FormFocus::SettingsRequiresWhere,
@@ -338,7 +339,7 @@ impl ConnectionManagerWindow {
                     .flex()
                     .items_center()
                     .gap_3()
-                    .rounded(px(4.0))
+                    .rounded(Radii::SM)
                     .border_2()
                     .when(
                         show_focus && focus == FormFocus::SettingsRequiresPreview,
@@ -419,7 +420,7 @@ impl ConnectionManagerWindow {
                                         .flex()
                                         .items_center()
                                         .gap_3()
-                                        .rounded(px(4.0))
+                                        .rounded(Radii::SM)
                                         .border_2()
                                         .when(field_focused, |d| d.border_color(ring_color))
                                         .when(!field_focused, |d| {
@@ -465,7 +466,7 @@ impl ConnectionManagerWindow {
                                         .flex()
                                         .flex_col()
                                         .gap_1()
-                                        .rounded(px(4.0))
+                                        .rounded(Radii::SM)
                                         .border_2()
                                         .when(field_focused, |d| d.border_color(ring_color))
                                         .when(!field_focused, |d| {
@@ -502,7 +503,7 @@ impl ConnectionManagerWindow {
                                         .flex()
                                         .flex_col()
                                         .gap_1()
-                                        .rounded(px(4.0))
+                                        .rounded(Radii::SM)
                                         .border_2()
                                         .when(field_focused, |d| d.border_color(ring_color))
                                         .when(!field_focused, |d| {
