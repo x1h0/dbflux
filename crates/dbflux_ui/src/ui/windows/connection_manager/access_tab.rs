@@ -8,7 +8,7 @@ use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::checkbox::Checkbox;
 use crate::ui::icons::AppIcon;
-use gpui_component::{Icon, IconName};
+use gpui_component::{Icon};
 
 use super::{AccessTabMode, ActiveTab, ConnectionManagerWindow, EditState, FormFocus, TestStatus};
 
@@ -547,7 +547,7 @@ impl ConnectionManagerWindow {
                                 Button::new("proxy-edit-in-settings", "Edit in Settings")
                                     .small()
                                     .ghost()
-                                    .icon(Icon::new(IconName::ExternalLink)),
+                                    .icon(Icon::new(AppIcon::ExternalLink)),
                             ),
                     ),
                 &theme,
@@ -711,7 +711,7 @@ impl ConnectionManagerWindow {
                                     Button::new("ssh-edit-in-settings", "Edit in Settings")
                                         .small()
                                         .ghost()
-                                        .icon(Icon::new(IconName::ExternalLink)),
+                                        .icon(Icon::new(AppIcon::ExternalLink)),
                                 ),
                         ),
                     &theme,
@@ -809,7 +809,7 @@ impl ConnectionManagerWindow {
                 })
                 .child(
                     Button::new("test-ssh", "Test SSH")
-                        .icon(Icon::new(IconName::ExternalLink))
+                        .icon(Icon::new(AppIcon::ExternalLink))
                         .small()
                         .ghost()
                         .disabled(ssh_test_status == TestStatus::Testing)

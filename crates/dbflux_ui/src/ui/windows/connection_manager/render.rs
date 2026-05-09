@@ -12,7 +12,7 @@ use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::checkbox::Checkbox;
-use gpui_component::{Icon, IconName};
+use gpui_component::{Icon};
 
 use super::{
     ActiveTab, ConnectionManagerWindow, EditState, FormFocus, TestStatus, View,
@@ -367,7 +367,7 @@ impl ConnectionManagerWindow {
                                     .child(
                                         Button::new("test-connection", "Test Connection")
                                             .ghost()
-                                            .icon(Icon::new(IconName::ExternalLink))
+                                            .icon(Icon::new(AppIcon::ExternalLink))
                                             .small()
                                             .disabled(test_status == TestStatus::Testing)
                                             .on_click(cx.listener(|this, _, window, cx| {
@@ -386,7 +386,7 @@ impl ConnectionManagerWindow {
                                     .child(
                                         Button::new("save-connection", "Save")
                                             .primary()
-                                            .icon(Icon::new(IconName::Check))
+                                            .icon(Icon::new(AppIcon::Check))
                                             .small()
                                             .on_click(cx.listener(|this, _, window, cx| {
                                                 this.save_profile(window, cx);

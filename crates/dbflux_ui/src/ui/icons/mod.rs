@@ -43,10 +43,13 @@ pub enum AppIcon {
     EyeOff,
     Loader,
     Info,
+    Check,
     CircleAlert,
     CircleCheck,
     CircleX,
     TriangleAlert,
+    ExternalLink,
+    Globe,
     Code,
     Table,
     Columns,
@@ -139,10 +142,13 @@ impl AppIcon {
             Self::EyeOff => "icons/ui/eye-off.svg",
             Self::Loader => "icons/ui/loader.svg",
             Self::Info => "icons/ui/info.svg",
+            Self::Check => "icons/ui/check.svg",
             Self::CircleAlert => "icons/ui/circle-alert.svg",
             Self::CircleCheck => "icons/ui/circle-check.svg",
             Self::CircleX => "icons/ui/circle-x.svg",
             Self::TriangleAlert => "icons/ui/triangle-alert.svg",
+            Self::ExternalLink => "icons/ui/external-link.svg",
+            Self::Globe => "icons/ui/globe.svg",
             Self::Code => "icons/ui/code.svg",
             Self::Table => "icons/ui/table.svg",
             Self::Columns => "icons/ui/columns.svg",
@@ -235,6 +241,11 @@ impl AppIcon {
                 include_bytes!("../../../../../resources/icons/ui/circle-check.svg")
             }
             Self::CircleX => include_bytes!("../../../../../resources/icons/ui/circle-x.svg"),
+            Self::Check => include_bytes!("../../../../../resources/icons/ui/check.svg"),
+            Self::ExternalLink => {
+                include_bytes!("../../../../../resources/icons/ui/external-link.svg")
+            }
+            Self::Globe => include_bytes!("../../../../../resources/icons/ui/globe.svg"),
             Self::TriangleAlert => {
                 include_bytes!("../../../../../resources/icons/ui/triangle-alert.svg")
             }
@@ -384,10 +395,13 @@ pub const ALL_ICONS: &[AppIcon] = &[
     AppIcon::EyeOff,
     AppIcon::Loader,
     AppIcon::Info,
+    AppIcon::Check,
     AppIcon::CircleAlert,
     AppIcon::CircleCheck,
     AppIcon::CircleX,
     AppIcon::TriangleAlert,
+    AppIcon::ExternalLink,
+    AppIcon::Globe,
     AppIcon::Code,
     AppIcon::Table,
     AppIcon::Columns,

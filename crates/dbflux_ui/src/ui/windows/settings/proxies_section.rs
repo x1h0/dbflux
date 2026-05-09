@@ -17,7 +17,7 @@ use gpui::*;
 use gpui_component::checkbox::Checkbox;
 use gpui_component::dialog::Dialog;
 use crate::ui::icons::AppIcon;
-use gpui_component::{ActiveTheme, Icon, IconName, Sizable};
+use gpui_component::{ActiveTheme, Icon, Sizable};
 use uuid::Uuid;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -607,7 +607,7 @@ impl ProxiesSection {
                                             .gap_1()
                                             .mt(px(2.0))
                                             .child(
-                                                FluxIcon::new(IconName::Globe)
+                                                FluxIcon::new(AppIcon::Globe)
                                                     .size(px(14.0))
                                                     .color(theme.muted_foreground),
                                             )
