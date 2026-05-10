@@ -1,4 +1,5 @@
 use super::*;
+use crate::ui::icons::AppIcon;
 use dbflux_components::primitives::{Icon, StatusDot, StatusDotVariant, Text};
 use dbflux_components::typography::MonoLabel;
 use gpui::FontWeight;
@@ -54,6 +55,9 @@ pub(super) struct TreeRenderParams {
     pub color_orange: Hsla,
     pub color_schema: Hsla,
     pub color_green: Hsla,
+    /// Item ID of the currently hovered tree row. Used to show the ⋯ button
+    /// only while a row is hovered.
+    pub hovered_item_id: Option<SharedString>,
 }
 
 #[cfg(test)]
@@ -127,6 +131,38 @@ pub(super) fn render_tree_item(
     let item = entry.item();
     let item_id = item.id.clone();
     let depth = entry.depth();
+
+    // Loading placeholder rows. Two encodings exist:
+    //   - new pattern: id ends with `_loading`
+    //   - legacy SchemaNodeId variants whose pipe-encoded form starts with the
+    //     `LD|`, `YL|`, `XL|`, or `KL|` prefix (database/types/schema-indexes/
+    //     schema-fks loading folders)
+    // Render either case with `AppIcon::Loader` for visual consistency.
+    let is_loading_row = item_id.ends_with("_loading")
+        || item_id.starts_with("LD|")
+        || item_id.starts_with("YL|")
+        || item_id.starts_with("XL|")
+        || item_id.starts_with("KL|");
+    if is_loading_row {
+        let theme = cx.theme();
+        let indent_px = depth as f32 * 14.0_f32;
+        let _ = params;
+        return ListItem::new(ix).h(Heights::ROW).child(
+            div()
+                .w_full()
+                .flex()
+                .items_center()
+                .gap(Spacing::SM)
+                .pl(px(indent_px + 14.0 + 4.0)) // align with label start
+                .py(Spacing::XS)
+                .child(
+                    Icon::new(AppIcon::Loader)
+                        .size(px(12.0))
+                        .color(theme.muted_foreground),
+                )
+                .child(Text::caption("Loading…").color(theme.muted_foreground)),
+        );
+    }
 
     let node_kind = parse_node_kind(&item_id);
     let parsed_id = parse_node_id(&item_id);
@@ -848,12 +884,17 @@ pub(super) fn render_tree_item(
                         let item_id_for_menu = item_id.clone();
                         let hover_bg = theme.secondary;
 
-                        // TODO(design-bundle): hover-only ⋯ menu — button should be invisible
-                        // until the row is hovered. GPUI does not yet expose `group_hover` /
-                        // `visible_on_hover`, and making this stateful would require an
-                        // `is_hovered` field per list row plus mouse-enter/leave handlers on the
-                        // stateless render_tree_item fn. Defer until GPUI gains opacity or group
-                        // hover support, or until rows are promoted to entities.
+                        // Render the ⋯ button as fully transparent when the row is not hovered.
+                        // The button still occupies its layout slot so no reflow happens on hover.
+                        // Visibility is driven by `params.hovered_item_id` which the sidebar
+                        // entity updates on `on_mouse_enter` for the list item.
+                        let is_row_hovered = params
+                            .hovered_item_id
+                            .as_ref()
+                            .is_some_and(|id| id == &item_id_for_menu);
+
+                        let btn_opacity: f32 = if is_row_hovered { 1.0 } else { 0.0 };
+
                         el.child(
                             div()
                                 .id(SharedString::from(format!("menu-btn-{}", item_id_for_menu)))
@@ -862,6 +903,7 @@ pub(super) fn render_tree_item(
                                 .px_1()
                                 .rounded(Radii::SM)
                                 .cursor_pointer()
+                                .opacity(btn_opacity)
                                 .hover(move |d| d.bg(hover_bg))
                                 .on_mouse_down(MouseButton::Left, |_, _, cx| {
                                     cx.stop_propagation();
@@ -915,6 +957,20 @@ pub(super) fn render_tree_item(
                     },
                 ),
         );
+
+    // Track which row is hovered so the ⋯ button opacity can be driven by
+    // `hovered_item_id` on the next render. Clearing on mouse-leave is handled
+    // by the sidebar container's `on_mouse_leave` in render.rs.
+    let sidebar_for_hover = sidebar_entity.clone();
+    let item_id_for_hover = item_id.clone();
+    list_item = list_item.on_mouse_enter(move |_, _, cx| {
+        sidebar_for_hover.update(cx, |this, cx| {
+            if this.hovered_item_id.as_ref() != Some(&item_id_for_hover) {
+                this.hovered_item_id = Some(item_id_for_hover.clone());
+                cx.notify();
+            }
+        });
+    });
 
     if node_kind.shows_pointer_cursor() {
         list_item = list_item.cursor(CursorStyle::PointingHand);

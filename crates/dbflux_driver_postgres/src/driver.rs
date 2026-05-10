@@ -1605,6 +1605,39 @@ impl Connection for PostgresConnection {
         fetch_dependents(&mut client, schema_name, table)
     }
 
+    fn fetch_row_by_pk(
+        &self,
+        _database: &str,
+        schema: &str,
+        table: &str,
+        pk_column: &str,
+        pk_value: &dbflux_core::Value,
+    ) -> Result<Option<std::collections::HashMap<String, dbflux_core::Value>>, dbflux_core::DbError>
+    {
+        let pk_literal = POSTGRES_DIALECT.value_to_literal(pk_value);
+        let sql = format!(
+            "SELECT * FROM {}.{} WHERE {} = {} LIMIT 1",
+            POSTGRES_DIALECT.quote_identifier(schema),
+            POSTGRES_DIALECT.quote_identifier(table),
+            POSTGRES_DIALECT.quote_identifier(pk_column),
+            pk_literal,
+        );
+
+        let result = self.execute(&dbflux_core::QueryRequest::new(sql))?;
+        let columns = result.columns;
+        let Some(row) = result.rows.into_iter().next() else {
+            return Ok(None);
+        };
+
+        let map = columns
+            .into_iter()
+            .zip(row)
+            .map(|(col, val)| (col.name, val))
+            .collect();
+
+        Ok(Some(map))
+    }
+
     fn code_generators(&self) -> Vec<CodeGeneratorInfo> {
         postgres_code_generators()
     }

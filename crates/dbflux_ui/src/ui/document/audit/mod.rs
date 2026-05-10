@@ -3345,7 +3345,20 @@ impl AuditDocument {
             )
             .when_some(
                 self.status_message.clone().filter(|_| self.is_loading),
-                |d, _| d.child(Text::dim("Loading...")),
+                |d, _| {
+                    d.child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(Spacing::SM)
+                            .child(
+                                Icon::new(AppIcon::Loader)
+                                    .size(px(12.0))
+                                    .color(theme.muted_foreground),
+                            )
+                            .child(Text::dim("Loading…")),
+                    )
+                },
             );
 
         workspace_footer_bar(&theme, left, center, right)

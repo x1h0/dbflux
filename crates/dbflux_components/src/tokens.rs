@@ -104,6 +104,22 @@ impl Shadows {
             spread_radius: px(0.0),
         }
     }
+
+    /// Left-edge shadow for slide-in inspector panels.
+    ///
+    /// Casts the shadow to the left (negative x offset) to give the panel a
+    /// sense of depth relative to the content it overlays.
+    pub fn inspector_left() -> BoxShadow {
+        BoxShadow {
+            color: gpui::hsla(0.0, 0.0, 0.0, 0.28),
+            offset: Point {
+                x: px(-6.0),
+                y: px(0.0),
+            },
+            blur_radius: px(16.0),
+            spread_radius: px(0.0),
+        }
+    }
 }
 
 pub struct SyntaxColors;

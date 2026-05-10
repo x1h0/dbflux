@@ -6,6 +6,7 @@ mod icon;
 mod icon_button;
 mod kbd_badge;
 mod label;
+mod loading_state;
 mod status_dot;
 mod status_indicator;
 mod surface;
@@ -20,6 +21,7 @@ pub use icon::Icon;
 pub use icon_button::IconButton;
 pub use kbd_badge::{KbdBadge, KbdBadgeInspection};
 pub use label::Label;
+pub use loading_state::{LoadingBlock, LoadingState, Spinner};
 pub use status_dot::{StatusDot, StatusDotVariant};
 pub use status_indicator::{Status, StatusIndicator};
 pub use surface::{

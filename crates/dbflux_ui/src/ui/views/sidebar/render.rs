@@ -159,6 +159,7 @@ impl Sidebar {
         let theme = cx.theme();
         let sidebar_for_root_drop = sidebar_entity.clone();
         let sidebar_for_clear_drop = sidebar_entity.clone();
+        let sidebar_for_hover_clear = sidebar_entity.clone();
 
         div()
             .flex_1()
@@ -171,6 +172,16 @@ impl Sidebar {
                     .py(Spacing::XS)
                     .border_b_1()
                     .border_color(theme.border)
+                    // Clear row hover when the pointer enters the search bar.
+                    // Workaround for GPUI 0.2.2 lacking on_mouse_leave.
+                    .on_mouse_move(move |_, _, cx| {
+                        sidebar_for_hover_clear.update(cx, |this, cx| {
+                            if this.hovered_item_id.is_some() {
+                                this.hovered_item_id = None;
+                                cx.notify();
+                            }
+                        });
+                    })
                     .child(
                         Input::new(&self.connections_search_input)
                             .xsmall()
@@ -252,6 +263,7 @@ impl Sidebar {
             rename_input: self.rename_input.clone(),
             gutter_metadata: self.scripts_gutter_metadata.clone(),
             line_color: tree_nav::tree_line_color(theme),
+            hovered_item_id: self.hovered_item_id.clone(),
             color_teal: SyntaxColors::table(),
             color_yellow: SyntaxColors::view(),
             color_blue: SyntaxColors::column(),
@@ -396,6 +408,7 @@ impl Render for Sidebar {
             rename_input: self.rename_input.clone(),
             gutter_metadata: self.gutter_metadata.clone(),
             line_color: tree_nav::tree_line_color(theme),
+            hovered_item_id: self.hovered_item_id.clone(),
             color_teal: SyntaxColors::table(),
             color_yellow: SyntaxColors::view(),
             color_blue: SyntaxColors::column(),
@@ -408,6 +421,9 @@ impl Render for Sidebar {
 
         let active_tab = self.active_tab;
 
+        let sidebar_for_footer_hover = sidebar_entity.clone();
+        let sidebar_for_tabbar_hover = sidebar_entity.clone();
+
         div()
             .relative()
             .flex()
@@ -416,7 +432,19 @@ impl Render for Sidebar {
             .border_r_1()
             .border_color(theme.border)
             .bg(theme.sidebar)
-            .child(self.render_tab_bar(cx))
+            .child(
+                // Tab bar: clear row hover when mouse enters this region.
+                div()
+                    .on_mouse_move(move |_, _, cx| {
+                        sidebar_for_tabbar_hover.update(cx, |this, cx| {
+                            if this.hovered_item_id.is_some() {
+                                this.hovered_item_id = None;
+                                cx.notify();
+                            }
+                        });
+                    })
+                    .child(self.render_tab_bar(cx)),
+            )
             .child(self.render_action_bars(cx))
             .when(active_tab == SidebarTab::Connections, |el| {
                 el.child(self.render_connections_content(tree_params, &sidebar_entity, cx))
@@ -424,7 +452,19 @@ impl Render for Sidebar {
             .when(active_tab == SidebarTab::Scripts, |el| {
                 el.child(self.render_scripts_content(cx))
             })
-            .child(self.render_footer(cx))
+            .child(
+                // Footer: clear row hover when mouse enters this region.
+                div()
+                    .on_mouse_move(move |_, _, cx| {
+                        sidebar_for_footer_hover.update(cx, |this, cx| {
+                            if this.hovered_item_id.is_some() {
+                                this.hovered_item_id = None;
+                                cx.notify();
+                            }
+                        });
+                    })
+                    .child(self.render_footer(cx)),
+            )
             .when(self.add_menu_open, |el| el.child(self.render_add_menu(cx)))
     }
 }

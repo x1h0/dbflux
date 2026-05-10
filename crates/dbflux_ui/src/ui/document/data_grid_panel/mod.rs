@@ -3,6 +3,7 @@ mod mutations;
 mod navigation;
 mod query;
 mod render;
+pub mod row_inspector;
 mod utils;
 
 use super::result_view::ResultViewMode;
@@ -357,6 +358,9 @@ pub struct DataGridPanel {
     // Document preview modal for viewing/editing full documents
     document_preview_modal: Entity<DocumentPreviewModal>,
     pending_document_preview: Option<PendingDocumentPreview>,
+
+    // Row inspector overlay panel
+    row_inspector: Option<Entity<row_inspector::RowInspector>>,
 
     export_menu_open: bool,
 }
@@ -750,6 +754,7 @@ impl DataGridPanel {
             document_tree_subscription: None,
             document_preview_modal,
             pending_document_preview: None,
+            row_inspector: None,
             export_menu_open: false,
         }
     }
@@ -1042,6 +1047,20 @@ impl DataGridPanel {
 
         let column_details = self.get_column_details(cx);
 
+        // Compute FK column indices before entering the cx.new closure.
+        let fk_names = self.get_fk_column_names(cx);
+        let fk_indices: std::collections::HashSet<usize> = if fk_names.is_empty() {
+            std::collections::HashSet::new()
+        } else {
+            self.result
+                .columns
+                .iter()
+                .enumerate()
+                .filter(|(_, col)| fk_names.contains(&col.name))
+                .map(|(ix, _)| ix)
+                .collect()
+        };
+
         let table_model = Arc::new(TableModel::from(&self.result));
         let table_state = cx.new(|cx| {
             let mut state = DataTableState::new(table_model, cx);
@@ -1050,6 +1069,10 @@ impl DataGridPanel {
             }
             state.set_pk_columns(pk_indices.clone());
             state.set_insertable(is_insertable);
+
+            if !fk_indices.is_empty() {
+                state.set_fk_columns(fk_indices);
+            }
 
             if let Some(columns) = &column_details {
                 for (col_ix, result_col) in self.result.columns.iter().enumerate() {

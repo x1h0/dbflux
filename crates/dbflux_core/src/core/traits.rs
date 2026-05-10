@@ -746,6 +746,27 @@ pub trait Connection: Send + Sync {
         Ok(Vec::new())
     }
 
+    /// Fetch a single row from a table by primary-key match.
+    ///
+    /// Returns the row's values keyed by column name, or `None` if no row
+    /// matches. Used by the RowInspector to forward-resolve foreign-key
+    /// references.
+    ///
+    /// Non-relational drivers that don't override this method return
+    /// `NotSupported` and the UI degrades gracefully (no REFERENCES shown).
+    fn fetch_row_by_pk(
+        &self,
+        _database: &str,
+        _schema: &str,
+        _table: &str,
+        _pk_column: &str,
+        _pk_value: &Value,
+    ) -> Result<Option<std::collections::HashMap<String, Value>>, DbError> {
+        Err(DbError::NotSupported(
+            "fetch_row_by_pk not supported by this driver".to_string(),
+        ))
+    }
+
     // =========================================================================
     // Browse Operations (semantic queries, no raw SQL/JSON from UI)
     // =========================================================================
@@ -1321,4 +1342,68 @@ pub trait ConnectionExt {
 
     /// Attempt to cast this connection as a key-value connection.
     fn as_keyvalue(&self) -> Option<&dyn KeyValueConnection>;
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{DbError, DbKind, DriverMetadata, QueryRequest, QueryResult, SchemaSnapshot};
+
+    /// Minimal Connection stub that only implements the required methods and
+    /// relies on default impls for everything else.
+    struct StubConnection;
+
+    impl Connection for StubConnection {
+        fn metadata(&self) -> &DriverMetadata {
+            unimplemented!("StubConnection::metadata not needed for this test")
+        }
+
+        fn ping(&self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn close(&mut self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn execute(&self, _req: &QueryRequest) -> Result<QueryResult, DbError> {
+            Err(DbError::NotSupported("stub".to_string()))
+        }
+
+        fn cancel(&self, _handle: &crate::QueryHandle) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn schema(&self) -> Result<SchemaSnapshot, DbError> {
+            Err(DbError::NotSupported("stub".to_string()))
+        }
+
+        fn kind(&self) -> DbKind {
+            DbKind::SQLite
+        }
+
+        fn schema_loading_strategy(&self) -> SchemaLoadingStrategy {
+            SchemaLoadingStrategy::SingleDatabase
+        }
+
+        fn dialect(&self) -> &dyn crate::sql::dialect::SqlDialect {
+            unimplemented!("StubConnection::dialect not needed for this test")
+        }
+    }
+
+    #[test]
+    fn fetch_row_by_pk_default_returns_not_supported() {
+        let conn = StubConnection;
+        let result = conn.fetch_row_by_pk("db", "public", "users", "id", &crate::Value::Int(1));
+
+        assert!(
+            matches!(result, Err(DbError::NotSupported(_))),
+            "default impl must return NotSupported, got: {:?}",
+            result
+        );
+    }
 }

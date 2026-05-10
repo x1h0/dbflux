@@ -1300,52 +1300,60 @@ impl Sidebar {
             None
         };
 
-        let mut table_sections = vec![
-            TreeItem::new(
-                SchemaNodeId::ColumnsFolder {
-                    profile_id,
-                    schema: schema_name.to_string(),
-                    table: table.name.clone(),
-                }
-                .to_string(),
-                format!("Columns ({})", column_count),
-            )
-            .expanded(false)
-            .children(column_children),
-            TreeItem::new(
-                SchemaNodeId::IndexesFolder {
-                    profile_id,
-                    schema: schema_name.to_string(),
-                    table: table.name.clone(),
-                }
-                .to_string(),
-                format!("Indexes ({})", index_count),
-            )
-            .expanded(false)
-            .children(index_children),
-            TreeItem::new(
-                SchemaNodeId::ForeignKeysFolder {
-                    profile_id,
-                    schema: schema_name.to_string(),
-                    table: table.name.clone(),
-                }
-                .to_string(),
-                format!("Foreign Keys ({})", fk_count),
-            )
-            .expanded(false)
-            .children(fk_children),
-            TreeItem::new(
-                SchemaNodeId::ConstraintsFolder {
-                    profile_id,
-                    schema: schema_name.to_string(),
-                    table: table.name.clone(),
-                }
-                .to_string(),
-                format!("Constraints ({})", constraint_count),
-            )
-            .expanded(false)
-            .children(constraint_children),
-        ];
+        let columns_folder_id = SchemaNodeId::ColumnsFolder {
+            profile_id,
+            schema: schema_name.to_string(),
+            table: table.name.clone(),
+        }
+        .to_string();
+        let indexes_folder_id = SchemaNodeId::IndexesFolder {
+            profile_id,
+            schema: schema_name.to_string(),
+            table: table.name.clone(),
+        }
+        .to_string();
+        let fks_folder_id = SchemaNodeId::ForeignKeysFolder {
+            profile_id,
+            schema: schema_name.to_string(),
+            table: table.name.clone(),
+        }
+        .to_string();
+        let constraints_folder_id = SchemaNodeId::ConstraintsFolder {
+            profile_id,
+            schema: schema_name.to_string(),
+            table: table.name.clone(),
+        }
+        .to_string();
+
+        // While table details are still loading we render a single Loading row
+        // directly under the table instead of four section folders with stale
+        // "(0)" counts. Once details land, the four sections appear with their
+        // real counts and children.
+        let mut table_sections = if details_loaded {
+            vec![
+                TreeItem::new(columns_folder_id, format!("Columns ({})", column_count))
+                    .expanded(false)
+                    .children(column_children),
+                TreeItem::new(indexes_folder_id, format!("Indexes ({})", index_count))
+                    .expanded(false)
+                    .children(index_children),
+                TreeItem::new(fks_folder_id, format!("Foreign Keys ({})", fk_count))
+                    .expanded(false)
+                    .children(fk_children),
+                TreeItem::new(
+                    constraints_folder_id,
+                    format!("Constraints ({})", constraint_count),
+                )
+                .expanded(false)
+                .children(constraint_children),
+            ]
+        } else {
+            let table_loading_id = format!(
+                "T|{}|{}|{}_loading",
+                profile_id, schema_name, table.name
+            );
+            vec![TreeItem::new(table_loading_id, "Loading…".to_string())]
+        };
 
         if let Some(dep_folder) = dependents_section {
             table_sections.push(dep_folder);

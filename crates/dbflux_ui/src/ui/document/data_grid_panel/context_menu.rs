@@ -1078,6 +1078,13 @@ impl DataGridPanel {
             if has_row_target {
                 items.extend([
                     ContextMenuItem {
+                        label: "Inspect Row",
+                        action: Some(ContextMenuAction::InspectRow),
+                        icon: Some(AppIcon::Info),
+                        is_separator: false,
+                        is_danger: false,
+                    },
+                    ContextMenuItem {
                         label: "Duplicate Row",
                         action: Some(ContextMenuAction::DuplicateRow),
                         icon: Some(AppIcon::Layers),
@@ -2275,11 +2282,306 @@ impl DataGridPanel {
             ContextMenuAction::RemoveOrdering => {
                 self.handle_sort_clear(cx);
             }
+            ContextMenuAction::InspectRow => {
+                self.open_row_inspector(menu.row, menu.col, cx);
+            }
         }
 
         // Restore focus to the active view after action
         self.restore_focus_after_context_menu(is_document_view, window, cx);
         cx.notify();
+    }
+
+    /// Build an `InspectorSnapshot` from the given row/col and open or update
+    /// the `RowInspector` overlay.
+    pub(super) fn open_row_inspector(&mut self, row: usize, col: usize, cx: &mut Context<Self>) {
+        use super::row_inspector::{InspectorCell, InspectorSnapshot, RowInspector};
+        use crate::ui::components::data_table::model::ColumnKind;
+
+        let Some(table_state) = &self.table_state else {
+            return;
+        };
+
+        let state = table_state.read(cx);
+        let model = state.model();
+
+        let pk_cols: std::collections::HashSet<usize> =
+            state.pk_columns().iter().copied().collect();
+        let fk_cols = state.fk_columns().clone();
+
+        // Build cell values first so we can cross-reference with FK info below.
+        let cells: Vec<InspectorCell> = model
+            .columns
+            .iter()
+            .enumerate()
+            .map(|(ix, spec)| {
+                let value = model
+                    .cell(row, ix)
+                    .map(|c| self.cell_to_value(c))
+                    .unwrap_or(dbflux_core::Value::Null);
+
+                let type_label = match spec.kind {
+                    ColumnKind::Text => "text",
+                    ColumnKind::Integer => "integer",
+                    ColumnKind::Float => "float",
+                    ColumnKind::Bool => "boolean",
+                    ColumnKind::Bytes => "bytes",
+                    ColumnKind::Json => "json",
+                    ColumnKind::Unknown => "unknown",
+                }
+                .to_string();
+
+                InspectorCell {
+                    name: spec.title.to_string(),
+                    value,
+                    is_primary_key: pk_cols.contains(&ix),
+                    is_foreign_key: fk_cols.contains(&ix),
+                    type_label,
+                    nullable: true, // conservative default; refined when column details are cached
+                }
+            })
+            .collect();
+
+        let row_label = format!("Row {}", row + 1);
+        let snapshot = InspectorSnapshot {
+            cells: cells.clone(),
+            focused_col: col,
+            row_label,
+        };
+
+        // Build per-FK reference entries from the cached TableInfo.foreign_keys.
+        let fk_references = self.build_fk_references(&cells, cx);
+        let has_fk_lookups = !fk_references.is_empty();
+
+        if let Some(inspector) = &self.row_inspector {
+            inspector.update(cx, |insp, cx| {
+                insp.open(snapshot, cx);
+            });
+            let inspector_entity = inspector.clone();
+            self.fire_fk_resolution(fk_references, inspector_entity, cx);
+        } else {
+            let inspector = cx.new(|cx| RowInspector::new(snapshot, cx));
+
+            if !has_fk_lookups {
+                // No FK columns: mark references as ready (empty).
+                inspector.update(cx, |insp, cx| {
+                    insp.set_references(Vec::new(), cx);
+                });
+            }
+            // When has_fk_lookups, fire_fk_resolution below sets references.
+
+            // Subscribe to close requests
+            let _sub = cx.subscribe(
+                &inspector,
+                |this, _, event: &super::row_inspector::RowInspectorEvent, cx| match event {
+                    super::row_inspector::RowInspectorEvent::CloseRequested => {
+                        this.row_inspector = None;
+                        cx.notify();
+                    }
+                },
+            );
+
+            let inspector_entity = inspector.clone();
+            self.row_inspector = Some(inspector);
+            self.fire_fk_resolution(fk_references, inspector_entity, cx);
+            cx.notify();
+        }
+    }
+
+    /// Build the list of FK lookups for the current row from the schema cache.
+    ///
+    /// Returns one entry per FK constraint whose local columns all have
+    /// non-null values in the current row. Multi-column FKs are skipped
+    /// (not supported by `fetch_row_by_pk`).
+    fn build_fk_references(
+        &self,
+        cells: &[super::row_inspector::InspectorCell],
+        cx: &Context<Self>,
+    ) -> Vec<super::row_inspector::FkReference> {
+        use super::row_inspector::FkReference;
+        use dbflux_components::primitives::LoadingState;
+
+        let (profile_id, table_ref) = match &self.source {
+            super::DataSource::Table {
+                profile_id, table, ..
+            } => (*profile_id, table),
+            _ => return Vec::new(),
+        };
+
+        let state = self.app_state.read(cx);
+        let connected = match state.connections().get(&profile_id) {
+            Some(c) => c,
+            None => return Vec::new(),
+        };
+        let database = connected.active_database.as_deref().unwrap_or("default");
+        let cache_key = (database.to_string(), table_ref.name.clone());
+        let table_info = match connected.table_details.get(&cache_key) {
+            Some(t) => t,
+            None => return Vec::new(),
+        };
+
+        let fk_list = match table_info.foreign_keys.as_deref() {
+            Some(fks) if !fks.is_empty() => fks,
+            _ => return Vec::new(),
+        };
+
+        let mut references = Vec::new();
+
+        for fk in fk_list {
+            // Only handle single-column FKs.
+            if fk.columns.len() != 1 || fk.referenced_columns.len() != 1 {
+                continue;
+            }
+
+            let local_col = &fk.columns[0];
+            let ref_col = &fk.referenced_columns[0];
+
+            // Find the value in the current row.
+            let Some(cell) = cells.iter().find(|c| &c.name == local_col) else {
+                continue;
+            };
+
+            // Skip null FK values.
+            if cell.value.is_null() {
+                continue;
+            }
+
+            references.push(FkReference {
+                column: local_col.clone(),
+                target_schema: fk.referenced_schema.clone(),
+                target_table: fk.referenced_table.clone(),
+                target_pk: ref_col.clone(),
+                value: cell.value.clone(),
+                row: LoadingState::Loading,
+            });
+        }
+
+        references
+    }
+
+    /// Spawn one background task per FK reference and resolve them into the inspector.
+    fn fire_fk_resolution(
+        &self,
+        references: Vec<super::row_inspector::FkReference>,
+        inspector_entity: Entity<super::row_inspector::RowInspector>,
+        cx: &mut Context<Self>,
+    ) {
+        use super::row_inspector::FkReference;
+        use dbflux_components::primitives::LoadingState;
+
+        if references.is_empty() {
+            return;
+        }
+
+        let (profile_id, database, schema) = match &self.source {
+            super::DataSource::Table {
+                profile_id,
+                database,
+                table,
+                ..
+            } => {
+                let db = {
+                    let state = self.app_state.read(cx);
+                    let db = database.clone().or_else(|| {
+                        state
+                            .connections()
+                            .get(profile_id)
+                            .and_then(|c| c.active_database.clone())
+                    });
+                    db.unwrap_or_else(|| "default".to_string())
+                };
+                let schema = table.schema.clone().unwrap_or_else(|| "public".to_string());
+                (*profile_id, db, schema)
+            }
+            _ => return,
+        };
+
+        let connection = {
+            let state = self.app_state.read(cx);
+            match state.get_connection(profile_id) {
+                Some(c) => c,
+                None => return,
+            }
+        };
+
+        // Initialise the inspector's reference list with Loading state.
+        let loading_refs: Vec<FkReference> = references
+            .iter()
+            .map(|r| FkReference {
+                column: r.column.clone(),
+                target_schema: r.target_schema.clone(),
+                target_table: r.target_table.clone(),
+                target_pk: r.target_pk.clone(),
+                value: r.value.clone(),
+                row: LoadingState::Loading,
+            })
+            .collect();
+
+        inspector_entity.update(cx, |insp, cx| {
+            insp.set_references(loading_refs, cx);
+        });
+
+        // Spawn one task per FK reference.
+        for (index, fk_ref) in references.into_iter().enumerate() {
+            let connection = connection.clone();
+            let inspector = inspector_entity.clone();
+            let database = database.clone();
+            let default_schema = schema.clone();
+
+            cx.spawn(async move |_this, cx| {
+                // Use the FK's own schema if known, otherwise fall back to
+                // the current table's schema (for same-schema FKs).
+                let resolved_schema = fk_ref
+                    .target_schema
+                    .clone()
+                    .unwrap_or(default_schema.clone());
+
+                let result = cx
+                    .background_executor()
+                    .spawn(async move {
+                        connection.fetch_row_by_pk(
+                            &database,
+                            &resolved_schema,
+                            &fk_ref.target_table,
+                            &fk_ref.target_pk,
+                            &fk_ref.value,
+                        )
+                    })
+                    .await;
+
+                cx.update(|cx| {
+                    inspector.update(cx, |insp, cx| match result {
+                        Ok(row_opt) => {
+                            insp.resolve_reference(index, Ok(row_opt), cx);
+                        }
+                        Err(e) => {
+                            insp.resolve_reference(index, Err(e.to_string()), cx);
+                        }
+                    })
+                })
+                .ok();
+            })
+            .detach();
+        }
+    }
+
+    /// Convert a `CellValue` to a `dbflux_core::Value` for the inspector.
+    fn cell_to_value(
+        &self,
+        cell: &crate::ui::components::data_table::model::CellValue,
+    ) -> dbflux_core::Value {
+        use crate::ui::components::data_table::model::CellKind;
+
+        match &cell.kind {
+            CellKind::Null => dbflux_core::Value::Null,
+            CellKind::Bool(b) => dbflux_core::Value::Bool(*b),
+            CellKind::Int(i) => dbflux_core::Value::Int(*i),
+            CellKind::Float(f) => dbflux_core::Value::Float(*f),
+            CellKind::Text(s) | CellKind::Json(s) => dbflux_core::Value::Text(s.to_string()),
+            CellKind::Bytes(len) => dbflux_core::Value::Bytes(vec![0u8; *len]),
+            CellKind::AutoGenerated(s) => dbflux_core::Value::Text(s.to_string()),
+            CellKind::Unsupported(s) => dbflux_core::Value::Text(s.to_string()),
+        }
     }
 
     pub(super) fn handle_copy(&self, _window: &mut Window, cx: &mut Context<Self>) {

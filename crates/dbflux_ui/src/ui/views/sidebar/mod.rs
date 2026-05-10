@@ -624,6 +624,8 @@ pub struct Sidebar {
     scripts_drop_target: Option<DropTarget>,
     gutter_metadata: HashMap<String, GutterInfo>,
     scripts_gutter_metadata: HashMap<String, GutterInfo>,
+    /// Item ID of the currently hovered tree row (drives hover-only ⋯ button).
+    hovered_item_id: Option<SharedString>,
 }
 
 use crate::ui::components::toast::PendingToast;
@@ -816,6 +818,7 @@ impl Sidebar {
             scripts_drop_target: None,
             gutter_metadata,
             scripts_gutter_metadata,
+            hovered_item_id: None,
         }
     }
 
