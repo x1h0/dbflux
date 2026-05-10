@@ -7,6 +7,7 @@ use crate::ui::components::context_menu::MenuItem;
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{Heights, Radii, Spacing};
 use dbflux_components::primitives::{Icon, Text};
+use dbflux_components::tokens::BannerColors;
 use dbflux_components::typography::MonoMeta;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -261,6 +262,7 @@ impl TabBar {
         let id = meta.id;
         let is_active = active_id == Some(id);
         let is_executing = meta.state == DocumentState::Executing;
+        let is_dirty = meta.state == DocumentState::Modified;
         let is_drop_target = drop_target_index == Some(idx);
 
         let title = meta.title.clone();
@@ -366,6 +368,18 @@ impl TabBar {
                 is_active,
                 cx.theme(),
             )))
+            // Dirty indicator: amber dot when the document has unsaved changes
+            .when(is_dirty, |el| {
+                let dot_color = BannerColors::warning_bg(cx.theme());
+                el.child(
+                    div()
+                        .w(px(6.0))
+                        .h(px(6.0))
+                        .rounded_full()
+                        .bg(dot_color)
+                        .flex_shrink_0(),
+                )
+            })
             // Spinner or close button
             .child(self.render_tab_action(id, is_executing, cx))
     }

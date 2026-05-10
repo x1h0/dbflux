@@ -74,7 +74,25 @@ impl Render for Workspace {
         let child_picker_open = self.sidebar.read(cx).has_child_picker_open();
 
         // Linux CSD title bar: render only when the compositor has negotiated CSD mode.
-        let linux_title_bar = platform::render_csd_title_bar(window, cx, "DBFlux");
+        // Include the active connection name as a breadcrumb when connected.
+        let crumbs: Vec<platform::TitleCrumb> = {
+            let connection_name = self
+                .app_state
+                .read(cx)
+                .active_connection()
+                .map(|c| c.profile.name.clone());
+
+            if let Some(name) = connection_name {
+                vec![platform::TitleCrumb {
+                    icon: Some(crate::ui::icons::AppIcon::Database),
+                    label: name.into(),
+                }]
+            } else {
+                vec![]
+            }
+        };
+        let linux_title_bar =
+            platform::render_csd_title_bar_with_crumbs(window, cx, "DBFlux", &crumbs);
 
         let right_pane = if has_tabs {
             let workspace = cx.entity().clone();
