@@ -30,7 +30,6 @@ use gpui_component::ActiveTheme;
 use gpui_component::highlighter::{
     Diagnostic as InputDiagnostic, DiagnosticSeverity as InputDiagnosticSeverity,
 };
-use gpui_component::resizable::{resizable_panel, v_resizable};
 use lsp_types::{
     CompletionContext, CompletionItem, CompletionItemKind, CompletionResponse, CompletionTextEdit,
     InsertTextFormat, Position as LspPosition, Range as LspRange, TextEdit,
@@ -91,6 +90,24 @@ enum ContextBarSlot {
     SourceTargets,
     SourceStart,
     SourceEnd,
+}
+
+/// Counts lines added and removed between two text strings using a set-based
+/// line delta. Lines in `current` not in `original` are "added"; lines in
+/// `original` not in `current` are "removed". Reorderings are counted as both
+/// an add and a remove — good enough for a change-summary label.
+pub(crate) fn diff_stats_from_pair(original: &str, current: &str) -> (usize, usize) {
+    if original == current {
+        return (0, 0);
+    }
+
+    let original_lines: std::collections::HashSet<&str> = original.lines().collect();
+    let current_lines: std::collections::HashSet<&str> = current.lines().collect();
+
+    let added = current_lines.difference(&original_lines).count();
+    let removed = original_lines.difference(&current_lines).count();
+
+    (added, removed)
 }
 
 fn build_source_window_context(
@@ -790,6 +807,25 @@ impl CodeDocument {
         current != self.original_content
     }
 
+    /// Counts lines added and removed relative to `original_content`.
+    pub fn diff_stats(&self, cx: &App) -> (usize, usize) {
+        let current = self.input_state.read(cx).value().to_string();
+        diff_stats_from_pair(&self.original_content, &current)
+    }
+
+    /// Short summary of pending edits for the dirty-dot tooltip.
+    ///
+    /// Returns `None` when the document has no unsaved changes.
+    pub fn change_summary(&self, cx: &App) -> Option<String> {
+        let (added, removed) = self.diff_stats(cx);
+
+        if added == 0 && removed == 0 {
+            None
+        } else {
+            Some(format!("+{}/−{} lines", added, removed))
+        }
+    }
+
     // === Command Dispatch ===
 
     /// Route commands to the history modal when it's visible.
@@ -1106,8 +1142,42 @@ impl CodeDocument {
 
 #[cfg(test)]
 mod tests {
-    use super::source_input_values_from_context;
+    use super::{diff_stats_from_pair, source_input_values_from_context};
     use dbflux_core::ExecutionSourceContext;
+
+    #[test]
+    fn diff_stats_identical_text_returns_zero() {
+        let (added, removed) = diff_stats_from_pair("SELECT 1", "SELECT 1");
+        assert_eq!(added, 0);
+        assert_eq!(removed, 0);
+    }
+
+    #[test]
+    fn diff_stats_pure_addition() {
+        let original = "SELECT 1";
+        let current = "SELECT 1\nSELECT 2\nSELECT 3";
+        let (added, removed) = diff_stats_from_pair(original, current);
+        assert_eq!(added, 2);
+        assert_eq!(removed, 0);
+    }
+
+    #[test]
+    fn diff_stats_pure_removal() {
+        let original = "SELECT 1\nSELECT 2\nSELECT 3";
+        let current = "SELECT 1";
+        let (added, removed) = diff_stats_from_pair(original, current);
+        assert_eq!(added, 0);
+        assert_eq!(removed, 2);
+    }
+
+    #[test]
+    fn diff_stats_mixed_edits() {
+        let original = "SELECT a\nSELECT b\nSELECT c";
+        let current = "SELECT a\nSELECT x\nSELECT y";
+        let (added, removed) = diff_stats_from_pair(original, current);
+        assert_eq!(added, 2);
+        assert_eq!(removed, 2);
+    }
 
     #[test]
     fn source_input_values_restore_start_and_end_strings() {

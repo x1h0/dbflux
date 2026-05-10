@@ -955,6 +955,26 @@ impl CodeDocument {
         self.run_query_impl(true, window, cx);
     }
 
+    /// Prepends `EXPLAIN ` to the active query and executes it.
+    ///
+    /// Uses the selected text when a selection exists, otherwise the full buffer.
+    /// The result appears in the same Results panel as a regular query.
+    pub fn run_explain(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.query_language.supports_connection_context() {
+            cx.toast_warning("Explain is not available for scripts", window);
+            return;
+        }
+
+        let base_query = self.selected_or_full_query(window, cx);
+        if base_query.trim().is_empty() {
+            cx.toast_warning("Enter a query to explain", window);
+            return;
+        }
+
+        let explain_query = format!("EXPLAIN {}", base_query);
+        self.run_query_text(explain_query, false, window, cx);
+    }
+
     pub fn close_result_tab(&mut self, tab_id: Uuid, cx: &mut Context<Self>) {
         let Some(index) = self.result_tabs.iter().position(|t| t.id == tab_id) else {
             return;

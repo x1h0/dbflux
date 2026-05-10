@@ -311,21 +311,24 @@ impl Render for DataGridPanel {
                     .when(
                         matches!(content_mode, DataGridContentMode::EmptyFallback),
                         |d| {
-                            d.flex().items_center().justify_center().child(if is_loading {
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(Spacing::SM)
-                                    .child(
-                                        Icon::new(AppIcon::Loader)
-                                            .size(px(12.0))
-                                            .color(theme.muted_foreground),
-                                    )
-                                    .child(Text::muted("Loading…"))
-                                    .into_any_element()
-                            } else {
-                                Text::muted("No data").into_any_element()
-                            })
+                            d.flex()
+                                .items_center()
+                                .justify_center()
+                                .child(if is_loading {
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap(Spacing::SM)
+                                        .child(
+                                            Icon::new(AppIcon::Loader)
+                                                .size(px(12.0))
+                                                .color(theme.muted_foreground),
+                                        )
+                                        .child(Text::muted("Loading…"))
+                                        .into_any_element()
+                                } else {
+                                    Text::muted("No data").into_any_element()
+                                })
                         },
                     )
                     .when(

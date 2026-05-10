@@ -1348,10 +1348,8 @@ impl Sidebar {
                 .children(constraint_children),
             ]
         } else {
-            let table_loading_id = format!(
-                "T|{}|{}|{}_loading",
-                profile_id, schema_name, table.name
-            );
+            let table_loading_id =
+                format!("T|{}|{}|{}_loading", profile_id, schema_name, table.name);
             vec![TreeItem::new(table_loading_id, "Loading…".to_string())]
         };
 

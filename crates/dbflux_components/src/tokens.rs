@@ -29,6 +29,8 @@ impl Heights {
     /// Height of the active-tab indicator stripe — a 1 px absolutely-positioned
     /// child div rendered at the bottom edge of the active tab item.
     pub const TAB_STRIPE: Pixels = px(1.0);
+    /// Fixed height of the SQL results panel in Split layout.
+    pub const RESULTS_PANEL: Pixels = px(220.0);
 }
 
 pub struct FontSizes;

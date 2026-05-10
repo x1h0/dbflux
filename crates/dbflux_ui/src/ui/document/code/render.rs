@@ -3,9 +3,11 @@ use dbflux_components::composites::split_toolbar_action;
 use dbflux_components::controls::Button;
 use dbflux_components::helpers::text_color_for_active;
 use dbflux_components::primitives::{
-    Badge, BadgeVariant, Icon, Text, focus_frame, overlay_bg, surface_panel,
+    Badge, BadgeVariant, BannerBlock, BannerVariant, Icon, Text, focus_frame, overlay_bg,
+    surface_panel,
 };
 use gpui_component::scroll::ScrollableElement;
+use gpui_component::tooltip::Tooltip;
 
 fn code_pane_is_focused(focus_mode: SqlQueryFocus, pane: SqlQueryFocus) -> bool {
     focus_mode == pane
@@ -38,7 +40,15 @@ impl CodeDocument {
         };
 
         let btn_bg = theme.secondary;
+        let secondary_hover = theme.secondary_hover;
         let primary = theme.primary;
+        let accent = theme.accent;
+        let fg = theme.foreground;
+        let bg = theme.background;
+        let muted_fg = theme.muted_foreground;
+        let danger = theme.danger;
+        let border = theme.border;
+        let tab_bar = theme.tab_bar;
 
         let execution_time = self
             .active_execution_index
@@ -62,8 +72,8 @@ impl CodeDocument {
             .px(Spacing::SM)
             .py(Spacing::XS)
             .border_b_1()
-            .border_color(theme.border)
-            .bg(theme.tab_bar)
+            .border_color(border)
+            .bg(tab_bar)
             .child(
                 div()
                     .id("run-query-btn")
@@ -75,7 +85,7 @@ impl CodeDocument {
                     .rounded(Radii::SM)
                     .cursor_pointer()
                     .when(run_enabled, |el| {
-                        el.bg(if is_executing { theme.danger } else { primary })
+                        el.bg(if is_executing { danger } else { primary })
                             .hover(|d| d.opacity(0.9))
                     })
                     .when(!run_enabled, |el| el.bg(btn_bg).cursor_not_allowed())
@@ -87,12 +97,12 @@ impl CodeDocument {
                         }
                     }))
                     .child(Icon::new(run_icon).size(px(12.0)).color(if run_enabled {
-                        theme.background
+                        bg
                     } else {
-                        theme.muted_foreground
+                        muted_fg
                     }))
                     .child(if run_enabled {
-                        Text::caption(run_label).color(theme.background)
+                        Text::caption(run_label).color(bg)
                     } else {
                         Text::caption(run_label).muted_foreground()
                     }),
@@ -109,15 +119,11 @@ impl CodeDocument {
                         .rounded(Radii::SM)
                         .cursor_pointer()
                         .bg(btn_bg)
-                        .hover(|d| d.bg(theme.secondary_hover))
+                        .hover(|d| d.bg(secondary_hover))
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.run_query_in_new_tab(window, cx);
                         }))
-                        .child(
-                            Icon::new(AppIcon::SquarePlay)
-                                .size(px(12.0))
-                                .color(theme.foreground),
-                        )
+                        .child(Icon::new(AppIcon::SquarePlay).size(px(12.0)).color(fg))
                         .child(Text::body("New tab").font_size(FontSizes::SM)),
                 )
                 .child(
@@ -131,19 +137,16 @@ impl CodeDocument {
                         .rounded(Radii::SM)
                         .cursor_pointer()
                         .bg(btn_bg)
-                        .hover(|d| d.bg(theme.secondary_hover))
+                        .hover(|d| d.bg(secondary_hover))
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.run_selected_query(window, cx);
                         }))
-                        .child(
-                            Icon::new(AppIcon::ScrollText)
-                                .size(px(12.0))
-                                .color(theme.foreground),
-                        )
+                        .child(Icon::new(AppIcon::ScrollText).size(px(12.0)).color(fg))
                         .child(Text::body("Selection").font_size(FontSizes::SM)),
                 )
             })
             .child(Text::caption(shortcut_hint))
+            .child(self.render_secondary_actions(cx))
             .when(is_db_language, |el| {
                 el.child(split_toolbar_action(
                     div()
@@ -154,7 +157,7 @@ impl CodeDocument {
                         .items_center()
                         .gap_1()
                         .cursor_pointer()
-                        .hover(|d| d.bg(theme.accent.opacity(0.08)))
+                        .hover(|d| d.bg(accent.opacity(0.08)))
                         .on_click(cx.listener(|this, _, window, cx| {
                             if this.runner.is_primary_active() {
                                 this.cancel_query(cx);
@@ -162,11 +165,7 @@ impl CodeDocument {
                                 this.run_query(window, cx);
                             }
                         }))
-                        .child(
-                            Icon::new(refresh_icon)
-                                .size(px(12.0))
-                                .color(theme.foreground),
-                        )
+                        .child(Icon::new(refresh_icon).size(px(12.0)).color(fg))
                         .child(Text::body(refresh_label)),
                     div()
                         .id("sql-refresh-control")
@@ -181,6 +180,111 @@ impl CodeDocument {
                 el.child(Text::caption(format!("{:.2}s", duration.as_secs_f64())))
             })
             .when(self.show_saved_label, |el| el.child(Text::caption("Saved")))
+    }
+
+    /// Renders the secondary action buttons: Save, Format, History, Explain.
+    fn render_secondary_actions(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let secondary = theme.secondary;
+        let secondary_hover = theme.secondary_hover;
+        let muted_fg = theme.muted_foreground;
+        let fg = theme.foreground;
+
+        let is_file_backed = self.is_file_backed();
+        let is_db_language = self.query_language.supports_connection_context();
+
+        div()
+            .flex()
+            .items_center()
+            .gap(Spacing::SM)
+            // Save button
+            .child(
+                div()
+                    .id("toolbar-save-btn")
+                    .h(Heights::BUTTON)
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .px(Spacing::SM)
+                    .rounded(Radii::SM)
+                    .cursor_pointer()
+                    .bg(secondary)
+                    .hover(|d| d.bg(secondary_hover))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        if this.is_file_backed() {
+                            this.save_file(window, cx);
+                        } else {
+                            this.save_file_as(window, cx);
+                        }
+                    }))
+                    .tooltip(|window, cx| Tooltip::new("Save").build(window, cx))
+                    .child(
+                        Icon::new(AppIcon::Save)
+                            .size(px(12.0))
+                            .color(if is_file_backed { fg } else { muted_fg }),
+                    ),
+            )
+            // Format button — no SQL formatter available; disabled with tooltip
+            .child(
+                div()
+                    .id("toolbar-format-btn")
+                    .h(Heights::BUTTON)
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .px(Spacing::SM)
+                    .rounded(Radii::SM)
+                    .cursor_not_allowed()
+                    .bg(secondary)
+                    .tooltip(|window, cx| Tooltip::new("Formatter unavailable").build(window, cx))
+                    .child(Icon::new(AppIcon::Zap).size(px(12.0)).color(muted_fg)),
+            )
+            // History button — opens history modal
+            .child(
+                div()
+                    .id("toolbar-history-btn")
+                    .h(Heights::BUTTON)
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .px(Spacing::SM)
+                    .rounded(Radii::SM)
+                    .cursor_pointer()
+                    .bg(secondary)
+                    .hover(|d| d.bg(secondary_hover))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        let is_open = this.history_modal.read(cx).is_visible();
+                        if is_open {
+                            this.history_modal.update(cx, |modal, cx| modal.close(cx));
+                        } else {
+                            this.history_modal
+                                .update(cx, |modal, cx| modal.open(window, cx));
+                        }
+                    }))
+                    .tooltip(|window, cx| Tooltip::new("Query history").build(window, cx))
+                    .child(Icon::new(AppIcon::History).size(px(12.0)).color(fg)),
+            )
+            // Explain button — prepends EXPLAIN to the query and runs it (DB languages only)
+            .when(is_db_language, |el| {
+                el.child(
+                    div()
+                        .id("toolbar-explain-btn")
+                        .h(Heights::BUTTON)
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .px(Spacing::SM)
+                        .rounded(Radii::SM)
+                        .cursor_pointer()
+                        .bg(secondary)
+                        .hover(|d| d.bg(secondary_hover))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.run_explain(window, cx);
+                        }))
+                        .tooltip(|window, cx| Tooltip::new("Explain query").build(window, cx))
+                        .child(Icon::new(AppIcon::Info).size(px(12.0)).color(fg)),
+                )
+            })
     }
 
     fn render_editor(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -223,6 +327,7 @@ impl CodeDocument {
         let is_focused = code_pane_is_focused(self.focus_mode, SqlQueryFocus::Results);
         let bg = cx.theme().background;
         let accent = cx.theme().accent;
+        let is_executing = self.state == DocumentState::Executing;
 
         let error = self
             .active_execution_index
@@ -255,9 +360,14 @@ impl CodeDocument {
                         .when(!has_live_output, |el| {
                             el.when_some(active_grid, |el, grid| el.child(grid))
                         })
-                        .when(!has_live_output && !has_grid && !has_error, |el| {
-                            el.child(self.render_empty_results(cx))
-                        }),
+                        .when(
+                            !has_live_output && !has_grid && !has_error && is_executing,
+                            |el| el.child(self.render_loading_results(cx)),
+                        )
+                        .when(
+                            !has_live_output && !has_grid && !has_error && !is_executing,
+                            |el| el.child(self.render_empty_results(cx)),
+                        ),
                 ),
             cx,
         )
@@ -478,21 +588,22 @@ impl CodeDocument {
             )
     }
 
+    fn render_loading_results(&self, _cx: &mut Context<Self>) -> impl IntoElement {
+        let icon = Icon::new(AppIcon::Loader).size(px(12.0));
+        div().p(Spacing::MD).size_full().child(
+            BannerBlock::new(BannerVariant::Info, "Running…")
+                .with_icon(icon)
+                .with_body("Query in progress"),
+        )
+    }
+
     fn render_error_state(&self, error: &str, _cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .items_center()
-            .justify_center()
-            .gap_2()
-            .child(Text::label("Query Error").danger())
-            .child(
-                div()
-                    .max_w(px(500.0))
-                    .text_center()
-                    .child(Text::body(error.to_string()).muted_foreground()),
-            )
+        let icon = Icon::new(AppIcon::CircleX).size(px(16.0));
+        div().p(Spacing::MD).size_full().overflow_y_hidden().child(
+            BannerBlock::new(BannerVariant::Danger, "Query Error")
+                .with_icon(icon)
+                .with_pre(error.to_string()),
+        )
     }
 
     fn render_empty_results(&self, _cx: &mut Context<Self>) -> impl IntoElement {
@@ -656,22 +767,28 @@ impl Render for CodeDocument {
                     .min_h_0()
                     .overflow_hidden()
                     .child(match self.layout {
-                        SqlQueryLayout::Split => {
-                            v_resizable(SharedString::from(format!("sql-split-{}", self.id.0)))
-                                .child(
-                                    resizable_panel()
-                                        .size(px(200.0))
-                                        .size_range(px(100.0)..px(1000.0))
-                                        .child(editor_view),
-                                )
-                                .child(
-                                    resizable_panel()
-                                        .size(px(200.0))
-                                        .size_range(px(100.0)..px(1000.0))
-                                        .child(results_view),
-                                )
-                                .into_any_element()
-                        }
+                        SqlQueryLayout::Split => div()
+                            .flex()
+                            .flex_col()
+                            .size_full()
+                            .min_h_0()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_h_0()
+                                    .overflow_hidden()
+                                    .child(editor_view),
+                            )
+                            .child(
+                                div()
+                                    .h(Heights::RESULTS_PANEL)
+                                    .flex_shrink_0()
+                                    .border_t_1()
+                                    .border_color(cx.theme().border)
+                                    .overflow_hidden()
+                                    .child(results_view),
+                            )
+                            .into_any_element(),
 
                         SqlQueryLayout::EditorOnly => editor_view,
 
