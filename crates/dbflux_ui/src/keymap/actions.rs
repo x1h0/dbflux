@@ -1,4 +1,4 @@
-use gpui::actions;
+use gpui::{KeyBinding, actions};
 
 actions!(
     dbflux,
@@ -66,6 +66,22 @@ actions!(
         SaveFileAs,
     ]
 );
+
+/// Keybindings that shadow `gpui-component` input defaults inside the "Input"
+/// context so that Ctrl+Enter / Ctrl+Shift+Enter run the active query instead of
+/// inserting a newline.
+///
+/// `gpui-component` binds `secondary-enter` (== Ctrl+Enter on Linux/Windows,
+/// Cmd+Enter on macOS) to its internal `Enter` action, which in multi-line mode
+/// inserts a newline. Registering these bindings after `gpui_component::init`
+/// makes them take precedence at the same context depth.
+pub fn input_context_keybindings() -> Vec<KeyBinding> {
+    let ctx = Some("Input");
+    vec![
+        KeyBinding::new("ctrl-enter", RunQuery, ctx),
+        KeyBinding::new("ctrl-shift-enter", RunQueryInNewTab, ctx),
+    ]
+}
 
 #[cfg(test)]
 mod tests {
