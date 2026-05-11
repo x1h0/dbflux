@@ -906,7 +906,52 @@ impl CodeDocument {
                 let error_msg = e.to_string();
                 record.error = Some(error_msg.clone());
                 self.state = DocumentState::Error;
-                cx.toast_error(format!("Query failed: {}", error_msg), window);
+
+                let title: SharedString = if is_script {
+                    "Script failed".into()
+                } else {
+                    "Query failed".into()
+                };
+                let now = dbflux_core::chrono::Local::now()
+                    .format("%H:%M:%S")
+                    .to_string();
+                let copy_payload = error_msg.clone();
+
+                // Pull structured info (code, message, detail, hint) from
+                // FormattedError when the driver provided it; fall back to
+                // the to_string() form otherwise.
+                let mut toast = match e.formatted() {
+                    Some(f) => {
+                        let mut t = crate::ui::components::toast::Toast::error(title)
+                            .meta_right(now)
+                            .body(f.message.clone());
+                        if let Some(code) = f.code.as_ref() {
+                            t = t.subtitle(format!("ERROR {}", code));
+                        }
+                        if let Some(detail) = f.detail.as_ref() {
+                            t = t.details(detail.clone());
+                        }
+                        if let Some(hint) = f.hint.as_ref() {
+                            t = t.code_block(format!("HINT: {}", hint));
+                        }
+                        t.collapsible()
+                    }
+                    None => crate::ui::components::toast::Toast::error(title)
+                        .meta_right(now)
+                        .body(error_msg.clone()),
+                };
+
+                toast = toast.action(
+                    crate::ui::components::toast::ToastAction::new("copy-error", "Copy error")
+                        .primary()
+                        .on_click(move |cx: &mut App| {
+                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                copy_payload.clone(),
+                            ));
+                        }),
+                );
+                toast.push(cx);
+                let _ = window;
 
                 // Emit audit event for failed execution
                 let summary = if is_script {
