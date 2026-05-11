@@ -184,17 +184,20 @@ impl Render for RowInspector {
         let close_entity = cx.entity().clone();
         let has_fk = snapshot.cells.iter().any(|c| c.is_foreign_key);
 
-        // Grip is a flex sibling at the left edge (not absolute) so it
-        // participates in hit testing and layout reliably. Mouse-up on the
-        // inspector root also clears `is_resizing` to recover from drags
-        // that release outside the 6px grip column.
+        // Resize grip — same pattern as crates/dbflux_ui/src/ui/dock/
+        // sidebar_dock.rs::render_grip: all three mouse handlers live on
+        // the grip element; the panel width updates each move event so the
+        // grip stays under the cursor and mouse_move/up keep firing.
+        const GRIP_WIDTH: Pixels = px(4.0);
+        let content_width = self.width - GRIP_WIDTH;
         let grip = div()
             .id("inspector-grip")
             .h_full()
-            .w(px(6.0))
+            .w(GRIP_WIDTH)
             .flex_shrink_0()
             .cursor_col_resize()
             .hover(|el| el.bg(theme.accent.opacity(0.3)))
+            .when(self.is_resizing, |el| el.bg(theme.primary))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, event: &MouseDownEvent, _, cx| {
@@ -214,13 +217,22 @@ impl Render for RowInspector {
                 let Some(start_width) = this.resize_start_width else {
                     return;
                 };
-                // Right-anchored panel: dragging right shrinks.
+                // Right-anchored panel: dragging the grip right shrinks.
                 let delta = event.position.x - start_x;
                 let new_width =
                     (start_width - delta).clamp(INSPECTOR_MIN_WIDTH, INSPECTOR_MAX_WIDTH);
                 this.width = new_width;
                 cx.notify();
-            }));
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    this.is_resizing = false;
+                    this.resize_start_x = None;
+                    this.resize_start_width = None;
+                    cx.notify();
+                }),
+            );
 
         div()
             .absolute()
@@ -234,19 +246,6 @@ impl Render for RowInspector {
             .border_l_1()
             .border_color(theme.border)
             .track_focus(&self.focus_handle)
-            // Catch mouse-up anywhere over the inspector to release a drag
-            // even if the cursor outran the 6px grip column.
-            .on_mouse_up(
-                MouseButton::Left,
-                cx.listener(|this, _, _, cx| {
-                    if this.is_resizing {
-                        this.is_resizing = false;
-                        this.resize_start_x = None;
-                        this.resize_start_width = None;
-                        cx.notify();
-                    }
-                }),
-            )
             // Eat scroll events: without this the wheel scrolls the table
             // sitting behind the overlay.
             .on_scroll_wheel(|_, _, cx| {
@@ -255,7 +254,8 @@ impl Render for RowInspector {
             .child(grip)
             .child(
                 div()
-                    .flex_1()
+                    .h_full()
+                    .w(content_width)
                     .flex()
                     .flex_col()
                     .overflow_hidden()
