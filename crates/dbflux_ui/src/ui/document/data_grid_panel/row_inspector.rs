@@ -184,6 +184,44 @@ impl Render for RowInspector {
         let close_entity = cx.entity().clone();
         let has_fk = snapshot.cells.iter().any(|c| c.is_foreign_key);
 
+        // Grip is a flex sibling at the left edge (not absolute) so it
+        // participates in hit testing and layout reliably. Mouse-up on the
+        // inspector root also clears `is_resizing` to recover from drags
+        // that release outside the 6px grip column.
+        let grip = div()
+            .id("inspector-grip")
+            .h_full()
+            .w(px(6.0))
+            .flex_shrink_0()
+            .cursor_col_resize()
+            .hover(|el| el.bg(theme.accent.opacity(0.3)))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                    this.is_resizing = true;
+                    this.resize_start_x = Some(event.position.x);
+                    this.resize_start_width = Some(this.width);
+                    cx.notify();
+                }),
+            )
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
+                if !this.is_resizing {
+                    return;
+                }
+                let Some(start_x) = this.resize_start_x else {
+                    return;
+                };
+                let Some(start_width) = this.resize_start_width else {
+                    return;
+                };
+                // Right-anchored panel: dragging right shrinks.
+                let delta = event.position.x - start_x;
+                let new_width =
+                    (start_width - delta).clamp(INSPECTOR_MIN_WIDTH, INSPECTOR_MAX_WIDTH);
+                this.width = new_width;
+                cx.notify();
+            }));
+
         div()
             .absolute()
             .right_0()
@@ -191,128 +229,98 @@ impl Render for RowInspector {
             .bottom_0()
             .w(self.width)
             .flex()
-            .flex_col()
+            .flex_row()
             .bg(theme.background)
             .border_l_1()
             .border_color(theme.border)
             .track_focus(&self.focus_handle)
-            // Left-edge resize handle. Uses the same self-tracking pattern as
-            // sidebar_dock: width updates each move event keep the grip under
-            // the cursor, so on_mouse_move keeps firing during the drag.
-            .child(
-                div()
-                    .id("inspector-grip")
-                    .absolute()
-                    .left(px(-2.0))
-                    .top_0()
-                    .bottom_0()
-                    .w(px(6.0))
-                    .cursor_col_resize()
-                    .hover(|el| el.bg(theme.accent.opacity(0.3)))
-                    .when(self.is_resizing, |el| el.bg(theme.primary))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, event: &MouseDownEvent, _, cx| {
-                            this.is_resizing = true;
-                            this.resize_start_x = Some(event.position.x);
-                            this.resize_start_width = Some(this.width);
-                            cx.notify();
-                        }),
-                    )
-                    .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
-                        if !this.is_resizing {
-                            return;
-                        }
-                        let Some(start_x) = this.resize_start_x else {
-                            return;
-                        };
-                        let Some(start_width) = this.resize_start_width else {
-                            return;
-                        };
-                        // Inspector is right-anchored: dragging the grip
-                        // right (positive delta) shrinks the panel.
-                        let delta = event.position.x - start_x;
-                        let new_width =
-                            (start_width - delta).clamp(INSPECTOR_MIN_WIDTH, INSPECTOR_MAX_WIDTH);
-                        this.width = new_width;
+            // Catch mouse-up anywhere over the inspector to release a drag
+            // even if the cursor outran the 6px grip column.
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    if this.is_resizing {
+                        this.is_resizing = false;
+                        this.resize_start_x = None;
+                        this.resize_start_width = None;
                         cx.notify();
-                    }))
-                    .on_mouse_up(
-                        MouseButton::Left,
-                        cx.listener(|this, _, _, cx| {
-                            this.is_resizing = false;
-                            this.resize_start_x = None;
-                            this.resize_start_width = None;
-                            cx.notify();
-                        }),
-                    ),
+                    }
+                }),
             )
-            // Header
+            .child(grip)
             .child(
                 div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .h(Heights::TOOLBAR)
-                    .px(Spacing::SM)
-                    .border_b_1()
-                    .border_color(theme.border)
-                    .child(Text::caption(snapshot.row_label.clone()).color(theme.muted_foreground))
-                    .child(
-                        div()
-                            .id("inspector-close")
-                            .w(px(20.0))
-                            .h(px(20.0))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded(Radii::SM)
-                            .cursor_pointer()
-                            .text_color(theme.muted_foreground)
-                            .hover(|d| d.bg(theme.secondary).text_color(theme.foreground))
-                            .on_click(move |_, _, cx| {
-                                close_entity.update(cx, |inspector, cx| {
-                                    inspector.request_close(cx);
-                                });
-                            })
-                            .child("\u{00d7}"),
-                    ),
-            )
-            // Scrollable body
-            .child(
-                div()
-                    .id("inspector-body")
                     .flex_1()
-                    .overflow_y_scroll()
                     .flex()
                     .flex_col()
-                    // ROW section
-                    .child(render_section_header("ROW", theme))
-                    .children(
-                        snapshot
-                            .cells
-                            .iter()
-                            .map(|cell| render_row_entry(cell, theme)),
-                    )
-                    // REFERENCES section — only when there are FK columns
-                    .when(has_fk, |d| {
-                        d.child(render_section_header("REFERENCES", theme)).child(
-                            render_references_section(
-                                &self.references,
-                                self.references_ready,
-                                theme,
+                    .overflow_hidden()
+                    // Header
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .h(Heights::TOOLBAR)
+                            .px(Spacing::SM)
+                            .border_b_1()
+                            .border_color(theme.border)
+                            .child(
+                                Text::caption(snapshot.row_label.clone())
+                                    .color(theme.muted_foreground),
+                            )
+                            .child(
+                                div()
+                                    .id("inspector-close")
+                                    .w(px(20.0))
+                                    .h(px(20.0))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .rounded(Radii::SM)
+                                    .cursor_pointer()
+                                    .text_color(theme.muted_foreground)
+                                    .hover(|d| d.bg(theme.secondary).text_color(theme.foreground))
+                                    .on_click(move |_, _, cx| {
+                                        close_entity.update(cx, |inspector, cx| {
+                                            inspector.request_close(cx);
+                                        });
+                                    })
+                                    .child("\u{00d7}"),
                             ),
-                        )
-                    })
-                    // COLUMN section — shows metadata for the focused column
-                    .child(render_section_header("COLUMN", theme))
-                    .when_some(
-                        snapshot.cells.get(
-                            snapshot
-                                .focused_col
-                                .min(snapshot.cells.len().saturating_sub(1)),
-                        ),
-                        |d, cell| d.child(render_column_metadata(cell, theme)),
+                    )
+                    // Scrollable body
+                    .child(
+                        div()
+                            .id("inspector-body")
+                            .flex_1()
+                            .overflow_y_scroll()
+                            .flex()
+                            .flex_col()
+                            .child(render_section_header("ROW", theme))
+                            .children(
+                                snapshot
+                                    .cells
+                                    .iter()
+                                    .map(|cell| render_row_entry(cell, theme)),
+                            )
+                            .when(has_fk, |d| {
+                                d.child(render_section_header("REFERENCES", theme)).child(
+                                    render_references_section(
+                                        &self.references,
+                                        self.references_ready,
+                                        theme,
+                                    ),
+                                )
+                            })
+                            .child(render_section_header("COLUMN", theme))
+                            .when_some(
+                                snapshot.cells.get(
+                                    snapshot
+                                        .focused_col
+                                        .min(snapshot.cells.len().saturating_sub(1)),
+                                ),
+                                |d, cell| d.child(render_column_metadata(cell, theme)),
+                            ),
                     ),
             )
     }
@@ -461,12 +469,15 @@ fn render_fk_reference_entry(
         .flex_col()
         .border_b_1()
         .border_color(theme.border.opacity(0.5))
-        // Header line
+        // Header line — wraps for long FK target strings.
         .child(
             div()
+                .w_full()
                 .px(Spacing::SM)
                 .py(Spacing::XS)
-                .child(Text::caption(header_label).color(theme.muted_foreground)),
+                .text_color(theme.muted_foreground)
+                .text_size(dbflux_components::tokens::FontSizes::XS)
+                .child(SharedString::from(header_label)),
         )
         // Body: resolution state
         .child(match &fk_ref.row {
@@ -487,9 +498,15 @@ fn render_fk_reference_entry(
                 .into_any_element(),
 
             LoadingState::Failed { message } => div()
+                .w_full()
                 .px(Spacing::SM)
                 .py(Spacing::XS)
-                .child(BannerBlock::new(BannerVariant::Danger, message.clone()))
+                .text_color(theme.danger.opacity(0.85))
+                .text_size(dbflux_components::tokens::FontSizes::XS)
+                // Inline error: muted danger text that wraps. The full
+                // BannerBlock variant is overkill inside the narrow
+                // inspector and breaks the layout for long server errors.
+                .child(SharedString::from(message.to_string()))
                 .into_any_element(),
 
             LoadingState::Loaded(map) if map.is_empty() => div()

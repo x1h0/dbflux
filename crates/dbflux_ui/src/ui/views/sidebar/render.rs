@@ -14,7 +14,10 @@ fn sidebar_tab_text(label: &'static str, active: bool, focused: bool, color: Hsl
         FontWeight::MEDIUM
     };
 
-    MonoCaption::new(label).font_weight(weight).color(color)
+    MonoCaption::new(label)
+        .font_weight(weight)
+        .color(color)
+        .font_size(FontSizes::SM)
 }
 
 impl Sidebar {
@@ -45,21 +48,21 @@ impl Sidebar {
             }
         };
 
-        // Compact tab strip: uppercase mono caption, active gets a 2px
-        // primary underline, no hover background (per design).
+        // Tab strip: uppercase mono caption, active gets a 2px primary
+        // underline, no hover background (per design).
         div()
             .flex()
             .items_center()
             .justify_between()
-            .px(Spacing::SM)
-            .h(px(28.0))
+            .px(Spacing::MD)
+            .h(px(40.0))
             .border_b_1()
             .border_color(theme.border)
             .child(
                 div()
                     .flex()
                     .items_center()
-                    .gap(Spacing::MD)
+                    .gap(Spacing::LG)
                     .h_full()
                     .child(
                         div()
