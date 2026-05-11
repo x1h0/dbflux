@@ -91,7 +91,7 @@ impl Render for Workspace {
 
         if self.needs_focus_restore {
             self.needs_focus_restore = false;
-            self.focus_handle.focus(window);
+            self.set_focus(self.focus_target, window, cx);
         }
 
         let sidebar_dock = self.sidebar_dock.clone();

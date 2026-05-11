@@ -656,6 +656,10 @@ impl Render for CodeDocument {
 
         self.process_pending_auto_refresh(window, cx);
 
+        if std::mem::take(&mut self.pending_history_focus_restore) {
+            self.focus(window, cx);
+        }
+
         if let Some(error) = self.pending_error.take() {
             cx.toast_error(error, window);
         }

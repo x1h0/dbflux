@@ -7,7 +7,7 @@ use crate::keymap::{Command, ContextId};
 use crate::ui::components::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use crate::ui::components::toast::ToastExt;
 use crate::ui::icons::AppIcon;
-use crate::ui::overlays::history_modal::{HistoryModal, HistoryQuerySelected};
+use crate::ui::overlays::history_modal::{HistoryModal, HistoryModalClosed, HistoryQuerySelected};
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_core::observability::actions as audit_actions;
 use dbflux_core::observability::{
@@ -127,6 +127,7 @@ pub struct CodeDocument {
     history_modal: Entity<HistoryModal>,
     _history_subscriptions: Vec<Subscription>,
     pending_set_query: Option<HistoryQuerySelected>,
+    pending_history_focus_restore: bool,
 
     // Layout/focus
     layout: SqlQueryLayout,
@@ -280,6 +281,12 @@ impl CodeDocument {
             },
         );
 
+        let history_closed_sub =
+            cx.subscribe(&history_modal, |this, _, _: &HistoryModalClosed, cx| {
+                this.pending_history_focus_restore = true;
+                cx.notify();
+            });
+
         let runner = {
             let mut r = DocumentTaskRunner::new(app_state.clone());
             if let Some(pid) = connection_id {
@@ -400,8 +407,9 @@ impl CodeDocument {
             result_tab_counter: 0,
             run_in_new_tab: false,
             history_modal,
-            _history_subscriptions: vec![query_selected_sub],
+            _history_subscriptions: vec![query_selected_sub, history_closed_sub],
             pending_set_query: None,
+            pending_history_focus_restore: false,
             layout: SqlQueryLayout::EditorOnly,
             focus_handle: cx.focus_handle(),
             focus_mode: SqlQueryFocus::Editor,

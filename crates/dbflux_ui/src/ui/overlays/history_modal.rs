@@ -19,6 +19,9 @@ pub struct HistoryQuerySelected {
     pub saved_query_id: Option<Uuid>,
 }
 
+#[derive(Clone)]
+pub struct HistoryModalClosed;
+
 #[allow(dead_code)]
 #[derive(Clone)]
 pub struct QuerySaved {
@@ -160,9 +163,13 @@ impl HistoryModal {
     }
 
     pub fn close(&mut self, cx: &mut Context<Self>) {
+        let was_visible = self.visible;
         self.visible = false;
         self.selected_index = None;
         self.editing_id = None;
+        if was_visible {
+            cx.emit(HistoryModalClosed);
+        }
         cx.notify();
     }
 
@@ -854,6 +861,7 @@ impl Render for HistoryModal {
 }
 
 impl EventEmitter<HistoryQuerySelected> for HistoryModal {}
+impl EventEmitter<HistoryModalClosed> for HistoryModal {}
 impl EventEmitter<QuerySaved> for HistoryModal {}
 
 fn filter_history_entries(

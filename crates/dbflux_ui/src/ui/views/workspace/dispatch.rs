@@ -180,7 +180,7 @@ impl CommandDispatcher for Workspace {
             Command::Cancel => {
                 if self.command_palette.read(cx).is_visible() {
                     self.command_palette.update(cx, |p, cx| p.hide(cx));
-                    self.focus_handle.focus(window);
+                    self.set_focus(self.focus_target, window, cx);
                     return true;
                 }
 

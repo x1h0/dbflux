@@ -935,7 +935,7 @@ impl Workspace {
             self.command_palette.update(cx, |palette, cx| {
                 palette.hide(cx);
             });
-            self.focus_handle.focus(window);
+            self.set_focus(self.focus_target, window, cx);
         }
     }
 
