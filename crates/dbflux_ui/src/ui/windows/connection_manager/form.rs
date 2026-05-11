@@ -1,5 +1,5 @@
 use crate::ui::components::form_renderer;
-use crate::ui::components::toast::ToastExt;
+use crate::ui::components::toast::{Toast, now_hms};
 use crate::ui::windows::ssh_shared;
 use dbflux_core::secrecy::SecretString;
 use dbflux_core::values::ValueRef;
@@ -511,10 +511,9 @@ impl ConnectionManagerWindow {
                 .as_ref()
                 .is_none_or(|ov| ov.refresh_interval_secs.is_none())
         {
-            cx.toast_warning(
-                "Refresh interval override ignored: value must be a positive number".to_string(),
-                window,
-            );
+            Toast::warning("Refresh interval override ignored: value must be a positive number")
+                .meta_right(now_hms())
+                .push(cx);
         }
 
         if let Some(ref conn_settings) = profile.connection_settings
@@ -523,7 +522,7 @@ impl ConnectionManagerWindow {
         {
             let warnings = form_renderer::validate_values(&schema, conn_settings);
             for warning in warnings {
-                cx.toast_warning(warning, window);
+                Toast::warning(warning).meta_right(now_hms()).push(cx);
             }
         }
 

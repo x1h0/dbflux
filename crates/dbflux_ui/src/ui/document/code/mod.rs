@@ -6,7 +6,7 @@ use crate::app::{AppStateChanged, AppStateEntity};
 use crate::keymap::{Command, ContextId};
 use crate::ui::components::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use crate::ui::components::multi_select::{MultiSelect, MultiSelectChanged};
-use crate::ui::components::toast::ToastExt;
+use crate::ui::components::toast::{Toast, copy_action, now_hms};
 use crate::ui::icons::AppIcon;
 use crate::ui::overlays::history_modal::{HistoryModal, HistoryQuerySelected};
 use crate::ui::overlays::modals::schema_drift::{
@@ -463,14 +463,16 @@ impl CodeDocument {
         let refresh_policy_sub = cx.subscribe_in(
             &refresh_dropdown,
             window,
-            |this, _, event: &DropdownSelectionChanged, window, cx| {
+            |this, _, event: &DropdownSelectionChanged, _window, cx| {
                 let policy = RefreshPolicy::from_index(event.index);
 
                 if policy.is_auto() && !this.can_auto_refresh(cx) {
                     this.refresh_dropdown.update(cx, |dd, cx| {
                         dd.set_selected_index(Some(RefreshPolicy::Manual.index()), cx);
                     });
-                    cx.toast_warning("Auto-refresh blocked: query modifies data", window);
+                    Toast::warning("Auto-refresh blocked: query modifies data")
+                        .meta_right(now_hms())
+                        .push(cx);
                     return;
                 }
 

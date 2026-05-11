@@ -132,7 +132,9 @@ impl CodeDocument {
 
     pub fn run_selected_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(query) = self.selected_query(window, cx) else {
-            cx.toast_warning("Select query text to run", window);
+            Toast::warning("Select query text to run")
+                .meta_right(now_hms())
+                .push(cx);
             return;
         };
 
@@ -153,11 +155,13 @@ impl CodeDocument {
         &mut self,
         query: String,
         in_new_tab: bool,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if query.trim().is_empty() {
-            cx.toast_warning("Enter a query to run", window);
+            Toast::warning("Enter a query to run")
+                .meta_right(now_hms())
+                .push(cx);
             return;
         }
 
@@ -197,7 +201,11 @@ impl CodeDocument {
                     return;
                 }
                 DangerousAction::Block(msg) => {
-                    cx.toast_error(msg, window);
+                    let toast_msg = msg.to_string();
+                    Toast::error(toast_msg.clone())
+                        .meta_right(now_hms())
+                        .action(copy_action(toast_msg))
+                        .push(cx);
                     return;
                 }
             }
@@ -214,11 +222,19 @@ impl CodeDocument {
                         Some(ref hint) => format!("{}\nHint: {}", diag.message, hint),
                         None => diag.message,
                     };
-                    cx.toast_error(msg, window);
+                    let toast_msg = msg.to_string();
+                    Toast::error(toast_msg.clone())
+                        .meta_right(now_hms())
+                        .action(copy_action(toast_msg))
+                        .push(cx);
                     return;
                 }
                 ValidationResult::WrongLanguage { message, .. } => {
-                    cx.toast_error(message, window);
+                    let toast_msg = message.to_string();
+                    Toast::error(toast_msg.clone())
+                        .meta_right(now_hms())
+                        .action(copy_action(toast_msg))
+                        .push(cx);
                     return;
                 }
             }
@@ -231,7 +247,11 @@ impl CodeDocument {
                 }
                 Err(message) => {
                     self.exec_ctx.source = None;
-                    cx.toast_error(message, window);
+                    let toast_msg = message.to_string();
+                    Toast::error(toast_msg.clone())
+                        .meta_right(now_hms())
+                        .action(copy_action(toast_msg))
+                        .push(cx);
                     return;
                 }
             }
@@ -381,18 +401,24 @@ impl CodeDocument {
         &mut self,
         query: String,
         in_new_tab: bool,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let Some(conn_id) = self.connection_id else {
-            cx.toast_error("No active connection", window);
+            Toast::error("No active connection")
+                .meta_right(now_hms())
+                .action(copy_action("No active connection"))
+                .push(cx);
             return;
         };
 
         let (connection, active_database, task_target) = {
             let connections = self.app_state.read(cx).connections();
             let Some(connected) = connections.get(&conn_id) else {
-                cx.toast_error("Connection not found", window);
+                Toast::error("Connection not found")
+                    .meta_right(now_hms())
+                    .action(copy_action("Connection not found"))
+                    .push(cx);
                 return;
             };
 
@@ -411,10 +437,11 @@ impl CodeDocument {
                 Err(dbflux_core::ConnectionResolutionError::PendingDatabaseConnection {
                     database,
                 }) => {
-                    cx.toast_error(
-                        format!("Connecting to database '{}', please wait...", database),
-                        window,
-                    );
+                    let msg = format!("Connecting to database '{}', please wait...", database);
+                    Toast::error(msg.clone())
+                        .meta_right(now_hms())
+                        .action(copy_action(msg))
+                        .push(cx);
                     return;
                 }
             }
@@ -786,7 +813,9 @@ impl CodeDocument {
             self.refresh_dropdown.update(cx, |dd, cx| {
                 dd.set_selected_index(Some(dbflux_core::RefreshPolicy::Manual.index()), cx);
             });
-            cx.toast_warning("Auto-refresh blocked: query modifies data", window);
+            Toast::warning("Auto-refresh blocked: query modifies data")
+                .meta_right(now_hms())
+                .push(cx);
             return;
         }
 
@@ -1143,13 +1172,17 @@ impl CodeDocument {
     /// The result appears in the same Results panel as a regular query.
     pub fn run_explain(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.query_language.supports_connection_context() {
-            cx.toast_warning("Explain is not available for scripts", window);
+            Toast::warning("Explain is not available for scripts")
+                .meta_right(now_hms())
+                .push(cx);
             return;
         }
 
         let base_query = self.selected_or_full_query(window, cx);
         if base_query.trim().is_empty() {
-            cx.toast_warning("Enter a query to explain", window);
+            Toast::warning("Enter a query to explain")
+                .meta_right(now_hms())
+                .push(cx);
             return;
         }
 
@@ -1192,7 +1225,7 @@ impl CodeDocument {
             .map(|tab| tab.grid.clone())
     }
 
-    fn run_script(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn run_script(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         use dbflux_app::hook_executor::CompositeExecutor;
         use dbflux_core::{
             CancelToken, ConnectionHook, HookContext, HookExecutionMode, HookExecutor,
@@ -1201,7 +1234,9 @@ impl CodeDocument {
 
         let content = self.input_state.read(cx).value().to_string();
         if content.trim().is_empty() {
-            cx.toast_warning("Enter script content to run", window);
+            Toast::warning("Enter script content to run")
+                .meta_right(now_hms())
+                .push(cx);
             return;
         }
 

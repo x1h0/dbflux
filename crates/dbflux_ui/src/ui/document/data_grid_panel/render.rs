@@ -1,6 +1,6 @@
 use super::{DataGridPanel, DataSource, EditState, GridFocusMode, GridState, ToolbarFocus};
 use crate::ui::components::data_table::SortState as TableSortState;
-use crate::ui::components::toast::ToastExt;
+use crate::ui::components::toast::{Toast, copy_action, now_hms};
 use crate::ui::document::data_view::DataViewMode;
 use crate::ui::document::result_view::ResultViewMode;
 use crate::ui::icons::AppIcon;

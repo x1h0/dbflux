@@ -13,6 +13,7 @@ use crate::keymap::{
     self, Command, CommandDispatcher, ContextId, FocusTarget, KeymapStack, default_keymap,
     key_chord_from_gpui,
 };
+use crate::ui::components::toast::{Toast, copy_action, now_hms};
 use crate::ui::components::toast::{ToastGlobal, ToastHost};
 use crate::ui::dock::{SidebarDock, SidebarDockEvent};
 use crate::ui::document::{
@@ -643,9 +644,10 @@ impl Workspace {
                     if dbflux_core::is_openable_script(path) {
                         this.open_script_from_path(path.clone(), cx);
                     } else {
-                        use crate::ui::components::toast::ToastExt;
                         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("file");
-                        cx.toast_warning(format!("Unsupported file type: {}", name), window);
+                        Toast::warning(format!("Unsupported file type: {}", name))
+                            .meta_right(now_hms())
+                            .push(cx);
                     }
                 }
                 SidebarEvent::PipelineStarted {

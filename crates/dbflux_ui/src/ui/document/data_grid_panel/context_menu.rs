@@ -7,7 +7,7 @@ use crate::keymap::{Command, ContextId};
 use crate::ui::AsyncUpdateResultExt;
 use crate::ui::components::data_table::{ContextMenuAction, FilterOperator};
 use crate::ui::components::data_table::{HEADER_HEIGHT, ROW_HEIGHT};
-use crate::ui::components::toast::ToastExt;
+use crate::ui::components::toast::{Toast, copy_action, now_hms};
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_components::primitives::{Icon, Text, overlay_bg, surface_panel, surface_raised};
@@ -851,7 +851,10 @@ impl DataGridPanel {
             && self.result.text_body.is_none()
             && self.result.raw_bytes.is_none()
         {
-            cx.toast_error("No results to export", window);
+            Toast::error("No results to export")
+                .meta_right(now_hms())
+                .action(copy_action("No results to export"))
+                .push(cx);
             return;
         }
 
@@ -2868,7 +2871,7 @@ impl DataGridPanel {
         &mut self,
         doc_index: usize,
         document_json: &str,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         use crate::ui::overlays::document_preview_modal::DOC_INDEX_NEW;
@@ -2876,7 +2879,12 @@ impl DataGridPanel {
         let new_doc: serde_json::Value = match serde_json::from_str(document_json) {
             Ok(v) => v,
             Err(e) => {
-                cx.toast_error(format!("Invalid JSON: {}", e), window);
+                let toast_body = e.to_string();
+                Toast::error("Invalid JSON")
+                    .meta_right(now_hms())
+                    .body(toast_body.clone())
+                    .action(copy_action(format!("Invalid JSON: {}", toast_body)))
+                    .push(cx);
                 return;
             }
         };
@@ -2901,14 +2909,20 @@ impl DataGridPanel {
             };
 
             let Some(conn) = conn else {
-                cx.toast_error("Connection not available", window);
+                Toast::error("Connection not available")
+                    .meta_right(now_hms())
+                    .action(copy_action("Connection not available"))
+                    .push(cx);
                 return;
             };
 
             let doc_map = match new_doc {
                 serde_json::Value::Object(m) => m,
                 _ => {
-                    cx.toast_error("Document must be a JSON object", window);
+                    Toast::error("Document must be a JSON object")
+                        .meta_right(now_hms())
+                        .action(copy_action("Document must be a JSON object"))
+                        .push(cx);
                     return;
                 }
             };
@@ -2960,14 +2974,20 @@ impl DataGridPanel {
             match new_doc.get("_id") {
                 Some(id) => DocumentFilter::new(serde_json::json!({"_id": id})),
                 None => {
-                    cx.toast_error("Document must have an _id field", window);
+                    Toast::error("Document must have an _id field")
+                        .meta_right(now_hms())
+                        .action(copy_action("Document must have an _id field"))
+                        .push(cx);
                     return;
                 }
             }
         } else {
             // Extract PK values from the current row
             let Some(table_state) = &self.table_state else {
-                cx.toast_error("Table state not available", window);
+                Toast::error("Table state not available")
+                    .meta_right(now_hms())
+                    .action(copy_action("Table state not available"))
+                    .push(cx);
                 return;
             };
 
@@ -2982,7 +3002,10 @@ impl DataGridPanel {
             }
 
             if filter_obj.is_empty() {
-                cx.toast_error("Could not determine document primary key", window);
+                Toast::error("Could not determine document primary key")
+                    .meta_right(now_hms())
+                    .action(copy_action("Could not determine document primary key"))
+                    .push(cx);
                 return;
             }
 
@@ -3013,7 +3036,10 @@ impl DataGridPanel {
         };
 
         let Some(conn) = conn else {
-            cx.toast_error("Connection not available", window);
+            Toast::error("Connection not available")
+                .meta_right(now_hms())
+                .action(copy_action("Connection not available"))
+                .push(cx);
             return;
         };
 

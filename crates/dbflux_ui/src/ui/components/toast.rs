@@ -15,6 +15,24 @@ use crate::ui::AsyncUpdateResultExt;
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Radii, Spacing};
 
+/// Wall-clock snapshot used as the default `meta_right` timestamp on toasts.
+/// Captured once at build time — no tick/loop logic.
+pub fn now_hms() -> String {
+    dbflux_core::chrono::Local::now()
+        .format("%H:%M:%S")
+        .to_string()
+}
+
+/// Builds the standard "Copy" action attached to error toasts. The payload
+/// argument is captured by the click handler so the clipboard text matches
+/// what the user saw, even if the toast is later dismissed.
+pub fn copy_action(payload: impl Into<String>) -> ToastAction {
+    let payload = payload.into();
+    ToastAction::new("copy-error", "Copy").on_click(move |cx: &mut App| {
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(payload.clone()));
+    })
+}
+
 /// Toast visual variant. Drives icon, accent stripe, banner colors, and the
 /// default auto-dismiss policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -276,18 +294,6 @@ impl ToastHost {
             collapsed: HashSet::new(),
             next_id: 1,
         }
-    }
-
-    /// Simple variant kept for the thin `ToastExt::toast_*(msg)` wrappers — the
-    /// message becomes the title.
-    pub fn push(
-        &mut self,
-        kind: ToastKind,
-        message: impl Into<SharedString>,
-        cx: &mut Context<Self>,
-    ) {
-        let toast = Toast::with_kind(kind, message);
-        self.push_rich(toast, cx);
     }
 
     pub fn push_rich(&mut self, toast: Toast, cx: &mut Context<Self>) {
@@ -583,13 +589,6 @@ impl ToastHost {
     }
 }
 
-pub trait ToastExt {
-    fn toast_success(&mut self, message: impl Into<SharedString>, window: &mut Window);
-    fn toast_info(&mut self, message: impl Into<SharedString>, window: &mut Window);
-    fn toast_warning(&mut self, message: impl Into<SharedString>, window: &mut Window);
-    fn toast_error(&mut self, message: impl Into<SharedString>, window: &mut Window);
-}
-
 pub struct PendingToast {
     pub message: String,
     pub is_error: bool,
@@ -597,32 +596,24 @@ pub struct PendingToast {
 
 pub fn flush_pending_toast<T>(
     toast: Option<PendingToast>,
-    window: &mut Window,
+    _window: &mut Window,
     cx: &mut Context<T>,
 ) {
-    if let Some(toast) = toast {
-        if toast.is_error {
-            cx.toast_error(toast.message, window);
-        } else {
-            cx.toast_success(toast.message, window);
-        }
-    }
-}
+    let Some(toast) = toast else {
+        return;
+    };
 
-impl<T> ToastExt for Context<'_, T> {
-    fn toast_success(&mut self, message: impl Into<SharedString>, _window: &mut Window) {
-        Toast::success(message).push(self);
-    }
-
-    fn toast_info(&mut self, message: impl Into<SharedString>, _window: &mut Window) {
-        Toast::info(message).push(self);
-    }
-
-    fn toast_warning(&mut self, message: impl Into<SharedString>, _window: &mut Window) {
-        Toast::warning(message).push(self);
-    }
-
-    fn toast_error(&mut self, message: impl Into<SharedString>, _window: &mut Window) {
-        Toast::error(message).push(self);
+    if toast.is_error {
+        let payload = toast.message.clone();
+        Toast::error(toast.message)
+            .meta_right(now_hms())
+            .action(
+                ToastAction::new("copy-error", "Copy").on_click(move |cx: &mut App| {
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(payload.clone()));
+                }),
+            )
+            .push(cx);
+    } else {
+        Toast::success(toast.message).meta_right(now_hms()).push(cx);
     }
 }

@@ -17,7 +17,7 @@ use crate::ui::components::data_table::{
 use crate::ui::components::document_tree::{DocumentTree, DocumentTreeEvent, DocumentTreeState};
 use crate::ui::components::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use crate::ui::components::toast::PendingToast;
-use crate::ui::components::toast::ToastExt;
+use crate::ui::components::toast::{Toast, copy_action, now_hms};
 use crate::ui::overlays::cell_editor_modal::{
     CellEditorClosedEvent, CellEditorModal, CellEditorSaveEvent,
 };
@@ -679,14 +679,16 @@ impl DataGridPanel {
         let refresh_policy_sub = cx.subscribe_in(
             &refresh_dropdown,
             window,
-            |this, _, event: &DropdownSelectionChanged, window, cx| {
+            |this, _, event: &DropdownSelectionChanged, _window, cx| {
                 let policy = RefreshPolicy::from_index(event.index);
 
                 if policy.is_auto() && !this.supports_auto_refresh() {
                     this.refresh_dropdown.update(cx, |dd, cx| {
                         dd.set_selected_index(Some(RefreshPolicy::Manual.index()), cx);
                     });
-                    cx.toast_warning("Auto-refresh not available for query results", window);
+                    Toast::warning("Auto-refresh not available for query results")
+                        .meta_right(now_hms())
+                        .push(cx);
                     return;
                 }
 

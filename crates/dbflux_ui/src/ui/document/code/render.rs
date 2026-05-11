@@ -1,4 +1,5 @@
 use super::*;
+use crate::ui::components::toast::{Toast, copy_action, now_hms};
 use dbflux_components::composites::split_toolbar_action;
 use dbflux_components::controls::Button;
 use dbflux_components::helpers::text_color_for_active;
@@ -744,7 +745,11 @@ impl Render for CodeDocument {
         }
 
         if let Some(error) = self.pending_error.take() {
-            cx.toast_error(error, window);
+            let toast_msg = error.to_string();
+            Toast::error(toast_msg.clone())
+                .meta_right(now_hms())
+                .action(copy_action(toast_msg))
+                .push(cx);
         }
 
         let context_bar = self.render_context_bar(cx).into_any_element();
