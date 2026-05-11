@@ -2370,12 +2370,12 @@ impl DataGridPanel {
             }
             // When has_fk_lookups, fire_fk_resolution below sets references.
 
-            // Subscribe to close requests
-            let _sub = cx.subscribe(
+            let close_subscription = cx.subscribe(
                 &inspector,
                 |this, _, event: &super::row_inspector::RowInspectorEvent, cx| match event {
                     super::row_inspector::RowInspectorEvent::CloseRequested => {
                         this.row_inspector = None;
+                        this.row_inspector_subscription = None;
                         cx.notify();
                     }
                 },
@@ -2383,6 +2383,7 @@ impl DataGridPanel {
 
             let inspector_entity = inspector.clone();
             self.row_inspector = Some(inspector);
+            self.row_inspector_subscription = Some(close_subscription);
             self.fire_fk_resolution(fk_references, inspector_entity, cx);
             cx.notify();
         }

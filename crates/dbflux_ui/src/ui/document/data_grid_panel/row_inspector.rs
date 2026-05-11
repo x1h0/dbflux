@@ -16,7 +16,7 @@
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{Heights, Radii, Spacing};
 use dbflux_components::primitives::{BannerBlock, BannerVariant, Icon, LoadingState, Text};
-use dbflux_components::tokens::{Shadows, Widths};
+use dbflux_components::tokens::Widths;
 use dbflux_core::Value;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -84,7 +84,17 @@ pub struct RowInspector {
     references_ready: bool,
     close_requested: bool,
     focus_handle: FocusHandle,
+    /// Current panel width. Persists across re-renders within the same
+    /// inspector lifetime; reset to the default each time `RowInspector::new`
+    /// is called.
+    width: Pixels,
+    is_resizing: bool,
+    resize_start_x: Option<Pixels>,
+    resize_start_width: Option<Pixels>,
 }
+
+const INSPECTOR_MIN_WIDTH: Pixels = px(240.0);
+const INSPECTOR_MAX_WIDTH: Pixels = px(640.0);
 
 impl EventEmitter<RowInspectorEvent> for RowInspector {}
 
@@ -101,6 +111,10 @@ impl RowInspector {
             references_ready: false,
             close_requested: false,
             focus_handle: cx.focus_handle(),
+            width: Widths::INSPECTOR,
+            is_resizing: false,
+            resize_start_x: None,
+            resize_start_width: None,
         }
     }
 
@@ -175,14 +189,64 @@ impl Render for RowInspector {
             .right_0()
             .top_0()
             .bottom_0()
-            .w(Widths::INSPECTOR)
+            .w(self.width)
             .flex()
             .flex_col()
             .bg(theme.background)
             .border_l_1()
             .border_color(theme.border)
-            .shadow(vec![Shadows::inspector_left()])
             .track_focus(&self.focus_handle)
+            // Left-edge resize handle. Uses the same self-tracking pattern as
+            // sidebar_dock: width updates each move event keep the grip under
+            // the cursor, so on_mouse_move keeps firing during the drag.
+            .child(
+                div()
+                    .id("inspector-grip")
+                    .absolute()
+                    .left(px(-2.0))
+                    .top_0()
+                    .bottom_0()
+                    .w(px(6.0))
+                    .cursor_col_resize()
+                    .hover(|el| el.bg(theme.accent.opacity(0.3)))
+                    .when(self.is_resizing, |el| el.bg(theme.primary))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                            this.is_resizing = true;
+                            this.resize_start_x = Some(event.position.x);
+                            this.resize_start_width = Some(this.width);
+                            cx.notify();
+                        }),
+                    )
+                    .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
+                        if !this.is_resizing {
+                            return;
+                        }
+                        let Some(start_x) = this.resize_start_x else {
+                            return;
+                        };
+                        let Some(start_width) = this.resize_start_width else {
+                            return;
+                        };
+                        // Inspector is right-anchored: dragging the grip
+                        // right (positive delta) shrinks the panel.
+                        let delta = event.position.x - start_x;
+                        let new_width =
+                            (start_width - delta).clamp(INSPECTOR_MIN_WIDTH, INSPECTOR_MAX_WIDTH);
+                        this.width = new_width;
+                        cx.notify();
+                    }))
+                    .on_mouse_up(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _, cx| {
+                            this.is_resizing = false;
+                            this.resize_start_x = None;
+                            this.resize_start_width = None;
+                            cx.notify();
+                        }),
+                    ),
+            )
             // Header
             .child(
                 div()

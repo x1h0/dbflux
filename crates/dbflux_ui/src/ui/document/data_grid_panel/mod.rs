@@ -361,6 +361,10 @@ pub struct DataGridPanel {
 
     // Row inspector overlay panel
     row_inspector: Option<Entity<row_inspector::RowInspector>>,
+    /// Retains the subscription to the inspector's close events.
+    /// Without storage the RAII Subscription drops immediately and the
+    /// X button (and Esc) silently fail to close the panel.
+    row_inspector_subscription: Option<Subscription>,
 
     export_menu_open: bool,
 }
@@ -755,6 +759,7 @@ impl DataGridPanel {
             document_preview_modal,
             pending_document_preview: None,
             row_inspector: None,
+            row_inspector_subscription: None,
             export_menu_open: false,
         }
     }
