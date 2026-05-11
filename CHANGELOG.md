@@ -2,89 +2,97 @@
 
 All notable changes to DBFlux will be documented in this file.
 
-## [0.5.0-dev.3] – 2026-05-08
+## [0.5.0] – 2026-05-11
 
 ### Features
 
-* External RPC auth providers reach AWS-parity capability: any provider can now
-  declare `FormFieldKind::DynamicSelect` fields whose options are fetched via
-  the new `FetchFieldOptions` IPC method, drive an interactive login flow whose
-  device URL surfaces in the existing login modal, and round-trip opaque
-  session state through `AuthSessionDto.session_data`.
-* Auth-provider IPC bumped to v1.2 with a `secret_dependency_opt_in` manifest
-  flag; the host strips `Password`-typed values from `FetchFieldOptions`
-  requests by default.
-* AWS SSO Account ID and Role Name dropdowns now travel through the generic
-  `DynamicSelect` path; the Settings → Access Providers panel no longer hard-
-  codes any provider id.
-* The Provider selector in Settings → Access Providers is a single dropdown
-  over the full registry (built-in + RPC-discovered providers), and the form
-  reloads from the selected provider's manifest.
-* Workspace-wide rustc/clippy lints (warn level) opted into by all driver
-  crates; `rustfmt.toml` baseline added.
+* **Design system foundation** — new `dbflux_components` crate with a complete
+  design-system token scale (`AppStyle` Compact / Default density tiers,
+  semantic color tokens, density accessors threaded through `Button`,
+  `Dropdown`, `PanelHeader`, `Surface`, `Badge`, `FocusFrame`, `Text` and the
+  whole typography stack). The Style is persisted in `general_settings` and
+  selectable from a new Style dropdown in General settings. Ayu Mirage joined
+  Ayu Dark as a first-class theme.
+* **Hi-Fi design bundle applied across the app** — workspace chrome refresh
+  (Linux CSD titlebar with breadcrumb, doc-tab dirty dot, pulsing status bar),
+  sidebar (compact tab strip, magnifier-prefix search, no double border,
+  `StatusDot` per row, single compact footer with connected/idle count),
+  data grid with column PK/FK badges and row-state colors, paginator
+  `‹ N / Total ›`, schema-drift detection with modal, command palette
+  redesign (grouped sections, `Chord` shortcuts, deep-Ayu-Dark background),
+  settings navigation (uppercase XS group headers, `warning_bg`-tinted active
+  item, keybinding rows with `Chord` + conflict banner), audit document
+  6-column grid with `BannerColors` LVL chips, empty workspace state with
+  shortcut chords.
+* **New shared primitives** — `StatusDot`, `BannerBlock`, `TypeToConfirm`,
+  `Chord`, `KbdBadge`, `SegmentedControl`, `FilePicker`, `Logs` icon,
+  `RowColors`/`BannerColors`/`StatusDotPalette` token families, `Anim` and
+  `Widths`/`Shadows` constants.
+* **Rich Toast system** — explicit `Toast::xxx(title).subtitle(...).body(...)`
+  `.details(...).code_block(...).progress(...).action(...).collapsible()`
+  `.push(cx)` builder with auto-dismiss policy per variant, action buttons,
+  collapsible details, and a 4 px left accent stripe. All ~100 call sites
+  migrated to the explicit builder; the old `cx.toast_xxx(msg, window)`
+  trait removed. SQL execution errors render rich with `FormattedError`
+  (subtitle = SQLSTATE, body = message, code_block = HINT, "Copy" action).
+* **Row Inspector overlay** — 320 px floating panel with PK/FK indicators,
+  FK forward-resolution (issued against the per-database connection so it
+  works on Postgres' connection-per-database model), inline wrapping for
+  long FK headers and resolution errors, drag-mask resize (240 – 1280 px),
+  scroll containment, and a working `×` close button.
+* **Connection manager rebuild** — driver picker as a grouped, alphabetical
+  4-col card grid with `/`-focusable filter input and 2D keyboard
+  navigation; per-driver SSL modes via `SegmentedControl` declared by each
+  driver's metadata; cert paths chosen via `FilePicker`; SSH passphrase
+  prompt with 60 min in-memory remember; enriched test-connection
+  `BannerBlock` (engine version, RTT, server time, SSL ciphersuite).
+* **Driver metadata expansion** — new `DatabaseCategory::LogStream` (with
+  CloudWatch reclassified to it and using the new `Logs` icon),
+  `DeploymentClass` enum (Self-hosted / Embedded / Cloud-managed) surfaced
+  in Settings → Drivers, per-driver `SslModeOption` lists and
+  `SslCertFields` capability. MongoDB and Redis gained TLS support
+  (`CombinedPemFile` helper concatenates cert+key for MongoDB).
+* **Schema-aware features** — `SchemaCache::dependents` cache, per-driver
+  `fetch_dependents`, `referenced_tables`, `fetch_row_by_pk`,
+  `test_connection_rich` on `Connection`; `SchemaFingerprint` for drift
+  detection.
+* **Built-in CloudWatch Logs integration** (#43).
+* **External RPC auth providers reach AWS parity** — runtime registration
+  over RPC, login-capable providers with device-URL flow surfaced in the
+  shared login modal, opaque `AuthSessionDto.session_data` round-trip, and
+  generic `DynamicSelect` form fields whose options are fetched through the
+  new `FetchFieldOptions` IPC method. Auth-provider IPC reaches v1.2 with a
+  `secret_dependency_opt_in` manifest flag; `Password`-typed values are
+  stripped from option requests by default. AWS SSO Account ID / Role Name
+  dropdowns now travel through the generic path — no provider id is
+  hard-coded in the Settings panel anymore. The Provider selector is a
+  single dropdown over the full registry (built-in + RPC-discovered).
+* **Sidebar batch delete** — multi-select rows and delete them in one action.
+* **RPC services foundation** — formalised driver and auth-provider service
+  kinds, shared bootstrap, and negotiated API-version contracts at startup.
 
 ### Fixes
 
 * `FetchOptionsError::SessionExpired` and `NeedsLogin` now surface a visible
-  per-field re-login hint and provider-level banner instead of being silently
-  logged.
-* `RefreshTrigger::Manual` no longer auto-fetches on every render; it fetches
-  only on cache miss.
+  per-field re-login hint and provider-level banner instead of being
+  silently logged.
+* `RefreshTrigger::Manual` only fetches on cache miss — no more refetch on
+  every render.
+* MySQL connection configs are preserved across reloads.
+* The data grid keeps CRUD actions available on empty tables.
+* `nix develop` is back to a working state.
+* Sidebar tree survives degraded storage loads and no longer overwrites a
+  broken connection tree.
+* PostgreSQL `GRANT` statements no longer surface false-positive
+  diagnostics in the editor.
+* Editor focus is preserved after running a query.
 
 ### Chores
 
-* CI pipeline runs DynamoDB live integration tests.
-* Rustfmt pass over `cfg_attr` blocks and trailing commas in driver `allow`
-  attributes.
-
-## [0.5.0-dev.2] – 2026-05-07
-
-### Features
-
-* Add built-in CloudWatch Logs integration (#43)
-
-### Fixes
-
-* Sync auth-provider save hooks when profiles are updated
-* Restore `nix develop`
-* Keep empty-table CRUD actions available in the data grid
-* Preserve MySQL connection configs on reload
-
----
-
-## [0.5.0-dev.1] – 2026-04-24
-
-### Features
-
-* Activate external auth providers over RPC, including runtime registration, auth-provider protocol support, and MCP-side registry loading
-* Make RPC auth providers login-capable and document the auth-provider RPC example flow
-
-### Fixes
-
-* Complete the external driver bootstrap flow and enforce negotiated API version contracts during RPC startup
-* Preserve sidebar tree state on degraded storage loads and suppress false PostgreSQL `GRANT` diagnostics in the editor
-
-### Improvements
-
-* Formalize the shared RPC services foundation for driver and auth-provider service kinds
-* Add repo-specific workflow skills used for contributor automation
-
-## [0.5.0-dev.0] – 2026-04-19
-
-### Features
-
-* Add the `dbflux_components` crate with shared design-system primitives and begin migrating the UI onto it
-* Add shared icon and menu item primitives, plus Ayu Mirage and shared chrome semantics for the UI theme system
-
-### Fixes
-
-* Restore full-height workspace editor layout, shared form/menu affordances, settings scroll behavior, and semantic button contrast after the dev/main merge
-* Realign panel and popover surfaces and restore context-menu test selectors needed for regression coverage
-
-### Improvements
-
-* Migrate remaining hardcoded colors, text styles, labels, surfaces, headers, modals, and tabs to the centralized component system
-* Expand design-system regression coverage and centralize architecture references used by the repo documentation
+* CI now runs DynamoDB live integration tests.
+* Workspace-wide rustc/clippy lints (warn level) opted into by all driver
+  crates; `rustfmt.toml` baseline added.
+* Repo-specific workflow skills added for contributor automation.
 
 ---
 
