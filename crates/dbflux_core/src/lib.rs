@@ -33,6 +33,7 @@ pub use config::{
     driver_maps_differ, filter_entries, hook_script_path, is_openable_script, migrate_app_config,
 };
 
+#[allow(deprecated)]
 pub use connection::{
     AuthProfileManager, CacheEntry, CacheKey, ConnectProfileParams, ConnectProfileResult,
     ConnectedProfile, ConnectionHook, ConnectionHookBindings, ConnectionHooks, ConnectionManager,
@@ -50,9 +51,11 @@ pub use connection::{
     OutputStreamKind, OwnedCacheEntry, PendingOperation, PrepareConnectError,
     ProcessExecutionError, ProcessExecutor, ProfileManager, ProxyAuth, ProxyKind, ProxyManager,
     ProxyProfile, RedisKeyCache, RedisKeyCacheEntry, ResolvedProxy, SchemaCacheKey, ScriptLanguage,
-    ScriptSource, SshAuthMethod, SshTunnelConfig, SshTunnelManager, SshTunnelProfile, SslMode,
-    SwitchDatabaseParams, SwitchDatabaseResult, TreeLoadResult, TreeStore,
-    detached_process_channel, execute_streaming_process, host_matches_no_proxy, output_channel,
+    ScriptSource, SshAuthMethod, SshTunnelConfig, SshTunnelManager, SshTunnelProfile, SslInfo,
+    SslMode, SwitchDatabaseParams, SwitchDatabaseResult, TestConnectionResult, TreeLoadResult,
+    TreeStore, detached_process_channel, execute_streaming_process, host_matches_no_proxy,
+    output_channel, ssl_mode_from_id, ssl_mode_id_is_cert_active, ssl_mode_id_requires_root_cert,
+    ssl_mode_requires_root_cert,
 };
 
 pub use core::{
@@ -84,8 +87,8 @@ pub use driver::{
     FormFieldDef, FormFieldKind, FormSection, FormTab, FormValues, Icon, IsolationLevel,
     MONGODB_FORM, MYSQL_FORM, MutationCapabilities, OperationClassifier, POSTGRES_FORM,
     PaginationStyle, QueryCapabilities, QueryLanguage, REDIS_FORM, RefreshTrigger, SQLITE_FORM,
-    SelectOption, SyntaxInfo, TransactionCapabilities, WhereOperator, field_file_path,
-    field_password, field_use_uri, ssh_tab,
+    SelectOption, SslCertFields, SslModeOption, SyntaxInfo, TransactionCapabilities, WhereOperator,
+    field_file_path, field_password, field_use_uri, ssh_tab,
 };
 
 pub use facade::{DangerousQuerySuppressions, SessionFacade};

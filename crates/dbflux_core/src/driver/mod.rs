@@ -4,8 +4,8 @@ pub(crate) mod form;
 pub use capabilities::{
     DatabaseCategory, DdlCapabilities, DriverCapabilities, DriverLimits, DriverMetadata,
     DriverMetadataBuilder, ExecutionClassification, Icon, IsolationLevel, MutationCapabilities,
-    OperationClassifier, PaginationStyle, QueryCapabilities, QueryLanguage, SyntaxInfo,
-    TransactionCapabilities, WhereOperator,
+    OperationClassifier, PaginationStyle, QueryCapabilities, QueryLanguage, SslCertFields,
+    SslModeOption, SyntaxInfo, TransactionCapabilities, WhereOperator,
 };
 pub use form::{
     CLOUDWATCH_FORM, DYNAMODB_FORM, DriverFormDef, FormFieldDef, FormFieldKind, FormSection,

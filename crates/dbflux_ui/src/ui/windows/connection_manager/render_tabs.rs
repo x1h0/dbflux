@@ -2,18 +2,22 @@ use crate::ui::components::form_renderer;
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::Radii;
 use dbflux_components::controls::Input;
-use dbflux_components::primitives::{Icon, Label, Text};
+use dbflux_components::primitives::{
+    Icon as AppIconElement, Label, SegmentedControl, SegmentedItem, Text,
+};
 use dbflux_core::FormFieldKind;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::checkbox::Checkbox;
 
+use dbflux_components::typography::SubSectionLabel;
+
 use super::{ActiveTab, ConnectionManagerWindow, EditState, FormFocus};
 
 impl ConnectionManagerWindow {
     pub(super) fn render_tab_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
+        let border_color = cx.theme().border;
         let active_tab = self.active_tab;
         let show_access_tab = !self.uses_file_form();
 
@@ -21,7 +25,7 @@ impl ConnectionManagerWindow {
             .flex()
             .items_center()
             .border_b_1()
-            .border_color(theme.border)
+            .border_color(border_color)
             .child(self.render_tab_trigger(
                 "tab-main",
                 "Main",
@@ -95,7 +99,7 @@ impl ConnectionManagerWindow {
                     .flex()
                     .items_center()
                     .gap_1()
-                    .child(Icon::new(icon).small().color(color))
+                    .child(AppIconElement::new(icon).small().color(color))
                     .child(Text::caption(label).color(color)),
             )
     }
@@ -108,6 +112,7 @@ impl ConnectionManagerWindow {
         let keyring_available = self.app_state.read(cx).secret_store_available();
         let requires_password = driver.requires_password();
         let save_password = self.form_save_password;
+        let ssl_modes = driver.metadata().ssl_modes;
 
         let show_focus =
             self.edit_state == EditState::Navigating && self.active_tab == ActiveTab::Main;
@@ -118,6 +123,14 @@ impl ConnectionManagerWindow {
         let Some(main_tab) = form_def.main_tab().cloned() else {
             return Vec::new();
         };
+
+        // Extract the help text from the driver's password field definition, if any.
+        let password_help = main_tab
+            .sections
+            .iter()
+            .flat_map(|s| s.fields.iter())
+            .find(|f| f.id == "password")
+            .and_then(|f| f.help.clone());
 
         let mut sections = Vec::new();
 
@@ -130,13 +143,213 @@ impl ConnectionManagerWindow {
                 keyring_available,
                 save_password,
                 ring_color,
+                password_help,
                 cx,
             );
 
             sections.push(password_field);
         }
 
+        // TRANSPORT section — SSL mode + SSH tunnel (only when the driver supports SSL).
+        if let Some(modes) = ssl_modes {
+            let transport_section = self.render_transport_section(modes, cx);
+            sections.push(transport_section);
+        }
+
         sections
+    }
+
+    fn render_transport_section(
+        &mut self,
+        ssl_modes: &'static [dbflux_core::SslModeOption],
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let current_ssl_mode = self.selected_ssl_mode.clone();
+
+        let ssl_items: Vec<SegmentedItem> = ssl_modes
+            .iter()
+            .map(|m| SegmentedItem::new(m.id, m.label))
+            .collect();
+
+        let entity = cx.entity().clone();
+
+        let ssl_control = SegmentedControl::new(
+            ssl_items,
+            current_ssl_mode.clone(),
+            move |selected: &SharedString, _window, cx| {
+                let mode = selected.to_string();
+                entity.update(cx, |this, cx| {
+                    this.selected_ssl_mode = mode;
+                    cx.notify();
+                });
+            },
+        );
+
+        // Wrap the segmented control in a content-width row with a trailing flex filler so
+        // its segments hug their labels instead of stretching to fill the field column.
+        let ssl_control_row = div()
+            .flex()
+            .items_center()
+            .child(ssl_control)
+            .child(div().flex_1());
+
+        let ssl_row = Self::field_row_cm("SSL mode", false, ssl_control_row, None::<&str>, cx);
+
+        let mut section = div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(SubSectionLabel::new("TRANSPORT"))
+            .child(ssl_row);
+
+        // Cert path inputs — shown only when the driver declares ssl_cert_fields and the
+        // selected mode requires certificate verification.
+        if let Some(driver) = &self.selected_driver {
+            let metadata = driver.metadata();
+            if let Some(cert_fields) = &metadata.ssl_cert_fields {
+                let mode_requires_root =
+                    dbflux_core::ssl_mode_id_requires_root_cert(&current_ssl_mode);
+
+                if mode_requires_root {
+                    let ca_row = self.render_ssl_cert_picker_row(
+                        "CA certificate",
+                        super::SslCertSlot::CaCert,
+                        cx,
+                    );
+                    section = section.child(ca_row);
+                }
+
+                if cert_fields.client_cert {
+                    let mode_is_cert_active =
+                        dbflux_core::ssl_mode_id_is_cert_active(&current_ssl_mode);
+
+                    if mode_is_cert_active {
+                        let cert_row = self.render_ssl_cert_picker_row(
+                            "Client cert",
+                            super::SslCertSlot::ClientCert,
+                            cx,
+                        );
+                        let key_row = self.render_ssl_cert_picker_row(
+                            "Client key",
+                            super::SslCertSlot::ClientKey,
+                            cx,
+                        );
+                        section = section.child(cert_row).child(key_row);
+                    }
+                }
+            }
+        }
+
+        section.into_any_element()
+    }
+
+    /// Render an SSL cert-path row as a file-picker button (folder icon + filename or
+    /// "Browse…" placeholder, with a trailing clear button when a value is set).
+    /// The whole control is keyboard-focusable: Enter/Space opens the picker,
+    /// Backspace clears the selection.
+    fn render_ssl_cert_picker_row(
+        &self,
+        label: &'static str,
+        slot: super::SslCertSlot,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let theme = cx.theme().clone();
+
+        let input_entity = match slot {
+            super::SslCertSlot::CaCert => &self.ssl_ca_cert_input,
+            super::SslCertSlot::ClientCert => &self.ssl_client_cert_input,
+            super::SslCertSlot::ClientKey => &self.ssl_client_key_input,
+        };
+
+        let current_value = input_entity.read(cx).value().to_string();
+        let has_value = !current_value.trim().is_empty();
+        let display_label = file_picker_label(&current_value);
+
+        let label_color = if has_value {
+            theme.foreground
+        } else {
+            theme.muted_foreground
+        };
+
+        let button_id = SharedString::from(match slot {
+            super::SslCertSlot::CaCert => "ssl-cert-picker-ca",
+            super::SslCertSlot::ClientCert => "ssl-cert-picker-client-cert",
+            super::SslCertSlot::ClientKey => "ssl-cert-picker-client-key",
+        });
+
+        let current_value_for_browse = if has_value {
+            Some(current_value.clone())
+        } else {
+            None
+        };
+
+        let picker_button = div()
+            .id(button_id.clone())
+            .flex()
+            .items_center()
+            .gap_2()
+            .h(crate::ui::tokens::Heights::CONTROL)
+            .px_2()
+            .border_1()
+            .border_color(theme.input)
+            .rounded(Radii::SM)
+            .cursor_pointer()
+            .hover(|d| d.bg(theme.list_hover))
+            .child(
+                AppIconElement::new(AppIcon::Folder)
+                    .size(px(14.0))
+                    .color(label_color),
+            )
+            .child(
+                div()
+                    .text_size(crate::ui::tokens::FontSizes::SM)
+                    .text_color(label_color)
+                    .child(SharedString::from(display_label)),
+            )
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _, window, cx| {
+                    this.browse_ssl_cert(slot, current_value_for_browse.clone(), window, cx);
+                }),
+            );
+
+        let clear_button = if has_value {
+            Some(
+                div()
+                    .id(SharedString::from(format!("{}-clear", button_id)))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .h(crate::ui::tokens::Heights::CONTROL)
+                    .w(crate::ui::tokens::Heights::CONTROL)
+                    .rounded(Radii::SM)
+                    .cursor_pointer()
+                    .hover(|d| d.bg(theme.list_hover))
+                    .child(
+                        AppIconElement::new(AppIcon::X)
+                            .size(px(12.0))
+                            .color(theme.muted_foreground),
+                    )
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, window, cx| {
+                            this.clear_ssl_cert(slot, window, cx);
+                        }),
+                    ),
+            )
+        } else {
+            None
+        };
+
+        let control = div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .child(picker_button)
+            .when_some(clear_button, |d, btn| d.child(btn))
+            .child(div().flex_1());
+
+        Self::field_row_cm(label, false, control, None::<&str>, cx).into_any_element()
     }
 
     pub(super) fn render_settings_tab(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
@@ -643,5 +856,49 @@ impl ConnectionManagerWindow {
             self.render_section("MCP Governance", content, &theme)
                 .into_any_element(),
         ]
+    }
+}
+
+/// Pure helper that maps a stored file-picker value to the label shown on the
+/// picker button. When empty/whitespace, the user sees a "Browse…" placeholder;
+/// otherwise the file basename is shown so the row stays compact.
+pub(super) fn file_picker_label(value: &str) -> String {
+    if value.trim().is_empty() {
+        return "Browse\u{2026}".to_string();
+    }
+
+    std::path::Path::new(value)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| value.to_string())
+}
+
+#[cfg(test)]
+mod file_picker_label_tests {
+    use super::file_picker_label;
+
+    #[test]
+    fn empty_value_returns_browse_placeholder() {
+        assert_eq!(file_picker_label(""), "Browse\u{2026}");
+    }
+
+    #[test]
+    fn whitespace_only_value_returns_browse_placeholder() {
+        assert_eq!(file_picker_label("   "), "Browse\u{2026}");
+    }
+
+    #[test]
+    fn absolute_path_returns_basename() {
+        assert_eq!(file_picker_label("/home/user/certs/ca.pem"), "ca.pem");
+    }
+
+    #[test]
+    fn relative_path_returns_basename() {
+        assert_eq!(file_picker_label("certs/client.key"), "client.key");
+    }
+
+    #[test]
+    fn bare_filename_returns_itself() {
+        assert_eq!(file_picker_label("server.crt"), "server.crt");
     }
 }

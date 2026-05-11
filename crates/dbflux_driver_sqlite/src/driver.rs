@@ -154,6 +154,8 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
         max_columns: 32766,
         max_indexes_per_table: 64,
     }),
+    ssl_modes: None,
+    ssl_cert_fields: None,
     classification_override: None,
 });
 

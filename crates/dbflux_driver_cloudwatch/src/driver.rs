@@ -33,6 +33,8 @@ pub static CLOUDWATCH_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Driv
     ddl: None,
     transactions: None,
     limits: None,
+    ssl_modes: None,
+    ssl_cert_fields: None,
     classification_override: None,
 });
 

@@ -7,6 +7,7 @@ mod icon_button;
 mod kbd_badge;
 mod label;
 mod loading_state;
+mod segmented_control;
 mod status_dot;
 mod status_indicator;
 mod surface;
@@ -22,6 +23,7 @@ pub use icon_button::IconButton;
 pub use kbd_badge::{KbdBadge, KbdBadgeInspection};
 pub use label::Label;
 pub use loading_state::{LoadingBlock, LoadingState, Spinner};
+pub use segmented_control::{SegmentedControl, SegmentedItem, new_active_id};
 pub use status_dot::{StatusDot, StatusDotVariant};
 pub use status_indicator::{Status, StatusIndicator};
 pub use surface::{

@@ -398,6 +398,19 @@ pub trait DbDriver: Send + Sync {
     ///
     /// Used by the "Test Connection" button in the connection manager.
     fn test_connection(&self, profile: &ConnectionProfile) -> Result<(), DbError>;
+
+    /// Like `test_connection`, but returns enriched diagnostics when available.
+    ///
+    /// Drivers that can provide engine version, RTT, server time, or SSL info
+    /// should override this method. The default implementation calls
+    /// `test_connection` and wraps an empty result on success.
+    fn test_connection_rich(
+        &self,
+        profile: &ConnectionProfile,
+    ) -> Result<crate::TestConnectionResult, DbError> {
+        self.test_connection(profile)
+            .map(|()| crate::TestConnectionResult::default())
+    }
 }
 
 /// Key-value operations exposed by drivers in `DatabaseCategory::KeyValue`.

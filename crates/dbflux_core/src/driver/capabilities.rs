@@ -1154,6 +1154,34 @@ pub trait OperationClassifier: Send + Sync {
     fn classify_tool(&self, tool_id: &str) -> ExecutionClassification;
 }
 
+/// A single SSL mode option that a driver declares in its metadata.
+///
+/// `id` is the native string the driver uses to identify the mode (e.g. `"require"`,
+/// `"VERIFY_CA"`); `label` is the human-readable text shown in the UI segmented control.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SslModeOption {
+    /// Driver-native identifier passed through to connection config (e.g. `"prefer"`, `"REQUIRED"`).
+    pub id: &'static str,
+
+    /// Human-readable label shown in the segmented control (e.g. `"prefer"`, `"verify-ca"`).
+    pub label: &'static str,
+}
+
+/// Declares which SSL certificate path fields a driver accepts.
+///
+/// Used by the UI to conditionally render cert-path inputs in the TRANSPORT
+/// section. The UI reads this from `DriverMetadata::ssl_cert_fields` rather
+/// than branching on driver IDs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SslCertFields {
+    /// Whether the driver accepts a root CA certificate path (`sslrootcert`).
+    pub root_cert: bool,
+
+    /// Whether the driver accepts a client certificate and key pair
+    /// (`sslcert` / `sslkey`).
+    pub client_cert: bool,
+}
+
 /// Metadata that a driver provides about itself.
 ///
 /// This is returned by `DbDriver::metadata()` and used by the UI
@@ -1207,6 +1235,27 @@ pub struct DriverMetadata {
     /// Operational limits (max params, max rows, etc.).
     pub limits: Option<DriverLimits>,
 
+    /// SSL modes offered by this driver in the connection form, in display order.
+    ///
+    /// `None` means the driver does not expose an SSL mode control (e.g. SQLite).
+    /// When `Some`, the UI renders a `SegmentedControl` whose items come from the
+    /// driver's own `SslModeOption` list.  Each option carries a native `id` (passed
+    /// through to connection config) and a `label` shown in the control.
+    ///
+    /// Not serialized — re-established via `metadata()`.
+    #[serde(skip, default)]
+    pub ssl_modes: Option<&'static [SslModeOption]>,
+
+    /// Certificate path fields that this driver accepts.
+    ///
+    /// When `Some`, the TRANSPORT section in the connection form reveals cert
+    /// path inputs based on the selected SSL mode. `None` means the driver
+    /// does not support certificate-based SSL configuration (e.g. SQLite).
+    ///
+    /// Not serialized — re-established via `metadata()`.
+    #[serde(skip, default)]
+    pub ssl_cert_fields: Option<SslCertFields>,
+
     /// Custom operation classifier override.
     /// When None, uses the default classifier from the governance service.
     /// Note: Not serialized - must be re-established on deserialization.
@@ -1232,6 +1281,8 @@ impl Debug for DriverMetadata {
             .field("ddl", &self.ddl)
             .field("transactions", &self.transactions)
             .field("limits", &self.limits)
+            .field("ssl_modes", &self.ssl_modes)
+            .field("ssl_cert_fields", &self.ssl_cert_fields)
             .field("classification_override", &"...")
             .finish()
     }
@@ -1255,6 +1306,8 @@ impl Clone for DriverMetadata {
             ddl: self.ddl.clone(),
             transactions: self.transactions.clone(),
             limits: self.limits.clone(),
+            ssl_modes: self.ssl_modes, // Copy since it's &'static
+            ssl_cert_fields: self.ssl_cert_fields,
             // Note: classification_override is not cloned as it requires
             // concrete type knowledge. Use None after clone.
             classification_override: None,
@@ -1305,6 +1358,8 @@ pub struct DriverMetadataBuilder {
     ddl_caps: Option<DdlCapabilities>,
     transaction_caps: Option<TransactionCapabilities>,
     limits: Option<DriverLimits>,
+    ssl_modes: Option<&'static [SslModeOption]>,
+    ssl_cert_fields: Option<SslCertFields>,
     classification_override: Option<Box<dyn OperationClassifier>>,
 }
 
@@ -1332,6 +1387,8 @@ impl DriverMetadataBuilder {
             ddl_caps: None,
             transaction_caps: None,
             limits: None,
+            ssl_modes: None,
+            ssl_cert_fields: None,
             classification_override: None,
         }
     }
@@ -1402,6 +1459,21 @@ impl DriverMetadataBuilder {
         self
     }
 
+    /// Declare the SSL modes this driver exposes in the connection form.
+    ///
+    /// Each `SslModeOption` carries a native driver id and a human-readable label.
+    /// When set, the form renders a `SegmentedControl` whose items come from this list.
+    pub fn ssl_modes(mut self, modes: &'static [SslModeOption]) -> Self {
+        self.ssl_modes = Some(modes);
+        self
+    }
+
+    /// Declare the SSL certificate path fields this driver accepts.
+    pub fn ssl_cert_fields(mut self, fields: SslCertFields) -> Self {
+        self.ssl_cert_fields = Some(fields);
+        self
+    }
+
     /// Set the classification override.
     pub fn classification_override(
         mut self,
@@ -1429,6 +1501,8 @@ impl DriverMetadataBuilder {
             ddl: self.ddl_caps,
             transactions: self.transaction_caps,
             limits: self.limits,
+            ssl_modes: self.ssl_modes,
+            ssl_cert_fields: self.ssl_cert_fields,
             classification_override: self.classification_override,
         }
     }

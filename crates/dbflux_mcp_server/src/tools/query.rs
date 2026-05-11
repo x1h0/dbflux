@@ -282,6 +282,8 @@ mod tests {
         ddl: None,
         transactions: Some(TransactionCapabilities::default()),
         limits: None,
+        ssl_modes: None,
+        ssl_cert_fields: None,
         classification_override: None,
     });
 

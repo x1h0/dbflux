@@ -266,6 +266,8 @@ impl dbflux_core::Connection for PlannedExecutionConnection {
                 ddl: None,
                 transactions: None,
                 limits: None,
+                ssl_modes: None,
+                ssl_cert_fields: None,
                 classification_override: None,
             });
 

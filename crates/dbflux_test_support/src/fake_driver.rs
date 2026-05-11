@@ -152,7 +152,10 @@ impl DbDriver for FakeDriver {
                 port: get_u16(values, "port", 5432),
                 user: get_string(values, "user", "postgres"),
                 database: get_string(values, "database", "postgres"),
-                ssl_mode: dbflux_core::SslMode::Disable,
+                ssl_mode: None,
+                ssl_root_cert_path: None,
+                ssl_client_cert_path: None,
+                ssl_client_key_path: None,
                 ssh_tunnel: None,
                 ssh_tunnel_profile_id: None,
             },
@@ -177,7 +180,10 @@ impl DbDriver for FakeDriver {
                 port: get_u16(values, "port", 3306),
                 user: get_string(values, "user", "root"),
                 database: get_optional_string(values, "database"),
-                ssl_mode: dbflux_core::SslMode::Disable,
+                ssl_mode: None,
+                ssl_root_cert_path: None,
+                ssl_client_cert_path: None,
+                ssl_client_key_path: None,
                 ssh_tunnel: None,
                 ssh_tunnel_profile_id: None,
             },
@@ -189,6 +195,10 @@ impl DbDriver for FakeDriver {
                 user: get_optional_string(values, "user"),
                 database: get_optional_string(values, "database"),
                 auth_database: get_optional_string(values, "auth_database"),
+                ssl_mode: None,
+                ssl_root_cert_path: None,
+                ssl_client_cert_path: None,
+                ssl_client_key_path: None,
                 ssh_tunnel: None,
                 ssh_tunnel_profile_id: None,
             },
@@ -200,6 +210,10 @@ impl DbDriver for FakeDriver {
                 user: get_optional_string(values, "user"),
                 database: get_u32_opt(values, "database"),
                 tls: false,
+                ssl_mode: None,
+                ssl_root_cert_path: None,
+                ssl_client_cert_path: None,
+                ssl_client_key_path: None,
                 ssh_tunnel: None,
                 ssh_tunnel_profile_id: None,
             },
@@ -588,6 +602,8 @@ static FAKE_POSTGRES_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Drive
         max_indexes_per_table: 32,
         ..Default::default()
     }),
+    ssl_modes: None,
+    ssl_cert_fields: None,
     classification_override: None,
 });
 
@@ -641,6 +657,8 @@ static FAKE_SQLITE_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
         max_indexes_per_table: 64,
         ..Default::default()
     }),
+    ssl_modes: None,
+    ssl_cert_fields: None,
     classification_override: None,
 });
 
@@ -678,6 +696,8 @@ static FAKE_MYSQL_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMe
         max_indexes_per_table: 64,
         ..Default::default()
     }),
+    ssl_modes: None,
+    ssl_cert_fields: None,
     classification_override: None,
 });
 
@@ -715,6 +735,8 @@ static FAKE_MARIADB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Driver
         max_indexes_per_table: 64,
         ..Default::default()
     }),
+    ssl_modes: None,
+    ssl_cert_fields: None,
     classification_override: None,
 });
 
@@ -766,6 +788,8 @@ static FAKE_MONGODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Driver
         supports_deferrable: false,
     }),
     limits: None,
+    ssl_modes: None,
+    ssl_cert_fields: None,
     classification_override: None,
 });
 
@@ -812,6 +836,8 @@ static FAKE_REDIS_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMe
         supports_deferrable: false,
     }),
     limits: None,
+    ssl_modes: None,
+    ssl_cert_fields: None,
     classification_override: None,
 });
 
@@ -839,6 +865,8 @@ static FAKE_DYNAMODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Drive
         supports_deferrable: false,
     }),
     limits: None,
+    ssl_modes: None,
+    ssl_cert_fields: None,
     classification_override: None,
 });
 
@@ -866,6 +894,8 @@ static FAKE_CLOUDWATCH_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Dri
         supports_deferrable: false,
     }),
     limits: None,
+    ssl_modes: None,
+    ssl_cert_fields: None,
     classification_override: None,
 });
 
@@ -931,7 +961,10 @@ mod tests {
                 port: 3306,
                 user: "root".to_string(),
                 database: Some("default_db".to_string()),
-                ssl_mode: dbflux_core::SslMode::Disable,
+                ssl_mode: None,
+                ssl_root_cert_path: None,
+                ssl_client_cert_path: None,
+                ssl_client_key_path: None,
                 ssh_tunnel: None,
                 ssh_tunnel_profile_id: None,
             },
@@ -1027,7 +1060,10 @@ mod tests {
                     port: 3306,
                     user: "root".to_string(),
                     database: Some("app".to_string()),
-                    ssl_mode: dbflux_core::SslMode::Disable,
+                    ssl_mode: None,
+                    ssl_root_cert_path: None,
+                    ssl_client_cert_path: None,
+                    ssl_client_key_path: None,
                     ssh_tunnel: None,
                     ssh_tunnel_profile_id: None,
                 },

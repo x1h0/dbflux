@@ -19,8 +19,8 @@ use dbflux_core::{
     RelationalSchema, Row, RowDelete, RowInsert, RowPatch, SchemaForeignKeyBuilder,
     SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan,
     SemanticPlanKind, SemanticRequest, SortDirection, SqlDialect, SqlMutationGenerator,
-    SqlQueryBuilder, SshTunnelConfig, SslMode, SyntaxInfo, TableInfo, TransactionCapabilities,
-    Value, ViewInfo, WhereOperator, generate_delete_template, generate_drop_table,
+    SqlQueryBuilder, SshTunnelConfig, SyntaxInfo, TableInfo, TransactionCapabilities, Value,
+    ViewInfo, WhereOperator, generate_delete_template, generate_drop_table,
     generate_insert_template, generate_select_star, generate_truncate, generate_update_template,
     render_semantic_filter_sql, sanitize_uri,
 };
@@ -147,6 +147,32 @@ pub static MYSQL_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMet
         max_columns: 4096,
         max_indexes_per_table: 64,
     }),
+    ssl_modes: Some(&[
+        dbflux_core::SslModeOption {
+            id: "DISABLED",
+            label: "disabled",
+        },
+        dbflux_core::SslModeOption {
+            id: "PREFERRED",
+            label: "preferred",
+        },
+        dbflux_core::SslModeOption {
+            id: "REQUIRED",
+            label: "required",
+        },
+        dbflux_core::SslModeOption {
+            id: "VERIFY_CA",
+            label: "verify-ca",
+        },
+        dbflux_core::SslModeOption {
+            id: "VERIFY_IDENTITY",
+            label: "verify-identity",
+        },
+    ]),
+    ssl_cert_fields: Some(dbflux_core::SslCertFields {
+        root_cert: true,
+        client_cert: true,
+    }),
     classification_override: None,
 });
 
@@ -270,6 +296,32 @@ pub static MARIADB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
         max_identifier_length: 64,
         max_columns: 4096,
         max_indexes_per_table: 64,
+    }),
+    ssl_modes: Some(&[
+        dbflux_core::SslModeOption {
+            id: "DISABLED",
+            label: "disabled",
+        },
+        dbflux_core::SslModeOption {
+            id: "PREFERRED",
+            label: "preferred",
+        },
+        dbflux_core::SslModeOption {
+            id: "REQUIRED",
+            label: "required",
+        },
+        dbflux_core::SslModeOption {
+            id: "VERIFY_CA",
+            label: "verify-ca",
+        },
+        dbflux_core::SslModeOption {
+            id: "VERIFY_IDENTITY",
+            label: "verify-identity",
+        },
+    ]),
+    ssl_cert_fields: Some(dbflux_core::SslCertFields {
+        root_cert: true,
+        client_cert: true,
     }),
     classification_override: None,
 });
@@ -512,7 +564,7 @@ impl DbDriver for MysqlDriver {
                 &config.user,
                 config.database.as_deref(),
                 password,
-                config.ssl_mode,
+                &config.ssl_mode,
             )
         } else {
             self.connect_direct(
@@ -521,7 +573,7 @@ impl DbDriver for MysqlDriver {
                 &config.user,
                 config.database.as_deref(),
                 password,
-                config.ssl_mode,
+                &config.ssl_mode,
             )
         }
     }
@@ -553,7 +605,10 @@ impl DbDriver for MysqlDriver {
                 port: 3306,
                 user: String::new(),
                 database: None,
-                ssl_mode: SslMode::Prefer,
+                ssl_mode: Some("PREFERRED".to_string()),
+                ssl_root_cert_path: None,
+                ssl_client_cert_path: None,
+                ssl_client_key_path: None,
                 ssh_tunnel: None,
                 ssh_tunnel_profile_id: None,
             });
@@ -587,7 +642,10 @@ impl DbDriver for MysqlDriver {
             port,
             user,
             database,
-            ssl_mode: SslMode::Prefer,
+            ssl_mode: Some("PREFERRED".to_string()),
+            ssl_root_cert_path: None,
+            ssl_client_cert_path: None,
+            ssl_client_key_path: None,
             ssh_tunnel: None,
             ssh_tunnel_profile_id: None,
         })
@@ -704,7 +762,8 @@ struct ExtractedMysqlConfig {
     port: u16,
     user: String,
     database: Option<String>,
-    ssl_mode: SslMode,
+    /// MySQL native ssl-mode identifier (e.g. `"PREFERRED"`, `"VERIFY_CA"`). Defaults to `"PREFERRED"` when absent.
+    ssl_mode: String,
     ssh_tunnel: Option<SshTunnelConfig>,
 }
 
@@ -727,7 +786,7 @@ fn extract_mysql_config(config: &DbConfig) -> Result<ExtractedMysqlConfig, DbErr
             port: *port,
             user: user.clone(),
             database: database.clone(),
-            ssl_mode: *ssl_mode,
+            ssl_mode: ssl_mode.clone().unwrap_or_else(|| "PREFERRED".to_string()),
             ssh_tunnel: ssh_tunnel.clone(),
         }),
         _ => Err(DbError::InvalidProfile(
@@ -736,13 +795,20 @@ fn extract_mysql_config(config: &DbConfig) -> Result<ExtractedMysqlConfig, DbErr
     }
 }
 
+/// Builds MySQL connection options from the given parameters.
+///
+/// Maps MySQL native ssl-mode identifiers to the appropriate `SslOpts`:
+/// - `"DISABLED"` — no TLS
+/// - `"PREFERRED"` — TLS preferred, accept self-signed certs (fall back handled by the mysql crate)
+/// - `"REQUIRED"` — TLS required, self-signed certs accepted
+/// - `"VERIFY_CA"` / `"VERIFY_IDENTITY"` — TLS with full certificate validation
 fn build_mysql_opts(
     host: &str,
     port: u16,
     user: &str,
     database: Option<&str>,
     password: Option<&str>,
-    ssl_mode: SslMode,
+    ssl_mode: &str,
 ) -> Opts {
     let host = normalize_mysql_tcp_host(host);
 
@@ -757,19 +823,28 @@ fn build_mysql_opts(
         builder = builder.db_name(Some(db));
     }
 
-    // Configure SSL based on mode
     match ssl_mode {
-        SslMode::Disable => {
-            // No SSL - don't set ssl_opts
+        "DISABLED" => {
+            // No SSL — leave ssl_opts unset.
         }
-        SslMode::Prefer => {
-            // Try SSL but accept invalid certs (self-signed, expired, etc.)
+        "PREFERRED" => {
+            // TLS preferred; accept self-signed certs so the crate can fall back to plain.
             let ssl_opts = SslOpts::default().with_danger_accept_invalid_certs(true);
             builder = builder.ssl_opts(ssl_opts);
         }
-        SslMode::Require => {
-            // SSL required with strict certificate validation
+        "REQUIRED" => {
+            // TLS required; accept self-signed certs.
+            let ssl_opts = SslOpts::default().with_danger_accept_invalid_certs(true);
+            builder = builder.ssl_opts(ssl_opts);
+        }
+        "VERIFY_CA" | "VERIFY_IDENTITY" => {
+            // TLS required with full certificate validation.
             let ssl_opts = SslOpts::default();
+            builder = builder.ssl_opts(ssl_opts);
+        }
+        _ => {
+            // Unknown mode — treat as PREFERRED (accept-invalid, allow fallback).
+            let ssl_opts = SslOpts::default().with_danger_accept_invalid_certs(true);
             builder = builder.ssl_opts(ssl_opts);
         }
     }
@@ -835,10 +910,10 @@ impl MysqlDriver {
         user: &str,
         database: Option<&str>,
         password: Option<&str>,
-        ssl_mode: SslMode,
+        ssl_mode: &str,
     ) -> Result<Box<dyn Connection>, DbError> {
         log::info!(
-            "Connecting directly to MySQL at {}:{} as {} (database: {:?}, ssl: {:?})",
+            "Connecting directly to MySQL at {}:{} as {} (database: {:?}, ssl: {})",
             host,
             port,
             user,
@@ -846,12 +921,12 @@ impl MysqlDriver {
             ssl_mode
         );
 
-        // Create catalog connection with SSL fallback (this is the first real connection)
-        let (opts, catalog_conn) = if ssl_mode == SslMode::Prefer {
-            let ssl_opts = build_mysql_opts(host, port, user, database, password, SslMode::Prefer);
+        // For PREFERRED mode: attempt SSL first, fall back to plain on failure.
+        let (opts, catalog_conn) = if ssl_mode == "PREFERRED" {
+            let ssl_opts = build_mysql_opts(host, port, user, database, password, "PREFERRED");
             match Conn::new(ssl_opts.clone()) {
                 Ok(c) => {
-                    log::info!("[SSL] Catalog connection established with SSL (Prefer mode)");
+                    log::info!("[SSL] Catalog connection established with SSL (PREFERRED mode)");
                     (ssl_opts, c)
                 }
                 Err(ssl_err) => {
@@ -860,7 +935,7 @@ impl MysqlDriver {
                         ssl_err
                     );
                     let no_ssl_opts =
-                        build_mysql_opts(host, port, user, database, password, SslMode::Disable);
+                        build_mysql_opts(host, port, user, database, password, "DISABLED");
                     let c = Conn::new(no_ssl_opts.clone())
                         .map_err(|e| format_mysql_error(&e, host, port))?;
                     (no_ssl_opts, c)
@@ -914,7 +989,7 @@ impl MysqlDriver {
         db_user: &str,
         database: Option<&str>,
         db_password: Option<&str>,
-        ssl_mode: SslMode,
+        ssl_mode: &str,
     ) -> Result<Box<dyn Connection>, DbError> {
         let total_start = Instant::now();
 
@@ -935,21 +1010,21 @@ impl MysqlDriver {
         log::info!("[SSH] Catalog tunnel on local port {}", local_port1);
         let ssh_catalog_tunnel = Arc::new(std::sync::Mutex::new(tunnel1));
 
-        // Create catalog connection with SSL fallback
-        log::info!("[DB] Connecting catalog via tunnel (ssl: {:?})", ssl_mode);
-        let (working_ssl_mode, catalog_conn) = if ssl_mode == SslMode::Prefer {
+        // For PREFERRED mode: attempt SSL first, fall back to plain on failure.
+        log::info!("[DB] Connecting catalog via tunnel (ssl: {})", ssl_mode);
+        let (working_ssl_mode, catalog_conn) = if ssl_mode == "PREFERRED" {
             let ssl_opts = build_mysql_opts(
                 "127.0.0.1",
                 local_port1,
                 db_user,
                 database,
                 db_password,
-                SslMode::Prefer,
+                "PREFERRED",
             );
             match Conn::new(ssl_opts) {
                 Ok(c) => {
                     log::info!("[SSL] Catalog connection established with SSL");
-                    (SslMode::Prefer, c)
+                    ("PREFERRED", c)
                 }
                 Err(ssl_err) => {
                     log::info!("[SSL] SSL failed ({}), falling back to non-SSL", ssl_err);
@@ -959,11 +1034,11 @@ impl MysqlDriver {
                         db_user,
                         database,
                         db_password,
-                        SslMode::Disable,
+                        "DISABLED",
                     );
                     let c = Conn::new(no_ssl_opts)
                         .map_err(|e| format_mysql_error(&e, "127.0.0.1", local_port1))?;
-                    (SslMode::Disable, c)
+                    ("DISABLED", c)
                 }
             }
         } else {
@@ -989,7 +1064,7 @@ impl MysqlDriver {
         log::info!("[SSH] Query tunnel on local port {}", local_port2);
         let ssh_query_tunnel = Arc::new(std::sync::Mutex::new(tunnel2));
 
-        // Create query connection using the SSL mode that worked for catalog
+        // Create query connection using the SSL mode that worked for catalog.
         let query_opts = build_mysql_opts(
             "127.0.0.1",
             local_port2,
@@ -3077,13 +3152,9 @@ mod tests {
         manual_values.insert("user".to_string(), "root".to_string());
 
         let manual_config = driver.build_config(&manual_values).unwrap();
-        assert!(matches!(
-            manual_config,
-            DbConfig::MySQL {
-                ssl_mode: dbflux_core::SslMode::Prefer,
-                ..
-            }
-        ));
+        assert!(
+            matches!(&manual_config, DbConfig::MySQL { ssl_mode: Some(m), .. } if m == "PREFERRED")
+        );
 
         let mut uri_values = FormValues::new();
         uri_values.insert("use_uri".to_string(), "true".to_string());
@@ -3093,13 +3164,9 @@ mod tests {
         );
 
         let uri_config = driver.build_config(&uri_values).unwrap();
-        assert!(matches!(
-            uri_config,
-            DbConfig::MySQL {
-                ssl_mode: dbflux_core::SslMode::Prefer,
-                ..
-            }
-        ));
+        assert!(
+            matches!(&uri_config, DbConfig::MySQL { ssl_mode: Some(m), .. } if m == "PREFERRED")
+        );
     }
 
     #[test]
@@ -3112,7 +3179,10 @@ mod tests {
             port: 3306,
             user: String::new(),
             database: None,
-            ssl_mode: dbflux_core::SslMode::Disable,
+            ssl_mode: Some("DISABLED".to_string()),
+            ssl_root_cert_path: None,
+            ssl_client_cert_path: None,
+            ssl_client_key_path: None,
             ssh_tunnel: None,
             ssh_tunnel_profile_id: None,
         };

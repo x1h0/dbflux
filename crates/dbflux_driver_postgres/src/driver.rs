@@ -22,7 +22,7 @@ use dbflux_core::{
     RelationalSchema, Row, RowDelete, RowInsert, RowPatch, SchemaFeatures, SchemaForeignKeyBuilder,
     SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan,
     SemanticPlanKind, SemanticRequest, SortDirection, SqlDialect, SqlMutationGenerator,
-    SqlQueryBuilder, SshTunnelConfig, SslMode, SyntaxInfo, TableInfo, TransactionCapabilities,
+    SqlQueryBuilder, SshTunnelConfig, SyntaxInfo, TableInfo, TransactionCapabilities,
     TypeDefinition, Value, ViewInfo, WhereOperator, generate_create_table,
     generate_delete_template, generate_drop_table, generate_insert_template, generate_select_star,
     generate_truncate, generate_update_template, render_semantic_filter_sql, sanitize_uri,
@@ -162,6 +162,36 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
         max_identifier_length: 63,
         max_columns: 250,
         max_indexes_per_table: 32,
+    }),
+    ssl_modes: Some(&[
+        dbflux_core::SslModeOption {
+            id: "disable",
+            label: "disable",
+        },
+        dbflux_core::SslModeOption {
+            id: "allow",
+            label: "allow",
+        },
+        dbflux_core::SslModeOption {
+            id: "prefer",
+            label: "prefer",
+        },
+        dbflux_core::SslModeOption {
+            id: "require",
+            label: "require",
+        },
+        dbflux_core::SslModeOption {
+            id: "verify-ca",
+            label: "verify-ca",
+        },
+        dbflux_core::SslModeOption {
+            id: "verify-full",
+            label: "verify-full",
+        },
+    ]),
+    ssl_cert_fields: Some(dbflux_core::SslCertFields {
+        root_cert: true,
+        client_cert: true,
     }),
     classification_override: None,
 });
@@ -484,7 +514,7 @@ impl DbDriver for PostgresDriver {
                 &config.user,
                 &config.database,
                 password,
-                config.ssl_mode,
+                &config.ssl_mode,
             )
         } else {
             self.connect_direct(
@@ -493,7 +523,7 @@ impl DbDriver for PostgresDriver {
                 &config.user,
                 &config.database,
                 password,
-                config.ssl_mode,
+                &config.ssl_mode,
             )
         }
     }
@@ -525,7 +555,10 @@ impl DbDriver for PostgresDriver {
                 port: 5432,
                 user: String::new(),
                 database: String::new(),
-                ssl_mode: SslMode::Prefer,
+                ssl_mode: Some("prefer".to_string()),
+                ssl_root_cert_path: None,
+                ssl_client_cert_path: None,
+                ssl_client_key_path: None,
                 ssh_tunnel: None,
                 ssh_tunnel_profile_id: None,
             });
@@ -563,7 +596,10 @@ impl DbDriver for PostgresDriver {
             port,
             user,
             database,
-            ssl_mode: SslMode::Prefer,
+            ssl_mode: Some("prefer".to_string()),
+            ssl_root_cert_path: None,
+            ssl_client_cert_path: None,
+            ssl_client_key_path: None,
             ssh_tunnel: None,
             ssh_tunnel_profile_id: None,
         })
@@ -631,6 +667,9 @@ impl DbDriver for PostgresDriver {
                 port,
                 user,
                 ssl_mode,
+                ssl_root_cert_path,
+                ssl_client_cert_path,
+                ssl_client_key_path,
                 ssh_tunnel,
                 ssh_tunnel_profile_id,
                 ..
@@ -641,7 +680,10 @@ impl DbDriver for PostgresDriver {
                 port: *port,
                 user: user.clone(),
                 database: database.to_string(),
-                ssl_mode: *ssl_mode,
+                ssl_mode: ssl_mode.clone(),
+                ssl_root_cert_path: ssl_root_cert_path.clone(),
+                ssl_client_cert_path: ssl_client_cert_path.clone(),
+                ssl_client_key_path: ssl_client_key_path.clone(),
                 ssh_tunnel: ssh_tunnel.clone(),
                 ssh_tunnel_profile_id: *ssh_tunnel_profile_id,
             }),
@@ -703,7 +745,8 @@ struct ExtractedPostgresConfig {
     port: u16,
     user: String,
     database: String,
-    ssl_mode: SslMode,
+    /// Postgres native sslmode id (e.g. `"prefer"`, `"verify-ca"`). Defaults to `"prefer"` when absent.
+    ssl_mode: String,
     ssh_tunnel: Option<SshTunnelConfig>,
 }
 
@@ -726,7 +769,7 @@ fn extract_postgres_config(config: &DbConfig) -> Result<ExtractedPostgresConfig,
             port: *port,
             user: user.clone(),
             database: database.clone(),
-            ssl_mode: *ssl_mode,
+            ssl_mode: ssl_mode.clone().unwrap_or_else(|| "prefer".to_string()),
             ssh_tunnel: ssh_tunnel.clone(),
         }),
         _ => Err(DbError::InvalidProfile(
@@ -741,9 +784,18 @@ struct PostgresConnectParams<'a> {
     user: &'a str,
     password: &'a str,
     database: &'a str,
-    ssl_mode: SslMode,
+    /// Postgres native sslmode id (e.g. `"prefer"`, `"verify-ca"`).
+    ssl_mode: &'a str,
 }
 
+/// Establishes a PostgreSQL connection using the native sslmode identifier from the profile.
+///
+/// Maps sslmode string values directly to the appropriate TLS strategy, matching PostgreSQL's
+/// libpq semantics:
+/// - `"disable"` — no TLS
+/// - `"allow"` / `"prefer"` — try TLS first, fall back to plain
+/// - `"require"` — TLS required, self-signed certs accepted
+/// - `"verify-ca"` / `"verify-full"` — TLS required with certificate validation
 fn connect_postgres(params: &PostgresConnectParams) -> Result<Client, DbError> {
     let conn_string = format!(
         "host={} port={} user={} password={} dbname={} connect_timeout=30",
@@ -751,12 +803,13 @@ fn connect_postgres(params: &PostgresConnectParams) -> Result<Client, DbError> {
     );
 
     match params.ssl_mode {
-        SslMode::Disable => Client::connect(&conn_string, NoTls)
+        "disable" => Client::connect(&conn_string, NoTls)
             .map_err(|e| format_pg_error(&e, params.host, params.port)),
 
-        SslMode::Prefer | SslMode::Require => {
+        "allow" | "prefer" => {
+            // Try SSL with permissive cert checking; fall back to plain if SSL fails.
             let connector = TlsConnector::builder()
-                .danger_accept_invalid_certs(params.ssl_mode == SslMode::Prefer)
+                .danger_accept_invalid_certs(true)
                 .build()
                 .map_err(|e| {
                     DbError::ConnectionFailed(format!("TLS setup failed: {}", e).into())
@@ -766,11 +819,54 @@ fn connect_postgres(params: &PostgresConnectParams) -> Result<Client, DbError> {
 
             match Client::connect(&conn_string, tls) {
                 Ok(client) => Ok(client),
-                Err(_) if params.ssl_mode == SslMode::Prefer => {
-                    Client::connect(&conn_string, NoTls)
-                        .map_err(|e| format_pg_error(&e, params.host, params.port))
-                }
-                Err(e) => Err(format_pg_error(&e, params.host, params.port)),
+                Err(_) => Client::connect(&conn_string, NoTls)
+                    .map_err(|e| format_pg_error(&e, params.host, params.port)),
+            }
+        }
+
+        "require" => {
+            let connector = TlsConnector::builder()
+                .danger_accept_invalid_certs(true)
+                .build()
+                .map_err(|e| {
+                    DbError::ConnectionFailed(format!("TLS setup failed: {}", e).into())
+                })?;
+
+            let tls = MakeTlsConnector::new(connector);
+
+            Client::connect(&conn_string, tls)
+                .map_err(|e| format_pg_error(&e, params.host, params.port))
+        }
+
+        "verify-ca" | "verify-full" => {
+            let connector = TlsConnector::builder()
+                .danger_accept_invalid_certs(false)
+                .build()
+                .map_err(|e| {
+                    DbError::ConnectionFailed(format!("TLS setup failed: {}", e).into())
+                })?;
+
+            let tls = MakeTlsConnector::new(connector);
+
+            Client::connect(&conn_string, tls)
+                .map_err(|e| format_pg_error(&e, params.host, params.port))
+        }
+
+        // Unknown modes fall back to prefer behaviour (try TLS, allow plain fallback).
+        _ => {
+            let connector = TlsConnector::builder()
+                .danger_accept_invalid_certs(true)
+                .build()
+                .map_err(|e| {
+                    DbError::ConnectionFailed(format!("TLS setup failed: {}", e).into())
+                })?;
+
+            let tls = MakeTlsConnector::new(connector);
+
+            match Client::connect(&conn_string, tls) {
+                Ok(client) => Ok(client),
+                Err(_) => Client::connect(&conn_string, NoTls)
+                    .map_err(|e| format_pg_error(&e, params.host, params.port)),
             }
         }
     }
@@ -838,7 +934,7 @@ impl PostgresDriver {
         user: &str,
         database: &str,
         password: Option<&str>,
-        ssl_mode: SslMode,
+        ssl_mode: &str,
     ) -> Result<Box<dyn Connection>, DbError> {
         log::info!(
             "Connecting directly to PostgreSQL at {}:{} as {} (database: {})",
@@ -879,7 +975,7 @@ impl PostgresDriver {
         db_user: &str,
         database: &str,
         db_password: Option<&str>,
-        ssl_mode: SslMode,
+        ssl_mode: &str,
     ) -> Result<Box<dyn Connection>, DbError> {
         let total_start = Instant::now();
 
@@ -3550,7 +3646,10 @@ mod tests {
             port: 5432,
             user: String::new(),
             database: String::new(),
-            ssl_mode: dbflux_core::SslMode::Prefer,
+            ssl_mode: Some("prefer".to_string()),
+            ssl_root_cert_path: None,
+            ssl_client_cert_path: None,
+            ssl_client_key_path: None,
             ssh_tunnel: None,
             ssh_tunnel_profile_id: None,
         };
