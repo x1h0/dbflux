@@ -17,6 +17,7 @@ impl CodeDocument {
     fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let is_executing = self.state == DocumentState::Executing;
+        let is_preflight = self.drift_preflight_running;
         let is_db_language = self.query_language.supports_connection_context();
 
         let auto_refresh_enabled = self.refresh_policy.is_auto();
@@ -35,6 +36,8 @@ impl CodeDocument {
 
         let (run_icon, run_label, run_enabled) = if is_executing {
             (AppIcon::X, "Cancel", true)
+        } else if is_preflight {
+            (AppIcon::Loader, "Checking…", false)
         } else {
             (AppIcon::Play, "Run", true)
         };
@@ -731,6 +734,8 @@ impl Render for CodeDocument {
 
         self.process_pending_auto_refresh(window, cx);
 
+        self.process_pending_drift_continue(window, cx);
+
         if let Some((start_value, end_value)) = self.pending_source_input_values.take() {
             self.source_start_input
                 .update(cx, |state, cx| state.set_value(&start_value, window, cx));
@@ -750,6 +755,7 @@ impl Render for CodeDocument {
         let bg = cx.theme().background;
         let has_collapsed_results =
             self.layout == SqlQueryLayout::EditorOnly && !self.result_tabs.is_empty();
+        let drift_modal_visible = self.schema_drift_modal.read(cx).is_visible();
 
         div()
             .id(ElementId::Name(format!("sql-doc-{}", self.id.0).into()))
@@ -801,6 +807,9 @@ impl Render for CodeDocument {
             .child(self.history_modal.clone())
             .when(self.pending_dangerous_query.is_some(), |el| {
                 el.child(self.render_dangerous_query_modal(cx))
+            })
+            .when(drift_modal_visible, |el| {
+                el.child(self.schema_drift_modal.clone())
             })
     }
 }

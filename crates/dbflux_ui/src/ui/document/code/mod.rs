@@ -9,6 +9,9 @@ use crate::ui::components::multi_select::{MultiSelect, MultiSelectChanged};
 use crate::ui::components::toast::ToastExt;
 use crate::ui::icons::AppIcon;
 use crate::ui::overlays::history_modal::{HistoryModal, HistoryQuerySelected};
+use crate::ui::overlays::modals::schema_drift::{
+    ModalSchemaDrift, SchemaDriftContinue, SchemaDriftDismissed, SchemaDriftRefresh,
+};
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_components::controls::{
     CompletionProvider, GpuiInput as Input, InputEvent, InputPosition, InputState, Rope,
@@ -20,9 +23,10 @@ use dbflux_core::observability::{
 };
 use dbflux_core::{
     DangerousAction, DangerousQueryKind, DbError, DiagnosticSeverity as CoreDiagnosticSeverity,
-    DriverCapabilities, EditorDiagnostic as CoreEditorDiagnostic, ExecutionContext,
+    DriftOutcome, DriverCapabilities, EditorDiagnostic as CoreEditorDiagnostic, ExecutionContext,
     ExecutionSourceContext, HistoryEntry, OutputReceiver, QueryLanguage, QueryRequest, QueryResult,
-    RefreshPolicy, SchemaLoadingStrategy, TaskTarget, ValidationResult, detect_dangerous_query,
+    RefreshPolicy, SchemaDriftDetected, SchemaLoadingStrategy, TaskTarget, ValidationResult,
+    check_schema_drift, detect_dangerous_query,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -243,6 +247,15 @@ pub struct CodeDocument {
     // Dangerous query confirmation
     pending_dangerous_query: Option<PendingDangerousQuery>,
 
+    // Schema drift detection
+    schema_drift_modal: Entity<ModalSchemaDrift>,
+    _schema_drift_subscriptions: Vec<Subscription>,
+    /// Query paused while the drift preflight background task is running or
+    /// while the user is responding to the drift modal.
+    pending_drift_query: Option<PendingDriftQuery>,
+    /// True while the drift preflight I/O task is in flight.
+    drift_preflight_running: bool,
+
     // Diagnostic debounce: incremental request id to discard stale results.
     diagnostic_request_id: u64,
     _diagnostic_debounce: Option<Task<()>>,
@@ -281,6 +294,28 @@ struct PendingDangerousQuery {
     query: String,
     kind: DangerousQueryKind,
     in_new_tab: bool,
+}
+
+/// Action resolved by the schema-drift modal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DriftAction {
+    /// Waiting for user response — do not execute yet.
+    Pending,
+    /// No drift (or driver doesn't support parsing) — execute immediately and
+    /// apply transparent cache refreshes first.
+    ExecuteNow,
+    /// User chose "Continue with stale schema" — proceed without touching the cache.
+    ContinueStale,
+}
+
+/// A query paused by the schema-drift preflight or drift modal awaiting execution.
+struct PendingDriftQuery {
+    query: String,
+    in_new_tab: bool,
+    action: DriftAction,
+    /// Cache updates to apply before execution when action is `ExecuteNow` or
+    /// after "Refresh & re-run". Each entry is `(database, table, TableInfo)`.
+    cache_updates: Vec<(String, String, dbflux_core::TableInfo)>,
 }
 
 /// Record of a query execution.
@@ -371,6 +406,31 @@ impl CodeDocument {
             &history_modal,
             |this, _, event: &HistoryQuerySelected, cx| {
                 this.pending_set_query = Some(event.clone());
+                cx.notify();
+            },
+        );
+
+        // Create schema drift modal and wire up action subscriptions.
+        let schema_drift_modal = cx.new(ModalSchemaDrift::new);
+
+        let drift_refresh_sub = cx.subscribe(
+            &schema_drift_modal,
+            |this, _, _event: &SchemaDriftRefresh, cx| {
+                this.on_schema_drift_refresh(cx);
+            },
+        );
+
+        let drift_continue_sub = cx.subscribe(
+            &schema_drift_modal,
+            |this, _, _event: &SchemaDriftContinue, cx| {
+                this.on_schema_drift_continue(cx);
+            },
+        );
+
+        let drift_dismissed_sub = cx.subscribe(
+            &schema_drift_modal,
+            |this, _, _event: &SchemaDriftDismissed, cx| {
+                this.pending_drift_query = None;
                 cx.notify();
             },
         );
@@ -573,6 +633,14 @@ impl CodeDocument {
             _refresh_subscriptions: vec![refresh_policy_sub],
             is_active_tab: true,
             pending_dangerous_query: None,
+            schema_drift_modal,
+            _schema_drift_subscriptions: vec![
+                drift_refresh_sub,
+                drift_continue_sub,
+                drift_dismissed_sub,
+            ],
+            pending_drift_query: None,
+            drift_preflight_running: false,
             diagnostic_request_id: 0,
             _diagnostic_debounce: None,
             _pending_save: None,

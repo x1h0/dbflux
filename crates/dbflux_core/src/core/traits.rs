@@ -732,6 +732,21 @@ pub trait Connection: Send + Sync {
         Ok(Vec::new())
     }
 
+    /// Best-effort extraction of tables referenced by a SQL query string.
+    ///
+    /// Returns `None` if the driver cannot parse the query, or `Some(refs)` with
+    /// the list of `TableRef`s extracted from FROM/JOIN/UPDATE/INSERT/DELETE
+    /// clauses.
+    ///
+    /// NoSQL and key-value drivers inherit the default `None` — drift detection
+    /// is skipped for them automatically.
+    ///
+    /// Used by drift detection to know which tables to fingerprint before
+    /// executing a query.
+    fn referenced_tables(&self, _query: &str) -> Option<Vec<crate::schema::QueryTableRef>> {
+        None
+    }
+
     /// Fetch objects that depend on `schema.table` — views, materialized views,
     /// FK child tables, and triggers.
     ///

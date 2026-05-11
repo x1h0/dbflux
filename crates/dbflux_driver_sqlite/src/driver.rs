@@ -924,6 +924,10 @@ impl Connection for SqliteConnection {
         Ok(Some(map))
     }
 
+    fn referenced_tables(&self, query: &str) -> Option<Vec<dbflux_core::QueryTableRef>> {
+        Some(dbflux_core::extract_referenced_tables(query))
+    }
+
     fn code_generators(&self) -> Vec<CodeGeneratorInfo> {
         sqlite_code_generators()
     }
