@@ -128,6 +128,7 @@ These must all carry the exact same version number per release (modulo the AUR t
 - `flake.nix`
 - `resources/windows/installer.iss`
 - `CHANGELOG.md` — header for the version + entries.
+- **Stable releases only:** `nix/release-info.nix` — see "Nix Bump".
 - Review (does not inherit workspace version): `examples/custom_driver/Cargo.toml`.
 
 ## CHANGELOG Discipline
@@ -152,6 +153,35 @@ git cherry-pick -x <sha>
 ```
 
 Sanity check: every non-release commit on `release/vX.Y` since branch-off should mention `(cherry picked from commit ...)` in its message.
+
+## Nix Bump
+
+The flake exposes a prebuilt-binary package (`dbflux-bin`, default) backed by `nix/release-info.nix`, which pins each system to a GitHub Release tarball. Refresh it **only on stable** tags; skip for `-dev.N` and `-rc.N`.
+
+Steps (run from the dbflux repo after the GitHub Release is published):
+
+```bash
+ver=X.Y.Z
+for arch in amd64 arm64; do
+  curl -fsSL -o /tmp/dbflux-$arch.tar.gz \
+    "https://github.com/0xErwin1/dbflux/releases/download/v$ver/dbflux-linux-$arch.tar.gz"
+  nix-hash --to-sri --type sha256 \
+    "$(sha256sum /tmp/dbflux-$arch.tar.gz | cut -d' ' -f1)"
+done
+```
+
+Update `nix/release-info.nix`:
+- `version` → `X.Y.Z`
+- Both `url` lines → `…/v$ver/…`
+- Both `hash` lines → the corresponding SRI hash printed above.
+
+Verify locally before committing:
+
+```bash
+nix build .#dbflux-bin --no-link --print-out-paths
+```
+
+If the build fails with a hash mismatch, the artifact in GitHub was likely re-uploaded; redo the prefetch. The release must be **published** (not draft) before the prebuilt path is fetchable.
 
 ## AUR Bump
 
@@ -198,11 +228,11 @@ Mark this as TODO in the skill until the package is upstreamed; do not invent th
 
 ## Post-Release Channels (what to do after the GitHub release publishes)
 
-| Tag kind          | GitHub Release | AUR              | nixpkgs (future)  |
-|-------------------|----------------|------------------|-------------------|
-| `-dev.N` (main)   | prerelease     | skip             | skip              |
-| `-rc.N` (release) | prerelease     | skip             | skip              |
-| Stable `vX.Y.Z`   | published      | bump + push      | bump + PR         |
+| Tag kind          | GitHub Release | AUR              | Nix flake (this repo) | nixpkgs (future)  |
+|-------------------|----------------|------------------|-----------------------|-------------------|
+| `-dev.N` (main)   | prerelease     | skip             | skip                  | skip              |
+| `-rc.N` (release) | prerelease     | skip             | skip                  | skip              |
+| Stable `vX.Y.Z`   | published      | bump + push      | bump `release-info`   | bump + PR         |
 
 ## Anti-Patterns (explicit refusals)
 
@@ -248,5 +278,5 @@ git log --grep='cherry picked from' release/vX.Y
 - `.github/workflows/release.yml` — classification logic and artifact publishing
 - `.github/release-template.md` — installation section appended to every release body
 - `CHANGELOG.md` — single source of truth for release notes
-- `Cargo.toml`, `flake.nix`, `resources/windows/installer.iss`
+- `Cargo.toml`, `flake.nix`, `nix/binary.nix`, `nix/release-info.nix`, `resources/windows/installer.iss`
 - `examples/custom_driver/Cargo.toml` (standalone, review manually)

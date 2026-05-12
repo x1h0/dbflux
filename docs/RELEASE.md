@@ -93,7 +93,11 @@ Per release, update all of the following to the exact same version:
 - `CHANGELOG.md` — header for the version and entries.
 - Manual review (does not inherit): `examples/custom_driver/Cargo.toml`.
 
-The AUR `PKGBUILD` lives in an **external AUR repository**, not in this repo. It is bumped only for stable tags (see "Downstream Channels" below).
+For **stable** releases only, also update:
+
+- `nix/release-info.nix` — `version` + both prebuilt-tarball hashes (see "Nix" under "Downstream Channels").
+
+The AUR `PKGBUILD` lives in an **external AUR repository**, not in this repo. It is bumped only for stable tags.
 
 ## CHANGELOG Discipline
 
@@ -126,11 +130,11 @@ git log --grep='cherry picked from' release/vX.Y
 
 ## Downstream Channels
 
-| Tag kind          | GitHub Release | AUR              | nixpkgs (future)  |
-|-------------------|----------------|------------------|-------------------|
-| `-dev.N` (main)   | prerelease     | skip             | skip              |
-| `-rc.N` (release) | prerelease     | skip             | skip              |
-| Stable `vX.Y.Z`   | published      | bump + push      | bump + PR         |
+| Tag kind          | GitHub Release | AUR              | Nix flake (this repo) | nixpkgs (future)  |
+|-------------------|----------------|------------------|-----------------------|-------------------|
+| `-dev.N` (main)   | prerelease     | skip             | skip                  | skip              |
+| `-rc.N` (release) | prerelease     | skip             | skip                  | skip              |
+| Stable `vX.Y.Z`   | published      | bump + push      | bump `release-info`   | bump + PR         |
 
 ### AUR
 
@@ -138,6 +142,30 @@ The PKGBUILD is maintained in an external AUR repository. AUR `pkgver` does **no
 
 - `vX.Y.Z-dev.N` → `pkgver=X.Y.Z.dev.N`
 - `vX.Y.Z-rc.N`  → `pkgver=X.Y.Z.rc.N`
+
+### Nix (this repo's flake)
+
+The flake at the root exposes both a prebuilt-binary package (`dbflux-bin`, default) and a from-source build (`dbflux-source`). The prebuilt package reads `nix/release-info.nix`, which pins each supported system to the GitHub Release tarball it should fetch.
+
+On every **stable** release, refresh `nix/release-info.nix`:
+
+```bash
+ver=X.Y.Z
+for arch in amd64 arm64; do
+  curl -fsSL -o /tmp/dbflux-$arch.tar.gz \
+    "https://github.com/0xErwin1/dbflux/releases/download/v$ver/dbflux-linux-$arch.tar.gz"
+  nix-hash --to-sri --type sha256 \
+    "$(sha256sum /tmp/dbflux-$arch.tar.gz | cut -d' ' -f1)"
+done
+```
+
+Update `version`, both `url`s, and both `hash`es in `nix/release-info.nix`. Verify locally:
+
+```bash
+nix build .#dbflux-bin --no-link --print-out-paths
+```
+
+Skip Nix bumps for `-dev.N` and `-rc.N` — only stable releases update the flake.
 
 ### nixpkgs (future)
 
