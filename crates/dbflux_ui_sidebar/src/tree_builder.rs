@@ -102,12 +102,12 @@ impl Sidebar {
             .expanded(expanded)
     }
 
-    pub(super) fn build_tree_items(state: &AppState) -> Vec<TreeItem> {
+    pub(super) fn build_tree_items(state: &AppStateEntity) -> Vec<TreeItem> {
         Self::build_tree_items_with_errors(state, &HashMap::new())
     }
 
     pub(super) fn build_tree_items_with_errors(
-        state: &AppState,
+        state: &AppStateEntity,
         metric_fetch_errors: &HashMap<String, String>,
     ) -> Vec<TreeItem> {
         let root_nodes = state.connection_tree().root_nodes();
@@ -156,7 +156,7 @@ impl Sidebar {
 
     fn build_tree_nodes_recursive_with_errors(
         nodes: &[&ConnectionTreeNode],
-        state: &AppState,
+        state: &AppStateEntity,
         metric_fetch_errors: &HashMap<String, String>,
     ) -> Vec<TreeItem> {
         let mut items = Vec::new();
@@ -203,7 +203,7 @@ impl Sidebar {
 
     fn build_profile_item_with_errors(
         profile: &dbflux_core::ConnectionProfile,
-        state: &AppState,
+        state: &AppStateEntity,
         metric_fetch_errors: &HashMap<String, String>,
     ) -> TreeItem {
         let profile_id = profile.id;
@@ -227,11 +227,34 @@ impl Sidebar {
             && let Some(ref schema) = connected.schema
         {
             let mut profile_children = Vec::new();
+
             let strategy = connected.connection.schema_loading_strategy();
             let uses_lazy_loading = strategy == SchemaLoadingStrategy::LazyPerDatabase;
             let is_document_db = schema.is_document();
             let is_time_series_db = schema.is_time_series();
-            let conn_capabilities = connected.connection.metadata().capabilities;
+            let conn_metadata = connected.connection.metadata();
+            let conn_capabilities = conn_metadata.capabilities;
+
+            // Surface the per-profile Dashboards / Saved Charts folders only
+            // for drivers that opt in via `CHART_AUTHORING`. Drivers without
+            // a natural chart-authoring UX (e.g. plain relational stores) keep
+            // their sidebar focused on the native browsing model. Gating is
+            // purely capability-driven — no driver_id or category branching.
+            if conn_capabilities.contains(DriverCapabilities::CHART_AUTHORING) {
+                profile_children.push(Self::build_dashboards_folder_item(profile_id, state));
+                profile_children.push(Self::build_saved_charts_folder_item(profile_id, state));
+            }
+
+            // Drivers that can browse upstream dashboards get a read-only
+            // listing container. Capability-gated — no driver_id branching.
+            if conn_capabilities.contains(DriverCapabilities::DASHBOARD_SYNC) {
+                profile_children.push(Self::build_remote_dashboards_folder_item(
+                    profile_id,
+                    state,
+                    metric_fetch_errors,
+                ));
+            }
+            let conn_category = conn_metadata.category;
             let supports_routines = conn_capabilities.contains(DriverCapabilities::ROUTINES);
             let metric_cache = state.metric_catalog_cache().clone();
 
@@ -308,6 +331,7 @@ impl Sidebar {
                                     &connected.table_details,
                                     &connected.collection_children,
                                     conn_capabilities,
+                                    conn_category,
                                     Some(&metric_cache),
                                     metric_fetch_errors,
                                 )
@@ -398,6 +422,7 @@ impl Sidebar {
                                 &connected.table_details,
                                 &connected.collection_children,
                                 conn_capabilities,
+                                conn_category,
                                 Some(&metric_cache),
                                 metric_fetch_errors,
                             )
@@ -490,6 +515,227 @@ impl Sidebar {
         }
 
         profile_item
+    }
+
+    // -----------------------------------------------------------------------
+    // Dashboard and Saved Charts sidebar folder helpers
+    // -----------------------------------------------------------------------
+
+    /// Build the `DashboardsFolder` tree node for a connected profile.
+    ///
+    /// Children are one `DashboardItem` per dashboard returned by the manager,
+    /// sorted by `updated_at` descending. When no dashboards exist a single
+    /// non-clickable placeholder hints the user to right-click.
+    fn build_dashboards_folder_item(profile_id: Uuid, state: &AppStateEntity) -> TreeItem {
+        let children = Self::build_dashboard_children(profile_id, state);
+        TreeItem::new(
+            SchemaNodeId::DashboardsFolder { profile_id }.to_string(),
+            "Dashboards".to_string(),
+        )
+        .expanded(false)
+        .children(children)
+    }
+
+    /// Build the container that lists dashboards fetched live from the
+    /// connection's upstream source (drivers advertising `DASHBOARD_SYNC`).
+    ///
+    /// The label is taken from the driver's `DashboardSource::container_label`
+    /// so the UI never hard-codes a driver name. Children are lazy: a "Loading"
+    /// placeholder until the listing cache is populated on first expansion.
+    fn build_remote_dashboards_folder_item(
+        profile_id: Uuid,
+        state: &AppStateEntity,
+        fetch_errors: &HashMap<String, String>,
+    ) -> TreeItem {
+        let label = state
+            .connections()
+            .get(&profile_id)
+            .and_then(|conn| {
+                conn.connection
+                    .dashboard_source()
+                    .map(|s| s.container_label().to_string())
+            })
+            .unwrap_or_else(|| "Dashboards".to_string());
+
+        let folder_id = SchemaNodeId::RemoteDashboardsFolder { profile_id }.to_string();
+        let children =
+            Self::build_remote_dashboard_children(profile_id, state, &folder_id, fetch_errors);
+
+        let label = match state.remote_dashboard_cache().peek(profile_id) {
+            Some(list) => format!("{} ({})", label, list.len()),
+            None => label,
+        };
+
+        TreeItem::new(folder_id, label)
+            .expanded(false)
+            .children(children)
+    }
+
+    /// Build the `RemoteDashboardItem` children for a `RemoteDashboardsFolder`.
+    ///
+    /// Reads the session listing cache. A cache miss yields a single "Loading"
+    /// placeholder; the fetch is kicked off when the folder is expanded. A
+    /// recorded fetch error yields an error node, and an empty listing yields a
+    /// non-clickable hint.
+    fn build_remote_dashboard_children(
+        profile_id: Uuid,
+        state: &AppStateEntity,
+        folder_id: &str,
+        fetch_errors: &HashMap<String, String>,
+    ) -> Vec<TreeItem> {
+        let Some(dashboards) = state.remote_dashboard_cache().peek(profile_id) else {
+            if let Some(error) = fetch_errors.get(folder_id) {
+                return vec![TreeItem::new(
+                    format!("remote_dashboards_error:{profile_id}"),
+                    format!("Error: {error} — collapse and expand to retry"),
+                )];
+            }
+            return vec![Self::loading_placeholder(
+                profile_id,
+                "",
+                "remote-dashboards-loading",
+            )];
+        };
+
+        if dashboards.is_empty() {
+            return vec![TreeItem::new(
+                format!("remote_dashboards_empty:{profile_id}"),
+                "No dashboards in this account/region".to_string(),
+            )];
+        }
+
+        dashboards
+            .iter()
+            .map(|d| {
+                TreeItem::new(
+                    SchemaNodeId::RemoteDashboardItem {
+                        profile_id,
+                        name: d.name.clone(),
+                    }
+                    .to_string(),
+                    d.name.clone(),
+                )
+            })
+            .collect()
+    }
+
+    /// Build the `SavedChartsFolder` tree node for a connected profile.
+    ///
+    /// Children are one `SavedChartItem` per chart returned by the manager,
+    /// sorted by `updated_at` descending. When no charts exist a placeholder
+    /// is shown.
+    fn build_saved_charts_folder_item(profile_id: Uuid, state: &AppStateEntity) -> TreeItem {
+        let children = Self::build_saved_chart_children(profile_id, state);
+        TreeItem::new(
+            SchemaNodeId::SavedChartsFolder { profile_id }.to_string(),
+            "Saved Charts".to_string(),
+        )
+        .expanded(false)
+        .children(children)
+    }
+
+    /// Build the `DashboardItem` children for the `DashboardsFolder`.
+    ///
+    /// Returns items sorted by `updated_at` descending (most recently updated
+    /// first). When the list is empty a non-clickable placeholder node is
+    /// returned so the folder does not appear empty to the user.
+    fn build_dashboard_children(profile_id: Uuid, state: &AppStateEntity) -> Vec<TreeItem> {
+        let mut dashboards = state.dashboards.dashboards_for_profile(profile_id);
+
+        dashboards.sort_by_key(|d| std::cmp::Reverse(d.updated_at));
+
+        if dashboards.is_empty() {
+            let can_import = state
+                .connections()
+                .get(&profile_id)
+                .map(|conn| conn.connection.metadata().capabilities)
+                .is_some_and(|caps| {
+                    caps.contains(dbflux_core::DriverCapabilities::DASHBOARD_IMPORT)
+                });
+
+            let hint = if can_import {
+                "No dashboards yet — right-click to create or import"
+            } else {
+                "No dashboards yet — right-click to create"
+            };
+
+            return vec![TreeItem::new(
+                format!("dashboards_empty:{profile_id}"),
+                hint.to_string(),
+            )];
+        }
+
+        dashboards
+            .into_iter()
+            .map(|d| {
+                TreeItem::new(
+                    SchemaNodeId::DashboardItem {
+                        profile_id,
+                        dashboard_id: d.id,
+                    }
+                    .to_string(),
+                    d.name.clone(),
+                )
+            })
+            .collect()
+    }
+
+    /// Build the `SavedChartItem` children for the `SavedChartsFolder`.
+    ///
+    /// Returns items sorted by `updated_at` descending. When the list is empty
+    /// a non-clickable placeholder node is returned.
+    fn build_saved_chart_children(profile_id: Uuid, state: &AppStateEntity) -> Vec<TreeItem> {
+        let mut charts = state.saved_charts.charts_for_profile(profile_id);
+
+        charts.sort_by_key(|c| std::cmp::Reverse(c.updated_at));
+
+        if charts.is_empty() {
+            return vec![TreeItem::new(
+                format!("saved_charts_empty:{profile_id}"),
+                "No saved charts yet — save a chart from a query result".to_string(),
+            )];
+        }
+
+        charts
+            .into_iter()
+            .map(|c| {
+                TreeItem::new(
+                    SchemaNodeId::SavedChartItem {
+                        profile_id,
+                        chart_id: c.id,
+                    }
+                    .to_string(),
+                    Self::saved_chart_display_label(c),
+                )
+            })
+            .collect()
+    }
+
+    /// Resolve a non-empty label for a saved chart even when its `name` is
+    /// blank — protects the sidebar from rendering invisible rows for charts
+    /// imported before the title-fallback fix or for any future code path
+    /// that persists an empty name.
+    ///
+    /// Order: persisted name -> joined distinct metric names (for Metric
+    /// sources) -> "Untitled chart".
+    fn saved_chart_display_label(chart: &dbflux_components::SavedChart) -> String {
+        if !chart.name.trim().is_empty() {
+            return chart.name.clone();
+        }
+
+        if let dbflux_components::SavedChartSource::Metric { series } = &chart.source
+            && !series.is_empty()
+        {
+            let mut names: Vec<&str> = series.iter().map(|s| s.metric_name.as_str()).collect();
+            names.sort_unstable();
+            names.dedup();
+            let joined = names.join(", ");
+            if !joined.is_empty() {
+                return joined;
+            }
+        }
+
+        "Untitled chart".to_string()
     }
 
     pub(super) fn count_visible_entries(items: &[TreeItem]) -> usize {
@@ -604,6 +850,7 @@ impl Sidebar {
         table_details: &HashMap<(String, String), TableInfo>,
         collection_children_cache: &HashMap<(String, String), dbflux_core::CollectionChildrenCache>,
         capabilities: DriverCapabilities,
+        category: dbflux_core::DatabaseCategory,
         metric_catalog_cache: Option<&dbflux_app::MetricCatalogCache>,
         metric_fetch_errors: &HashMap<String, String>,
     ) -> Vec<TreeItem> {
@@ -631,9 +878,9 @@ impl Sidebar {
                         database: database_name.to_string(),
                     }
                     .to_string(),
-                    format!("Collections ({})", db_schema.tables.len()),
+                    format!("{} ({})", category.container_name(), db_schema.tables.len()),
                 )
-                .expanded(true)
+                .expanded(category.default_expand_container())
                 .children(collection_children),
             );
         }
@@ -1959,6 +2206,7 @@ mod tests {
             &Default::default(),
             &Default::default(),
             capabilities,
+            dbflux_core::DatabaseCategory::Document,
             None,
             &Default::default(),
         );
@@ -1999,6 +2247,7 @@ mod tests {
             &Default::default(),
             &Default::default(),
             capabilities,
+            dbflux_core::DatabaseCategory::Document,
             None,
             &Default::default(),
         );
@@ -2359,6 +2608,371 @@ mod tests {
         assert!(
             !super::should_collapse_database_wrapper(&dbs),
             "zero databases must not trigger collapse path (falls through to fallback branch)"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // M — Dashboard and Saved Charts folder helpers (Phase M)
+    // -----------------------------------------------------------------------
+
+    /// Helper: build an AppStateEntity with in-memory storage and insert a
+    /// minimal profile row into `cfg_connection_profiles` so FK constraints
+    /// on the viz tables are satisfied. Returns the entity and the profile UUID.
+    fn make_state_with_profile() -> (dbflux_ui_base::AppStateEntity, Uuid) {
+        use dbflux_storage::bootstrap::StorageRuntime;
+
+        let rt = StorageRuntime::in_memory().unwrap();
+        let profile_id = Uuid::new_v4();
+
+        // Insert a row into cfg_connection_profiles so that FK constraints
+        // on viz_dashboards.profile_id and viz_saved_charts.profile_id succeed.
+        {
+            let conn = rt.viz_connection();
+            let guard = conn.lock().unwrap();
+            guard
+                .execute(
+                    "INSERT INTO cfg_connection_profiles (id, name) VALUES (?1, ?2)",
+                    rusqlite::params![profile_id.to_string(), "test"],
+                )
+                .unwrap();
+        }
+
+        let state = dbflux_ui_base::AppStateEntity::new_with_storage_runtime(rt);
+        (state, profile_id)
+    }
+
+    #[test]
+    fn test_build_dashboards_folder_item_id_contains_dashboards_folder() {
+        let (state, profile_id) = make_state_with_profile();
+        let item = Sidebar::build_dashboards_folder_item(profile_id, &state);
+        assert!(
+            item.id.as_ref().contains("DBF"),
+            "DashboardsFolder ID must contain the 'DBF' prefix"
+        );
+    }
+
+    #[test]
+    fn test_build_saved_charts_folder_item_id_contains_saved_charts_folder() {
+        let (state, profile_id) = make_state_with_profile();
+        let item = Sidebar::build_saved_charts_folder_item(profile_id, &state);
+        assert!(
+            item.id.as_ref().contains("SCRF"),
+            "SavedChartsFolder ID must contain the 'SCRF' prefix"
+        );
+    }
+
+    #[test]
+    fn test_remote_dashboard_children_show_loading_on_cache_miss() {
+        let (state, profile_id) = make_state_with_profile();
+        let folder_id =
+            dbflux_core::SchemaNodeId::RemoteDashboardsFolder { profile_id }.to_string();
+        let errors = HashMap::new();
+
+        let children =
+            Sidebar::build_remote_dashboard_children(profile_id, &state, &folder_id, &errors);
+
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0].label.as_ref(), "Loading...");
+    }
+
+    #[test]
+    fn test_remote_dashboard_children_show_error_when_recorded() {
+        let (state, profile_id) = make_state_with_profile();
+        let folder_id =
+            dbflux_core::SchemaNodeId::RemoteDashboardsFolder { profile_id }.to_string();
+        let mut errors = HashMap::new();
+        errors.insert(folder_id.clone(), "access denied".to_string());
+
+        let children =
+            Sidebar::build_remote_dashboard_children(profile_id, &state, &folder_id, &errors);
+
+        assert_eq!(children.len(), 1);
+        assert!(children[0].label.as_ref().contains("access denied"));
+    }
+
+    #[test]
+    fn test_remote_dashboard_children_list_items_when_cached() {
+        let (state, profile_id) = make_state_with_profile();
+        state.remote_dashboard_cache().store(
+            profile_id,
+            vec![
+                dbflux_core::DashboardRef {
+                    name: "prod".to_string(),
+                    last_modified: None,
+                },
+                dbflux_core::DashboardRef {
+                    name: "staging".to_string(),
+                    last_modified: None,
+                },
+            ],
+        );
+
+        let folder_id =
+            dbflux_core::SchemaNodeId::RemoteDashboardsFolder { profile_id }.to_string();
+        let errors = HashMap::new();
+        let children =
+            Sidebar::build_remote_dashboard_children(profile_id, &state, &folder_id, &errors);
+
+        assert_eq!(children.len(), 2);
+        assert_eq!(children[0].label.as_ref(), "prod");
+        assert!(children[0].id.as_ref().starts_with("RDBI"));
+    }
+
+    #[test]
+    fn test_build_dashboards_folder_empty_state_shows_placeholder() {
+        let (state, profile_id) = make_state_with_profile();
+        let children = Sidebar::build_dashboard_children(profile_id, &state);
+        assert_eq!(children.len(), 1);
+        assert_eq!(
+            children[0].id.as_ref(),
+            format!("dashboards_empty:{profile_id}")
+        );
+        assert!(children[0].label.to_string().contains("No dashboards yet"));
+    }
+
+    #[test]
+    fn test_build_saved_charts_folder_empty_state_shows_placeholder() {
+        let (state, profile_id) = make_state_with_profile();
+        let children = Sidebar::build_saved_chart_children(profile_id, &state);
+        assert_eq!(children.len(), 1);
+        assert_eq!(
+            children[0].id.as_ref(),
+            format!("saved_charts_empty:{profile_id}")
+        );
+        assert!(
+            children[0]
+                .label
+                .to_string()
+                .contains("No saved charts yet")
+        );
+    }
+
+    #[test]
+    fn test_build_dashboard_children_one_item_per_row() {
+        use dbflux_components::SavedChartRefreshPolicy;
+        let (mut state, profile_id) = make_state_with_profile();
+
+        state
+            .dashboards
+            .create_dashboard(
+                "Dashboard A".to_string(),
+                None,
+                profile_id,
+                None,
+                SavedChartRefreshPolicy::Off,
+            )
+            .unwrap();
+        state
+            .dashboards
+            .create_dashboard(
+                "Dashboard B".to_string(),
+                None,
+                profile_id,
+                None,
+                SavedChartRefreshPolicy::Off,
+            )
+            .unwrap();
+
+        let children = Sidebar::build_dashboard_children(profile_id, &state);
+        assert_eq!(children.len(), 2, "one DashboardItem per row");
+    }
+
+    #[test]
+    fn test_build_dashboard_children_sorted_by_updated_at_desc() {
+        use dbflux_components::SavedChartRefreshPolicy;
+        use std::time::Duration;
+        let (mut state, profile_id) = make_state_with_profile();
+
+        let id_old = state
+            .dashboards
+            .create_dashboard(
+                "Old".to_string(),
+                None,
+                profile_id,
+                None,
+                SavedChartRefreshPolicy::Off,
+            )
+            .unwrap();
+
+        // Sleep briefly so timestamps differ (SQLite ms resolution).
+        std::thread::sleep(Duration::from_millis(5));
+
+        let id_new = state
+            .dashboards
+            .create_dashboard(
+                "New".to_string(),
+                None,
+                profile_id,
+                None,
+                SavedChartRefreshPolicy::Off,
+            )
+            .unwrap();
+
+        let children = Sidebar::build_dashboard_children(profile_id, &state);
+        assert_eq!(children.len(), 2);
+
+        // "New" was created last so updated_at is greater → should appear first.
+        let first_id: dbflux_core::SchemaNodeId = children[0].id.as_ref().parse().unwrap();
+        assert!(
+            matches!(first_id, dbflux_core::SchemaNodeId::DashboardItem { dashboard_id, .. } if dashboard_id == id_new),
+            "most recently updated dashboard must be first"
+        );
+        let second_id: dbflux_core::SchemaNodeId = children[1].id.as_ref().parse().unwrap();
+        assert!(
+            matches!(second_id, dbflux_core::SchemaNodeId::DashboardItem { dashboard_id, .. } if dashboard_id == id_old)
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Capability-aware empty hint tests (Gap 4)
+    // -----------------------------------------------------------------------
+
+    /// Minimal `Connection` implementation that lets tests control capability flags.
+    struct CapabilityConnection {
+        metadata: dbflux_core::DriverMetadata,
+    }
+
+    impl CapabilityConnection {
+        fn with_capabilities(capabilities: dbflux_core::DriverCapabilities) -> Self {
+            Self {
+                metadata: dbflux_core::DriverMetadata {
+                    id: "test".to_string(),
+                    display_name: "Test".to_string(),
+                    description: "test connection".to_string(),
+                    category: dbflux_core::DatabaseCategory::Relational,
+                    deployment_class: None,
+                    query_language: dbflux_core::QueryLanguage::Sql,
+                    capabilities,
+                    default_port: None,
+                    uri_scheme: "test".to_string(),
+                    icon: dbflux_core::Icon::Database,
+                    syntax: None,
+                    query: None,
+                    mutation: None,
+                    ddl: None,
+                    transactions: None,
+                    limits: None,
+                    ssl_modes: None,
+                    ssl_cert_fields: None,
+                    classification_override: None,
+                },
+            }
+        }
+    }
+
+    impl dbflux_core::Connection for CapabilityConnection {
+        fn metadata(&self) -> &dbflux_core::DriverMetadata {
+            &self.metadata
+        }
+
+        fn ping(&self) -> Result<(), dbflux_core::DbError> {
+            Ok(())
+        }
+
+        fn close(&mut self) -> Result<(), dbflux_core::DbError> {
+            Ok(())
+        }
+
+        fn execute(
+            &self,
+            _req: &dbflux_core::QueryRequest,
+        ) -> Result<dbflux_core::QueryResult, dbflux_core::DbError> {
+            Err(dbflux_core::DbError::NotSupported(
+                "test connection".to_string(),
+            ))
+        }
+
+        fn cancel(&self, _handle: &dbflux_core::QueryHandle) -> Result<(), dbflux_core::DbError> {
+            Ok(())
+        }
+
+        fn schema(&self) -> Result<dbflux_core::SchemaSnapshot, dbflux_core::DbError> {
+            Ok(dbflux_core::SchemaSnapshot::default())
+        }
+
+        fn kind(&self) -> dbflux_core::DbKind {
+            dbflux_core::DbKind::SQLite
+        }
+
+        fn schema_loading_strategy(&self) -> dbflux_core::SchemaLoadingStrategy {
+            dbflux_core::SchemaLoadingStrategy::SingleDatabase
+        }
+
+        fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
+            &dbflux_core::DefaultSqlDialect
+        }
+    }
+
+    /// Build a minimal `ConnectedProfile` backed by `CapabilityConnection`.
+    fn make_connected_profile(
+        _profile_id: Uuid,
+        capabilities: dbflux_core::DriverCapabilities,
+    ) -> dbflux_core::ConnectedProfile {
+        use std::path::PathBuf;
+        use std::sync::Arc;
+        dbflux_core::ConnectedProfile {
+            profile: dbflux_core::ConnectionProfile::new(
+                "test",
+                dbflux_core::DbConfig::SQLite {
+                    path: PathBuf::from(":memory:"),
+                    connection_id: None,
+                },
+            ),
+            connection: Arc::new(CapabilityConnection::with_capabilities(capabilities)),
+            schema: None,
+            database_schemas: HashMap::new(),
+            table_details: HashMap::new(),
+            collection_children: HashMap::new(),
+            schema_types: HashMap::new(),
+            schema_indexes: HashMap::new(),
+            schema_foreign_keys: HashMap::new(),
+            schema_routines: HashMap::new(),
+            dependents_cache: HashMap::new(),
+            active_database: None,
+            redis_key_cache: dbflux_core::RedisKeyCache::default(),
+            database_connections: HashMap::new(),
+            proxy_tunnel: None,
+        }
+    }
+
+    #[test]
+    fn dashboard_empty_hint_includes_import_when_driver_has_dashboard_import_capability() {
+        let (mut state, profile_id) = make_state_with_profile();
+
+        let connected = make_connected_profile(
+            profile_id,
+            dbflux_core::DriverCapabilities::DASHBOARD_IMPORT,
+        );
+        state.connections_mut().insert(profile_id, connected);
+
+        let children = Sidebar::build_dashboard_children(profile_id, &state);
+        assert_eq!(
+            children.len(),
+            1,
+            "empty state must produce one placeholder"
+        );
+        let label = children[0].label.to_string().to_ascii_lowercase();
+        assert!(
+            label.contains("import"),
+            "hint must mention 'import' when driver has DASHBOARD_IMPORT: {label:?}"
+        );
+    }
+
+    #[test]
+    fn dashboard_empty_hint_excludes_import_when_driver_lacks_dashboard_import_capability() {
+        let (state, profile_id) = make_state_with_profile();
+        // No connected profile inserted — connection map stays empty.
+
+        let children = Sidebar::build_dashboard_children(profile_id, &state);
+        assert_eq!(
+            children.len(),
+            1,
+            "empty state must produce one placeholder"
+        );
+        let label = children[0].label.to_string().to_ascii_lowercase();
+        assert!(
+            !label.contains("import"),
+            "hint must not mention 'import' without DASHBOARD_IMPORT: {label:?}"
         );
     }
 }

@@ -132,6 +132,13 @@ pub struct ChartDocument {
     /// TimeRangePanel construction; set to `Some` by `render.rs`).
     pub(super) result_panel: Option<Entity<ResultPanel>>,
 
+    /// When `true`, this chart is embedded inside another document (e.g. a
+    /// `DashboardDocument` panel) and must suppress its own chrome — the
+    /// header segments (title/Run/Save) and the internal chart toolbar row
+    /// (TYPE/Stats/PNG/Save) are not rendered. The host document supplies the
+    /// surrounding chrome instead.
+    pub(super) embedded: bool,
+
     _subscriptions: Vec<Subscription>,
 }
 
@@ -252,6 +259,7 @@ impl ChartDocument {
             focus_handle: cx.focus_handle(),
             focus_mode: ChartDocFocus::default(),
             result_panel: None,
+            embedded: false,
             _subscriptions: vec![metric_apply_sub, app_state_disconnect_sub],
         }
     }
@@ -268,18 +276,42 @@ impl ChartDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<Self, String> {
-        // Collection sources are not routed through ChartDocument in W0.
-        // They still open via DataDocument. This guard must remain intact
-        // until a future workstream explicitly changes routing.
-        if let SavedChartSource::Collection { .. } = &saved.source {
-            return Err(
-                "Collection source not supported in ChartDocument; open via DataDocument"
-                    .to_string(),
-            );
+        use dbflux_components::chart::MetricSource;
+
+        match &saved.source {
+            // Collection sources are not routed through ChartDocument in W0.
+            // They still open via DataDocument.
+            SavedChartSource::Collection { .. } => {
+                return Err(
+                    "Collection source not supported in ChartDocument; open via DataDocument"
+                        .to_string(),
+                );
+            }
+
+            // Metric sources bypass the query path and construct a MetricSource
+            // directly, matching the same path used by `open_metric_chart_from_sidebar`.
+            SavedChartSource::Metric { series } => {
+                let source = MetricSource {
+                    series: series.clone(),
+                };
+
+                let mut doc = Self::new_with_source(
+                    Some(saved.profile_id),
+                    saved.name.clone(),
+                    Box::new(source),
+                    app_state,
+                    window,
+                    cx,
+                );
+                doc.saved_chart_id = Some(saved.id);
+                return Ok(doc);
+            }
+
+            // Query source: standard path through query execution.
+            SavedChartSource::Query { .. } => {}
         }
 
-        // Extract the query string. The Collection guard above ensures this is
-        // always a Query variant at this point; the fallback is a safe no-op.
+        // Extract the query string (only reached for Query variant).
         let query = if let SavedChartSource::Query { query } = &saved.source {
             query.clone()
         } else {
@@ -372,7 +404,12 @@ impl ChartDocument {
         let initial_metric_identity = data_source
             .as_any()
             .and_then(|a| a.downcast_ref::<dbflux_components::chart::MetricSource>())
-            .map(|src| (src.namespace.clone(), src.metric_name.clone()));
+            .map(|src| {
+                (
+                    src.primary_namespace().to_string(),
+                    src.primary_metric_name().to_string(),
+                )
+            });
 
         Self {
             id: DocumentId::new(),
@@ -403,6 +440,7 @@ impl ChartDocument {
             name_prompt: None,
             pending_toast: None,
             result_panel: None,
+            embedded: false,
             focus_handle: cx.focus_handle(),
             focus_mode: ChartDocFocus::default(),
             _subscriptions: vec![metric_apply_sub, app_state_disconnect_sub],
@@ -441,7 +479,7 @@ impl ChartDocument {
     /// Call this before allocating an entity to avoid panicking inside `cx.new`.
     pub fn validate_saved_source(saved: &SavedChart) -> Result<(), String> {
         match &saved.source {
-            SavedChartSource::Query { .. } => Ok(()),
+            SavedChartSource::Query { .. } | SavedChartSource::Metric { .. } => Ok(()),
             SavedChartSource::Collection { .. } => Err(
                 "Collection source not supported in ChartDocument; open via DataDocument"
                     .to_string(),
@@ -774,6 +812,27 @@ impl ChartDocument {
         }
     }
 
+    /// Update the pending time window WITHOUT scheduling a re-execution.
+    ///
+    /// Called by `DashboardDocument::request_reexec_for_slot` for panels that
+    /// are queued behind the semaphore. The window is stashed so that when the
+    /// semaphore releases and `mark_pending_reexecute` is called, the correct
+    /// window is used.
+    pub fn stage_time_window(&mut self, start_ms: i64, end_ms: i64) {
+        self.pending_time_window = Some((start_ms, end_ms));
+        // Intentionally does NOT set pending_chart_reexecute or call cx.notify().
+    }
+
+    /// Set `pending_chart_reexecute = true` and schedule a render notification.
+    ///
+    /// Called by `DashboardDocument` when the semaphore releases a slot.
+    /// The panel's render loop will pick up the flag and call
+    /// `request_reexecute(window, cx)`.
+    pub fn mark_pending_reexecute(&mut self, cx: &mut Context<Self>) {
+        self.pending_chart_reexecute = true;
+        cx.notify();
+    }
+
     /// Apply the custom date/time picker values and trigger a chart re-execution.
     ///
     /// Called by the Apply button in the custom picker row. Delegates to the
@@ -899,16 +958,34 @@ impl ChartDocument {
         // Preserve the ID so upsert overwrites the existing record.
         saved.id = id;
 
-        self.app_state.update(cx, |state, _cx| {
-            state.saved_charts.upsert(saved);
+        let persist_result = self.app_state.update(cx, |state, _cx| {
+            state.saved_charts.upsert(saved).inspect_err(|e| {
+                state.record_storage_failure(
+                    dbflux_core::observability::actions::CONFIG_UPDATE,
+                    "saved_chart",
+                    id.to_string(),
+                    format!("Failed to save chart '{name}'"),
+                    e.to_string(),
+                );
+            })
         });
 
-        self.saved_chart_id = Some(id);
-        self.title = name;
-        self.pending_toast = Some(PendingToast {
-            message: "Chart saved".to_string(),
-            is_error: false,
-        });
+        match persist_result {
+            Ok(_) => {
+                self.saved_chart_id = Some(id);
+                self.title = name;
+                self.pending_toast = Some(PendingToast {
+                    message: "Chart saved".to_string(),
+                    is_error: false,
+                });
+            }
+            Err(e) => {
+                self.pending_toast = Some(PendingToast {
+                    message: format!("Failed to save chart: {e}"),
+                    is_error: true,
+                });
+            }
+        }
 
         cx.notify();
     }
@@ -920,6 +997,168 @@ impl ChartDocument {
     }
 
     // ---- ViewHandle construction ----
+
+    /// Mark this chart document as embedded inside another document (typically
+    /// a `DashboardDocument` panel).
+    ///
+    /// When embedded, the chart suppresses its own header segments (title /
+    /// Run / Save) and its internal chart toolbar row (TYPE / Stats / PNG /
+    /// Save chart). The host document provides the surrounding chrome.
+    pub fn set_embedded(&mut self, embedded: bool, cx: &mut Context<Self>) {
+        if self.embedded != embedded {
+            self.embedded = embedded;
+            cx.notify();
+        }
+    }
+
+    /// Returns whether this chart is in embedded mode.
+    pub fn is_embedded(&self) -> bool {
+        self.embedded
+    }
+
+    // ---- Accessors used by host documents (e.g. DashboardDocument Configure popover) ----
+
+    /// Returns the current chart kind from the underlying `ChartShell`.
+    pub fn chart_kind(&self, cx: &App) -> dbflux_components::chart::ChartKind {
+        self.chart_shell.read(cx).chart_kind()
+    }
+
+    /// Returns the active binding spec from the underlying `ChartShell`.
+    pub fn active_bindings(&self, cx: &App) -> dbflux_components::chart::BindingSpec {
+        self.chart_shell.read(cx).active_bindings()
+    }
+
+    /// Returns the column metadata from the last successful execution, when present.
+    pub fn last_result_columns(&self) -> Option<Vec<dbflux_core::ColumnMeta>> {
+        self.last_result.as_ref().map(|r| r.columns.clone())
+    }
+
+    /// Returns the currently open axis pill on the underlying `ChartShell`.
+    pub fn axis_open_pill(&self, cx: &App) -> Option<dbflux_components::chart::AxisPill> {
+        self.chart_shell.read(cx).axis_open_pill
+    }
+
+    /// Toggle an axis pill open/closed on the underlying `ChartShell`.
+    pub fn toggle_axis_pill(
+        &mut self,
+        pill: dbflux_components::chart::AxisPill,
+        cx: &mut Context<Self>,
+    ) {
+        self.chart_shell
+            .update(cx, |shell, cx| shell.toggle_axis_pill(pill, cx));
+    }
+
+    /// Apply a chart kind change through the underlying `ChartShell`. The shell
+    /// handles cx.notify() internally.
+    pub fn apply_chart_kind(
+        &mut self,
+        kind: dbflux_components::chart::ChartKind,
+        cx: &mut Context<Self>,
+    ) {
+        self.chart_shell
+            .update(cx, |shell, cx| shell.set_chart_kind(kind, cx));
+    }
+
+    /// Apply a binding-spec change through the underlying `ChartShell`.
+    pub fn apply_binding_spec(
+        &mut self,
+        bindings: dbflux_components::chart::BindingSpec,
+        cx: &mut Context<Self>,
+    ) {
+        self.chart_shell
+            .update(cx, |shell, cx| shell.apply_bindings(bindings, cx));
+    }
+
+    /// Toggle the stats rail on the underlying `ChartShell`. Mirrors the
+    /// internal `on_toggle_stats_rail` handler used by `ChartDocument`'s own
+    /// toolbar so the dashboard Configure popover behaves identically.
+    pub fn toggle_stats_rail(&mut self, cx: &mut Context<Self>) {
+        self.chart_shell.update(cx, |shell, cx| {
+            let (open, tab) = if shell.chart_rail_open
+                && shell.chart_rail_tab == crate::chart::ChartRailTab::Stats
+            {
+                (false, shell.chart_rail_tab)
+            } else {
+                (true, crate::chart::ChartRailTab::Stats)
+            };
+            shell.chart_rail_open = open;
+            shell.chart_rail_tab = tab;
+            cx.notify();
+        });
+    }
+
+    /// Schedule a "PNG export coming soon" toast. The host document's render
+    /// loop drains `pending_toast` and surfaces it through the global toast host.
+    pub fn schedule_png_export_toast(&mut self, cx: &mut Context<Self>) {
+        self.pending_toast = Some(PendingToast {
+            message: "PNG export coming in v0.7".to_string(),
+            is_error: false,
+        });
+        cx.notify();
+    }
+
+    /// Persist the current `chart_spec` + bindings back to `SavedChart` storage.
+    ///
+    /// Looks up the chart record by `saved_chart_id` (no-op if the document was
+    /// never saved), mutates its `chart_spec` to reflect the latest in-memory
+    /// shell state, and re-upserts it. Failures are routed through
+    /// `record_storage_failure` and surfaced as a toast via `pending_toast`.
+    ///
+    /// Returns `true` on success, `false` if there was nothing to persist or
+    /// the upsert failed. After a successful persist the chart re-executes via
+    /// `mark_pending_reexecute` so the panel renders against the new bindings.
+    pub fn persist_chart_spec_and_reexecute(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(chart_id) = self.saved_chart_id else {
+            return false;
+        };
+
+        // Read the existing saved record so we preserve unrelated fields
+        // (name, profile_id, source, refresh_policy, time_range_preset, ...).
+        let existing = self
+            .app_state
+            .read(cx)
+            .saved_charts
+            .chart_by_id(chart_id)
+            .cloned();
+        let Some(mut saved) = existing else {
+            return false;
+        };
+
+        let kind = self.chart_kind(cx);
+        let bindings = self.active_bindings(cx);
+
+        saved.chart_spec.kind = kind;
+        saved.chart_spec.binding = bindings.clone();
+        saved.bindings = bindings;
+
+        let title = saved.name.clone();
+        let persist_result = self.app_state.update(cx, |state, _cx| {
+            state.saved_charts.upsert(saved).inspect_err(|e| {
+                state.record_storage_failure(
+                    dbflux_core::observability::actions::CONFIG_UPDATE,
+                    "saved_chart",
+                    chart_id.to_string(),
+                    format!("Failed to save chart '{title}'"),
+                    e.to_string(),
+                );
+            })
+        });
+
+        match persist_result {
+            Ok(_) => {
+                self.mark_pending_reexecute(cx);
+                true
+            }
+            Err(e) => {
+                self.pending_toast = Some(PendingToast {
+                    message: format!("Failed to save chart: {e}"),
+                    is_error: true,
+                });
+                cx.notify();
+                false
+            }
+        }
+    }
 
     /// Produce a `ViewHandle` that lets `ResultPanel` host `ChartDocument`.
     ///
@@ -958,7 +1197,13 @@ impl ChartDocument {
     /// - `Left/0`: document title label
     /// - `Left/1`: Run / Running… primary button
     /// - `Right/0`: Save button
-    fn header_segments(entity: Entity<Self>, _cx: &App) -> Vec<ToolbarSegment> {
+    fn header_segments(entity: Entity<Self>, cx: &App) -> Vec<ToolbarSegment> {
+        // When embedded inside another document (e.g. a DashboardDocument
+        // panel) the host owns the chrome and no segments should be rendered.
+        if entity.read(cx).embedded {
+            return Vec::new();
+        }
+
         use dbflux_components::primitives::Text;
         use dbflux_components::tokens::Spacing;
         use gpui_component::button::{Button, ButtonVariant, ButtonVariants};
@@ -1381,13 +1626,13 @@ mod tests {
         use crate::chart::shell::ChartShellEvent;
         use dbflux_components::chart::{ChartDataSource, MetricSource};
 
-        let source = MetricSource {
-            namespace: "AWS/EC2".to_string(),
-            metric_name: "CPUUtilization".to_string(),
-            dimensions: vec![],
-            period_s: 300,
-            statistic: "Average".to_string(),
-        };
+        let source = MetricSource::single(
+            "AWS/EC2".to_string(),
+            "CPUUtilization".to_string(),
+            vec![],
+            300,
+            "Average".to_string(),
+        );
         let event = ChartShellEvent::MetricPickerApplied(Box::new(source));
 
         // Mirror the closure body in `cx.subscribe(&chart_shell, ...)`.
@@ -1404,8 +1649,8 @@ mod tests {
             .and_then(|s| s.as_any())
             .and_then(|a| a.downcast_ref::<MetricSource>())
             .expect("pending_data_source must downcast back to MetricSource");
-        assert_eq!(captured.namespace, "AWS/EC2");
-        assert_eq!(captured.metric_name, "CPUUtilization");
+        assert_eq!(captured.primary_namespace(), "AWS/EC2");
+        assert_eq!(captured.primary_metric_name(), "CPUUtilization");
     }
 
     /// `matches_metric_source` must compare against the initial identity
@@ -1512,13 +1757,13 @@ mod tests {
     fn set_data_source_updates_title_from_source_description() {
         use dbflux_components::chart::MetricSource;
 
-        let source = MetricSource {
-            namespace: "AWS/Lambda".to_string(),
-            metric_name: "Invocations".to_string(),
-            dimensions: vec![],
-            period_s: 300,
-            statistic: "Average".to_string(),
-        };
+        let source = MetricSource::single(
+            "AWS/Lambda".to_string(),
+            "Invocations".to_string(),
+            vec![],
+            300,
+            "Average".to_string(),
+        );
 
         let description = source.describe();
         let title_update = description.display_title();

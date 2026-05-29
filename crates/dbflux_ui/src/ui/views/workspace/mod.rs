@@ -9,6 +9,13 @@ pub use inspector::{WorkspaceInspector, WorkspaceInspectorEvent};
 use crate::app::{AppStateChanged, AppStateEntity};
 use dbflux_components;
 use dbflux_core::observability::actions::CONFIG_CHANGE;
+use dbflux_ui_base::modals::{
+    AddPanelOutcome, AddPanelRequest, CreateDashboardOutcome, CreateDashboardRequest,
+    DeleteDashboardOutcome, DeleteDashboardRequest, DeleteSavedChartOutcome,
+    DeleteSavedChartRequest, ModalAddPanelPicker, ModalCreateDashboard,
+    ModalDeleteDashboardConfirm, ModalDeleteSavedChartConfirm, ModalRenameItem, RenameItemOutcome,
+    RenameItemRequest, RenameTarget, RequestMetricsForNamespace,
+};
 
 #[cfg(feature = "mcp")]
 use crate::app::McpRuntimeEventRaised;
@@ -202,6 +209,7 @@ pub(super) fn map_item_to_selection(item: &PaletteItem) -> Option<PaletteSelecti
         PaletteItem::SavedChart { id, .. } => {
             Some(PaletteSelection::OpenSavedChart { chart_id: *id })
         }
+        PaletteItem::ImportDashboard => Some(PaletteSelection::ImportDashboard),
     }
 }
 
@@ -274,6 +282,15 @@ pub struct Workspace {
     pending_drop_table_item_id: Option<String>,
     /// SSH tunnel passphrase modal.
     modal_tunnel_auth: Entity<crate::ui::overlays::modals::ModalTunnelAuth>,
+    /// Import Dashboard from JSON modal.
+    modal_import_dashboard: Entity<crate::ui::overlays::modals::ModalImportDashboard>,
+
+    /// Dashboard / saved-chart management modals.
+    modal_create_dashboard: Entity<ModalCreateDashboard>,
+    modal_rename_item: Entity<ModalRenameItem>,
+    modal_delete_dashboard: Entity<ModalDeleteDashboardConfirm>,
+    modal_delete_saved_chart: Entity<ModalDeleteSavedChartConfirm>,
+    modal_add_panel: Entity<ModalAddPanelPicker>,
 
     tasks_state: PanelState,
     pending_command: Option<&'static str>,
@@ -347,6 +364,14 @@ impl Workspace {
             cx.new(|cx| crate::ui::overlays::modals::ModalDropTable::new(window, cx));
         let modal_tunnel_auth =
             cx.new(|cx| crate::ui::overlays::modals::ModalTunnelAuth::new(window, cx));
+        let modal_import_dashboard =
+            cx.new(|cx| crate::ui::overlays::modals::ModalImportDashboard::new(window, cx));
+
+        let modal_create_dashboard = cx.new(|cx| ModalCreateDashboard::new(window, cx));
+        let modal_rename_item = cx.new(|cx| ModalRenameItem::new(window, cx));
+        let modal_delete_dashboard = cx.new(ModalDeleteDashboardConfirm::new);
+        let modal_delete_saved_chart = cx.new(ModalDeleteSavedChartConfirm::new);
+        let modal_add_panel = cx.new(|cx| ModalAddPanelPicker::new(window, cx));
 
         // Subscribe: ModalDeleteConnection — on Confirmed, execute the pending delete.
         cx.subscribe(
@@ -536,6 +561,11 @@ impl Workspace {
                 PaletteSelection::OpenSavedChart { chart_id } => {
                     this.open_saved_chart(*chart_id, window, cx);
                 }
+                PaletteSelection::ImportDashboard => {
+                    this.modal_import_dashboard.update(cx, |modal, cx| {
+                        modal.open(window, cx);
+                    });
+                }
             },
         )
         .detach();
@@ -544,6 +574,130 @@ impl Workspace {
             this.needs_focus_restore = true;
             cx.notify();
         })
+        .detach();
+
+        // Subscribe: ModalImportDashboard — on Confirmed, run the dashboard import flow.
+        cx.subscribe_in(
+            &modal_import_dashboard,
+            window,
+            |this, _, event: &crate::ui::overlays::modals::ImportDashboardConfirmed, window, cx| {
+                this.run_dashboard_import(event.json.clone(), event.name.clone(), window, cx);
+            },
+        )
+        .detach();
+
+        // Subscribe: ModalCreateDashboard — on Confirmed, create the dashboard and open it.
+        cx.subscribe_in(
+            &modal_create_dashboard,
+            window,
+            |this, _, outcome: &CreateDashboardOutcome, window, cx| {
+                if let CreateDashboardOutcome::Confirmed { profile_id, name } = outcome.clone() {
+                    this.on_create_dashboard_confirmed(profile_id, name, window, cx);
+                }
+            },
+        )
+        .detach();
+
+        // Subscribe: ModalRenameItem — on Confirmed, apply the rename.
+        cx.subscribe_in(
+            &modal_rename_item,
+            window,
+            |this, _, outcome: &RenameItemOutcome, window, cx| {
+                if let RenameItemOutcome::Confirmed { target, new_name } = outcome.clone() {
+                    this.on_rename_item_confirmed(target, new_name, window, cx);
+                }
+            },
+        )
+        .detach();
+
+        // Subscribe: ModalDeleteDashboardConfirm — on Confirmed, delete the dashboard.
+        cx.subscribe_in(
+            &modal_delete_dashboard,
+            window,
+            |this, _, outcome: &DeleteDashboardOutcome, window, cx| {
+                if let DeleteDashboardOutcome::Confirmed { dashboard_id } = *outcome {
+                    this.on_delete_dashboard_confirmed(dashboard_id, window, cx);
+                }
+            },
+        )
+        .detach();
+
+        // Subscribe: ModalDeleteSavedChartConfirm — on Confirmed, delete the saved chart.
+        cx.subscribe_in(
+            &modal_delete_saved_chart,
+            window,
+            |this, _, outcome: &DeleteSavedChartOutcome, window, cx| {
+                if let DeleteSavedChartOutcome::Confirmed { chart_id } = *outcome {
+                    this.on_delete_saved_chart_confirmed(chart_id, window, cx);
+                }
+            },
+        )
+        .detach();
+
+        // Subscribe: ModalAddPanelPicker — handle all three submission paths.
+        cx.subscribe_in(
+            &modal_add_panel,
+            window,
+            |this, _, outcome: &AddPanelOutcome, window, cx| match outcome.clone() {
+                AddPanelOutcome::Confirmed {
+                    dashboard_id,
+                    chart_ids,
+                } => {
+                    this.on_add_panels_confirmed(dashboard_id, chart_ids, window, cx);
+                }
+                AddPanelOutcome::CreateFromQuery {
+                    dashboard_id,
+                    profile_id,
+                    name,
+                    query,
+                    chart_kind,
+                } => {
+                    this.on_create_panel_from_query(
+                        dashboard_id,
+                        profile_id,
+                        name,
+                        query,
+                        chart_kind,
+                        window,
+                        cx,
+                    );
+                }
+                AddPanelOutcome::CreateFromMetric {
+                    dashboard_id,
+                    profile_id,
+                    name,
+                    namespace,
+                    metric_name,
+                    dimensions,
+                    period_seconds,
+                    statistic,
+                } => {
+                    this.on_create_panel_from_metric(
+                        dashboard_id,
+                        profile_id,
+                        name,
+                        namespace,
+                        metric_name,
+                        dimensions,
+                        period_seconds,
+                        statistic,
+                        window,
+                        cx,
+                    );
+                }
+                AddPanelOutcome::Cancelled => {}
+            },
+        )
+        .detach();
+
+        // Subscribe: ModalAddPanelPicker — fetch metrics for a namespace on demand.
+        cx.subscribe_in(
+            &modal_add_panel,
+            window,
+            |this, modal, ev: &RequestMetricsForNamespace, _window, cx| {
+                this.on_request_metrics_for_namespace(modal.clone(), ev.clone(), cx);
+            },
+        )
         .detach();
 
         cx.subscribe_in(
@@ -749,6 +903,39 @@ impl Workspace {
                         window,
                         cx,
                     );
+                }
+                SidebarEvent::OpenDashboard { dashboard_id } => {
+                    this.open_dashboard(*dashboard_id, window, cx);
+                }
+                SidebarEvent::OpenRemoteDashboard { profile_id, name } => {
+                    this.open_remote_dashboard(*profile_id, name.clone(), window, cx);
+                }
+                SidebarEvent::OpenSavedChart { chart_id } => {
+                    this.open_saved_chart(*chart_id, window, cx);
+                }
+                SidebarEvent::RequestCreateDashboard { profile_id } => {
+                    this.create_dashboard_from_sidebar(*profile_id, window, cx);
+                }
+                SidebarEvent::RequestImportDashboard { profile_id } => {
+                    this.import_dashboard_for_profile(*profile_id, window, cx);
+                }
+                SidebarEvent::RequestRenameDashboard { dashboard_id } => {
+                    this.rename_dashboard(*dashboard_id, window, cx);
+                }
+                SidebarEvent::RequestDeleteDashboard { dashboard_id } => {
+                    this.delete_dashboard(*dashboard_id, window, cx);
+                }
+                SidebarEvent::RequestDuplicateDashboard { dashboard_id } => {
+                    this.duplicate_dashboard(*dashboard_id, cx);
+                }
+                SidebarEvent::RequestRenameSavedChart { chart_id } => {
+                    this.rename_saved_chart(*chart_id, window, cx);
+                }
+                SidebarEvent::RequestDeleteSavedChart { chart_id } => {
+                    this.delete_saved_chart(*chart_id, window, cx);
+                }
+                SidebarEvent::RequestDuplicateSavedChart { chart_id } => {
+                    this.duplicate_saved_chart(*chart_id, cx);
                 }
                 SidebarEvent::RequestTunnelAuth {
                     tunnel_id,
@@ -969,6 +1156,9 @@ impl Workspace {
                     } => {
                         this.open_chart_from_query(query.clone(), *connection_id, window, cx);
                     }
+                    TabManagerEvent::RequestAddPanel { dashboard_id } => {
+                        this.open_add_panel_picker(*dashboard_id, window, cx);
+                    }
                     TabManagerEvent::Opened(_)
                     | TabManagerEvent::Closed(_)
                     | TabManagerEvent::Reordered => {
@@ -1005,6 +1195,12 @@ impl Workspace {
             modal_drop_table,
             pending_drop_table_item_id: None,
             modal_tunnel_auth,
+            modal_import_dashboard,
+            modal_create_dashboard,
+            modal_rename_item,
+            modal_delete_dashboard,
+            modal_delete_saved_chart,
+            modal_add_panel,
             tasks_state: PanelState::Collapsed,
             pending_command: None,
             pending_sql: None,
@@ -1268,9 +1464,19 @@ impl Workspace {
             PaletteCommand::new("refresh_mcp_governance", "Refresh MCP Governance", "View"),
             PaletteCommand::new("open_audit_viewer", "Open Audit Viewer", "View")
                 .with_shortcut(SC.open_audit_viewer),
-            // Charts
+            // Charts / Dashboards
             PaletteCommand::new("open_saved_chart", "Open Chart...", "Charts"),
+            PaletteCommand::new("new_dashboard", "New Dashboard...", "Dashboards"),
         ]
+    }
+
+    /// Test-only accessor to the list of default palette commands.
+    ///
+    /// Used by command_palette tests to verify command labels without
+    /// constructing a full `Workspace` entity.
+    #[cfg(test)]
+    pub fn palette_commands_for_test() -> Vec<PaletteCommand> {
+        Self::default_commands()
     }
 
     fn active_context(&self, cx: &Context<Self>) -> ContextId {
@@ -1289,6 +1495,31 @@ impl Workspace {
 
         if self.sql_preview_modal.read(cx).is_visible() {
             return ContextId::SqlPreviewModal;
+        }
+
+        // Text-input-bearing modals must own the keymap so the underlying
+        // sidebar/document context does not consume typed characters as
+        // command shortcuts. Returning `TextInput` (which has no parent in
+        // the keymap fallback chain) ensures only input-level bindings fire.
+        if self.modal_import_dashboard.read(cx).is_visible()
+            || self.modal_create_dashboard.read(cx).is_visible()
+            || self.modal_rename_item.read(cx).is_visible()
+            || self.modal_add_panel.read(cx).is_visible()
+            || self.modal_drop_table.read(cx).is_visible()
+            || self.modal_tunnel_auth.read(cx).is_visible()
+        {
+            return ContextId::TextInput;
+        }
+
+        // Confirm-only modals (no text input) still need to swallow keys so
+        // global shortcuts do not run while the user is reading a confirmation
+        // dialog.
+        if self.modal_delete_connection.read(cx).is_visible()
+            || self.modal_unsaved_changes.read(cx).is_visible()
+            || self.modal_delete_dashboard.read(cx).is_visible()
+            || self.modal_delete_saved_chart.read(cx).is_visible()
+        {
+            return ContextId::ConfirmModal;
         }
 
         if self.tab_bar.read(cx).has_context_menu_open() {
@@ -1392,6 +1623,17 @@ impl Workspace {
         if let Some(dir) = app_state.scripts_directory() {
             let root = dir.root_path().to_path_buf();
             Self::flatten_script_entries(dir.entries(), &root, &mut items);
+        }
+
+        // Add the "Import Dashboard from JSON" entry only when the active
+        // connection advertises the DASHBOARD_IMPORT capability.
+        if app_state.active_connection().is_some_and(|a| {
+            a.connection
+                .metadata()
+                .capabilities
+                .contains(dbflux_core::DriverCapabilities::DASHBOARD_IMPORT)
+        }) {
+            items.push(PaletteItem::ImportDashboard);
         }
 
         items

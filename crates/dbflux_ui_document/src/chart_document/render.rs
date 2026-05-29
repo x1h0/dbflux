@@ -23,6 +23,7 @@ use crate::chart::metric_picker_render::MetricPickerView;
 use crate::chart::toolbar::{ChartToolbarContext, ChartToolbarHandlers, render_chart_toolbar};
 use dbflux_components::chart::{
     ChartDetection, ChartView, axis_bar_element, format_span, format_x_value, format_y_value,
+    legend_element,
 };
 use dbflux_components::common::time_range::state::TimeRange;
 use dbflux_components::common::time_range::view::{TimeRangeChanged, TimeRangePanel};
@@ -297,6 +298,11 @@ impl ChartDocument {
                 .child(Text::muted(msg))
                 .into_any_element()
         };
+
+        // When embedded inside another document (e.g. a DashboardDocument
+        // panel) the host owns the chrome — skip the chart-internal toolbar
+        // and axis rows entirely so the chart canvas fills the panel card.
+        let embedded = self.embedded;
 
         // -- Chart toolbar row: RANGE / REFRESH / window / points / Stats / PNG / Save --
         let chart_toolbar_row = {
@@ -574,18 +580,87 @@ impl ChartDocument {
             }
         };
 
+        // When embedded inside a dashboard panel, surface the legend as a
+        // sibling strip below the chart canvas. The standalone ChartDocument
+        // exposes its legend through `DataGridPanel::render_chart_legend_row`,
+        // but dashboard panels skip the data-grid chrome entirely, so the
+        // legend would otherwise be invisible — series identity is then only
+        // surfaced in the hover readout, which doesn't match what users see
+        // in CloudWatch / Grafana.
+        let embedded_legend: Option<AnyElement> = if embedded {
+            self.build_embedded_legend(cx)
+        } else {
+            None
+        };
+
         div()
             .flex()
             .flex_col()
             .size_full()
             .relative() // needed so the absolute rail positions relative to this container
-            .child(chart_toolbar_row)
-            .when_some(custom_picker_row, |el, row| el.child(row))
-            .child(axis_row)
+            .when(!embedded, |el| el.child(chart_toolbar_row))
+            .when_some(
+                if embedded { None } else { custom_picker_row },
+                |el, row| el.child(row),
+            )
+            .when(!embedded, |el| el.child(axis_row))
             .child(div().flex_1().min_h_0().child(chart_area))
+            .when_some(embedded_legend, |el, legend| el.child(legend))
             .when_some(metric_rail, |el, rail| el.child(rail))
             .when_some(stats_rail, |el, rail| el.child(rail))
             .into_any_element()
+    }
+
+    /// Build the always-visible legend row used when this chart is embedded in
+    /// a dashboard panel. Returns `None` when the chart view has not been
+    /// built yet (e.g. while data is still loading) or when the chart has no
+    /// series to label (single-column charts, raw query results before binding).
+    fn build_embedded_legend(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let chart_entity = self.chart_shell.read(cx).chart_view().cloned()?;
+
+        let (series, palette, stats, focused_idx) = {
+            let cv = chart_entity.read(cx);
+            (
+                cv.spec_series().to_vec(),
+                cv.resolved_palette(cx),
+                cv.series_stats().to_vec(),
+                cv.focused_series_idx(),
+            )
+        };
+
+        if series.is_empty() {
+            return None;
+        }
+
+        let shell = self.chart_shell.clone();
+        let hidden = shell.read(cx).chart_hidden_series.clone();
+        let chart_colors = ChartColors::for_current(cx);
+
+        let on_toggle = move |idx: usize, _window: &mut Window, cx: &mut App| {
+            shell.update(cx, |s, cx| {
+                s.toggle_chart_series_hidden(idx, cx);
+            });
+        };
+
+        let legend = legend_element(
+            &series,
+            &palette,
+            &stats,
+            &hidden,
+            focused_idx,
+            &chart_colors,
+            Some(on_toggle),
+        );
+
+        Some(
+            div()
+                .id("embedded-chart-legend")
+                .flex_none()
+                .px(Spacing::SM)
+                .py(Spacing::XS)
+                .child(legend)
+                .into_any_element(),
+        )
     }
 
     /// Render the 320 px Stats rail for the right-edge overlay.

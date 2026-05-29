@@ -52,20 +52,27 @@ pub use connection::{
     FetchSchemaTypesResult, FetchTableDetailsParams, FetchTableDetailsResult, HookContext,
     HookExecution, HookExecutionContext, HookExecutionMode, HookExecutor, HookFailureMode,
     HookKind, HookPhase, HookPhaseOutcome, HookResult, HookRunner, Identifiable, InfluxVersion,
-    ItemManager, LuaCapabilities, OutputEvent, OutputReceiver, OutputSender, OutputStreamKind,
-    OwnedCacheEntry, PendingOperation, PrepareConnectError, ProcessExecutionError, ProcessExecutor,
-    ProfileManager, ProxyAuth, ProxyKind, ProxyManager, ProxyProfile, RedisKeyCache,
-    RedisKeyCacheEntry, ResolvedProxy, SchemaCacheKey, ScriptLanguage, ScriptSource, SshAuthMethod,
-    SshTunnelConfig, SshTunnelManager, SshTunnelProfile, SslInfo, SslMode, SwitchDatabaseParams,
-    SwitchDatabaseResult, TestConnectionResult, TreeLoadResult, TreeStore,
-    detached_process_channel, execute_streaming_process, host_matches_no_proxy, output_channel,
-    ssl_mode_from_id, ssl_mode_id_is_cert_active, ssl_mode_id_requires_root_cert,
+    ItemManager, LuaCapabilities, MetricQuerySeries, OutputEvent, OutputReceiver, OutputSender,
+    OutputStreamKind, OwnedCacheEntry, PendingOperation, PrepareConnectError,
+    ProcessExecutionError, ProcessExecutor, ProfileManager, ProxyAuth, ProxyKind, ProxyManager,
+    ProxyProfile, RedisKeyCache, RedisKeyCacheEntry, ResolvedProxy, SchemaCacheKey, ScriptLanguage,
+    ScriptSource, SshAuthMethod, SshTunnelConfig, SshTunnelManager, SshTunnelProfile, SslInfo,
+    SslMode, SwitchDatabaseParams, SwitchDatabaseResult, TestConnectionResult, TreeLoadResult,
+    TreeStore, detached_process_channel, execute_streaming_process, host_matches_no_proxy,
+    output_channel, ssl_mode_from_id, ssl_mode_id_is_cert_active, ssl_mode_id_requires_root_cert,
     ssl_mode_requires_root_cert,
 };
 
 pub use connection::{
     DimensionFilter, MetricCatalog, MetricCatalogPage, MetricDescriptor, MetricNamespace,
 };
+
+pub use connection::dashboard_import::{
+    DashboardImporter, ImportedMetricSeries, MetricView, WidgetImportKind, WidgetImportSpec,
+    WidgetLayout,
+};
+
+pub use connection::dashboard_source::{DashboardRef, DashboardSource, RemoteDashboard};
 
 pub use core::{
     CancelToken, CodeGenScope, CodeGeneratorInfo, Connection, ConnectionErrorFormatter,

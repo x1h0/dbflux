@@ -14,6 +14,7 @@ pub mod keymap;
 pub mod mcp_command;
 pub mod metric_catalog_cache;
 pub mod proxy;
+pub mod remote_dashboard_cache;
 pub mod rpc_services;
 
 pub use access_manager::AppAccessManager;
@@ -21,4 +22,5 @@ pub use app_state::AppState;
 pub use auth_provider_registry::{AuthProviderRegistry, RegistryAuthProviderWrapper};
 pub use hook_executor::CompositeExecutor;
 pub use metric_catalog_cache::{MetricCatalogCache, MetricsPageView};
+pub use remote_dashboard_cache::RemoteDashboardCache;
 pub use rpc_services::{ExternalDriverDiagnostic, ExternalDriverStage};

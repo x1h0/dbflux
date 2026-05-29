@@ -107,6 +107,39 @@ pub enum SchemaNodeId {
         metric_name: String,
     },
 
+    /// Root folder for dashboards under a connection profile.
+    /// Always visible, regardless of driver capabilities.
+    DashboardsFolder {
+        profile_id: Uuid,
+    },
+    /// Clickable item for a single saved dashboard.
+    DashboardItem {
+        profile_id: Uuid,
+        dashboard_id: Uuid,
+    },
+    /// Root folder listing dashboards fetched live from an upstream source
+    /// (e.g. CloudWatch). Children load lazily via `DashboardSource` and are
+    /// never persisted. Shown when the connection advertises `DASHBOARD_SYNC`.
+    RemoteDashboardsFolder {
+        profile_id: Uuid,
+    },
+    /// Clickable item for a single upstream dashboard, identified by its source
+    /// name. Opens read-only; nothing is persisted.
+    RemoteDashboardItem {
+        profile_id: Uuid,
+        name: String,
+    },
+    /// Root folder for saved charts under a connection profile.
+    /// Always visible, regardless of driver capabilities.
+    SavedChartsFolder {
+        profile_id: Uuid,
+    },
+    /// Clickable item for a single saved chart.
+    SavedChartItem {
+        profile_id: Uuid,
+        chart_id: Uuid,
+    },
+
     // Object variants
     Table {
         profile_id: Uuid,
@@ -295,6 +328,12 @@ pub enum SchemaNodeKind {
     MetricsFolder,
     MetricNamespaceFolder,
     MetricLeaf,
+    DashboardsFolder,
+    DashboardItem,
+    RemoteDashboardsFolder,
+    RemoteDashboardItem,
+    SavedChartsFolder,
+    SavedChartItem,
     Table,
     View,
     Collection,
@@ -350,6 +389,12 @@ impl SchemaNodeId {
             Self::MetricsFolder { .. } => SchemaNodeKind::MetricsFolder,
             Self::MetricNamespaceFolder { .. } => SchemaNodeKind::MetricNamespaceFolder,
             Self::MetricLeaf { .. } => SchemaNodeKind::MetricLeaf,
+            Self::DashboardsFolder { .. } => SchemaNodeKind::DashboardsFolder,
+            Self::DashboardItem { .. } => SchemaNodeKind::DashboardItem,
+            Self::RemoteDashboardsFolder { .. } => SchemaNodeKind::RemoteDashboardsFolder,
+            Self::RemoteDashboardItem { .. } => SchemaNodeKind::RemoteDashboardItem,
+            Self::SavedChartsFolder { .. } => SchemaNodeKind::SavedChartsFolder,
+            Self::SavedChartItem { .. } => SchemaNodeKind::SavedChartItem,
             Self::Table { .. } => SchemaNodeKind::Table,
             Self::View { .. } => SchemaNodeKind::View,
             Self::Collection { .. } => SchemaNodeKind::Collection,
@@ -431,7 +476,13 @@ impl SchemaNodeId {
             | Self::BaseType { profile_id, .. }
             | Self::Placeholder { profile_id, .. }
             | Self::DependentsFolder { profile_id, .. }
-            | Self::DependentItem { profile_id, .. } => Some(*profile_id),
+            | Self::DependentItem { profile_id, .. }
+            | Self::DashboardsFolder { profile_id, .. }
+            | Self::DashboardItem { profile_id, .. }
+            | Self::RemoteDashboardsFolder { profile_id, .. }
+            | Self::RemoteDashboardItem { profile_id, .. }
+            | Self::SavedChartsFolder { profile_id, .. }
+            | Self::SavedChartItem { profile_id, .. } => Some(*profile_id),
         }
     }
 }
@@ -487,6 +538,14 @@ const P_ROUTINE: &str = "RT";
 const P_METRICS_FOLDER: &str = "MF";
 const P_METRIC_NS_FOLDER: &str = "MNF";
 const P_METRIC_LEAF: &str = "ML";
+// Dashboard and saved-chart sidebar node prefixes.
+// Note: P_SCRIPTS_FOLDER already uses "SCF", so we use distinct tags here.
+const P_DASHBOARDS_FOLDER: &str = "DBF";
+const P_DASHBOARD_ITEM: &str = "DBI";
+const P_REMOTE_DASHBOARDS_FOLDER: &str = "RDBF";
+const P_REMOTE_DASHBOARD_ITEM: &str = "RDBI";
+const P_SAVED_CHARTS_FOLDER: &str = "SCRF";
+const P_SAVED_CHART_ITEM: &str = "SCRI";
 
 impl fmt::Display for SchemaNodeId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -884,6 +943,30 @@ impl fmt::Display for SchemaNodeId {
             },
             Self::ScriptFile { path } => {
                 write!(f, "{}|{}", P_SCRIPT_FILE, path)
+            }
+            Self::DashboardsFolder { profile_id } => {
+                write!(f, "{}|{}", P_DASHBOARDS_FOLDER, profile_id)
+            }
+            Self::DashboardItem {
+                profile_id,
+                dashboard_id,
+            } => {
+                write!(f, "{}|{}|{}", P_DASHBOARD_ITEM, profile_id, dashboard_id)
+            }
+            Self::RemoteDashboardsFolder { profile_id } => {
+                write!(f, "{}|{}", P_REMOTE_DASHBOARDS_FOLDER, profile_id)
+            }
+            Self::RemoteDashboardItem { profile_id, name } => {
+                write!(f, "{}|{}|{}", P_REMOTE_DASHBOARD_ITEM, profile_id, name)
+            }
+            Self::SavedChartsFolder { profile_id } => {
+                write!(f, "{}|{}", P_SAVED_CHARTS_FOLDER, profile_id)
+            }
+            Self::SavedChartItem {
+                profile_id,
+                chart_id,
+            } => {
+                write!(f, "{}|{}|{}", P_SAVED_CHART_ITEM, profile_id, chart_id)
             }
         }
     }
@@ -1471,6 +1554,52 @@ impl FromStr for SchemaNodeId {
                 })
             }
 
+            P_DASHBOARDS_FOLDER => {
+                let profile_id =
+                    Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
+                Ok(Self::DashboardsFolder { profile_id })
+            }
+
+            P_DASHBOARD_ITEM => {
+                let profile_id =
+                    Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
+                let dashboard_id =
+                    Uuid::parse_str(parts.get(2).ok_or_else(err)?).map_err(|_| err())?;
+                Ok(Self::DashboardItem {
+                    profile_id,
+                    dashboard_id,
+                })
+            }
+
+            P_REMOTE_DASHBOARDS_FOLDER => {
+                let profile_id =
+                    Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
+                Ok(Self::RemoteDashboardsFolder { profile_id })
+            }
+
+            P_REMOTE_DASHBOARD_ITEM => {
+                let profile_id =
+                    Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
+                let name = parts.get(2).ok_or_else(err)?.to_string();
+                Ok(Self::RemoteDashboardItem { profile_id, name })
+            }
+
+            P_SAVED_CHARTS_FOLDER => {
+                let profile_id =
+                    Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
+                Ok(Self::SavedChartsFolder { profile_id })
+            }
+
+            P_SAVED_CHART_ITEM => {
+                let profile_id =
+                    Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
+                let chart_id = Uuid::parse_str(parts.get(2).ok_or_else(err)?).map_err(|_| err())?;
+                Ok(Self::SavedChartItem {
+                    profile_id,
+                    chart_id,
+                })
+            }
+
             _ => Err(err()),
         }
     }
@@ -1509,6 +1638,12 @@ impl SchemaNodeKind {
                 | Self::MetricsFolder
                 | Self::MetricNamespaceFolder
                 | Self::MetricLeaf
+                | Self::DashboardsFolder
+                | Self::DashboardItem
+                | Self::RemoteDashboardsFolder
+                | Self::RemoteDashboardItem
+                | Self::SavedChartsFolder
+                | Self::SavedChartItem
         )
     }
 
@@ -1535,6 +1670,9 @@ impl SchemaNodeKind {
                 | Self::DependentsFolder
                 | Self::MetricsFolder
                 | Self::MetricNamespaceFolder
+                | Self::DashboardsFolder
+                | Self::RemoteDashboardsFolder
+                | Self::SavedChartsFolder
         )
     }
 
@@ -1549,6 +1687,9 @@ impl SchemaNodeKind {
                 | Self::ScriptFile
                 | Self::Routine
                 | Self::MetricLeaf
+                | Self::DashboardItem
+                | Self::RemoteDashboardItem
+                | Self::SavedChartItem
         )
     }
 }
@@ -1912,6 +2053,147 @@ mod tests {
         assert_eq!(
             id_with_db.to_string(),
             "T|12345678-1234-1234-1234-123456789abc|public|entries|miniflux"
+        );
+    }
+
+    // --- REV 4: Dashboard and SavedChart sidebar node tests ---
+
+    #[test]
+    fn test_node_id_dashboards_folder_roundtrip() {
+        let uuid = Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap();
+        roundtrip(SchemaNodeId::DashboardsFolder { profile_id: uuid });
+    }
+
+    #[test]
+    fn test_node_id_dashboard_item_roundtrip() {
+        let profile_id = Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap();
+        let dashboard_id = Uuid::parse_str("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee").unwrap();
+        roundtrip(SchemaNodeId::DashboardItem {
+            profile_id,
+            dashboard_id,
+        });
+    }
+
+    #[test]
+    fn test_node_id_remote_dashboards_folder_roundtrip() {
+        let uuid = Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap();
+        roundtrip(SchemaNodeId::RemoteDashboardsFolder { profile_id: uuid });
+    }
+
+    #[test]
+    fn test_node_id_remote_dashboard_item_roundtrip() {
+        let profile_id = Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap();
+        roundtrip(SchemaNodeId::RemoteDashboardItem {
+            profile_id,
+            name: "prod-overview".to_string(),
+        });
+    }
+
+    #[test]
+    fn test_node_id_remote_dashboard_item_name_with_special_chars() {
+        // Dashboard names with hyphens/dots/underscores must survive the
+        // pipe-delimited encoding (splitn absorbs any trailing content).
+        let profile_id = Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap();
+        roundtrip(SchemaNodeId::RemoteDashboardItem {
+            profile_id,
+            name: "My_Dashboard.v2-final".to_string(),
+        });
+    }
+
+    #[test]
+    fn test_remote_dashboard_item_shows_pointer_and_needs_click() {
+        assert!(SchemaNodeKind::RemoteDashboardItem.shows_pointer_cursor());
+        assert!(SchemaNodeKind::RemoteDashboardItem.needs_click_handler());
+        assert!(SchemaNodeKind::RemoteDashboardsFolder.is_expandable_folder());
+    }
+
+    #[test]
+    fn test_node_id_saved_charts_folder_roundtrip() {
+        let uuid = Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap();
+        roundtrip(SchemaNodeId::SavedChartsFolder { profile_id: uuid });
+    }
+
+    #[test]
+    fn test_node_id_saved_chart_item_roundtrip() {
+        let profile_id = Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap();
+        let chart_id = Uuid::parse_str("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee").unwrap();
+        roundtrip(SchemaNodeId::SavedChartItem {
+            profile_id,
+            chart_id,
+        });
+    }
+
+    #[test]
+    fn test_node_id_dashboards_folder_profile_id_accessor() {
+        let uuid = Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap();
+        assert_eq!(
+            SchemaNodeId::DashboardsFolder { profile_id: uuid }.profile_id(),
+            Some(uuid)
+        );
+    }
+
+    #[test]
+    fn test_node_id_dashboard_item_profile_id_accessor() {
+        let profile_id = Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap();
+        let dashboard_id = Uuid::parse_str("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee").unwrap();
+        assert_eq!(
+            SchemaNodeId::DashboardItem {
+                profile_id,
+                dashboard_id
+            }
+            .profile_id(),
+            Some(profile_id)
+        );
+    }
+
+    #[test]
+    fn test_node_id_saved_charts_folder_profile_id_accessor() {
+        let uuid = Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap();
+        assert_eq!(
+            SchemaNodeId::SavedChartsFolder { profile_id: uuid }.profile_id(),
+            Some(uuid)
+        );
+    }
+
+    #[test]
+    fn test_node_id_saved_chart_item_profile_id_accessor() {
+        let profile_id = Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap();
+        let chart_id = Uuid::parse_str("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee").unwrap();
+        assert_eq!(
+            SchemaNodeId::SavedChartItem {
+                profile_id,
+                chart_id
+            }
+            .profile_id(),
+            Some(profile_id)
+        );
+    }
+
+    #[test]
+    fn test_node_id_dashboard_item_display_format() {
+        let profile_id = Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap();
+        let dashboard_id = Uuid::parse_str("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee").unwrap();
+        let id = SchemaNodeId::DashboardItem {
+            profile_id,
+            dashboard_id,
+        };
+        assert_eq!(
+            id.to_string(),
+            "DBI|12345678-1234-1234-1234-123456789abc|aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        );
+    }
+
+    #[test]
+    fn test_node_id_saved_chart_item_display_format() {
+        let profile_id = Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap();
+        let chart_id = Uuid::parse_str("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee").unwrap();
+        let id = SchemaNodeId::SavedChartItem {
+            profile_id,
+            chart_id,
+        };
+        assert_eq!(
+            id.to_string(),
+            "SCRI|12345678-1234-1234-1234-123456789abc|aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
         );
     }
 }

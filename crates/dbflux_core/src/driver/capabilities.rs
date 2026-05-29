@@ -204,7 +204,7 @@ impl DatabaseCategory {
             DatabaseCategory::Graph => "Nodes",
             DatabaseCategory::TimeSeries => "Measurements",
             DatabaseCategory::WideColumn => "Tables",
-            DatabaseCategory::LogStream => "Log groups",
+            DatabaseCategory::LogStream => "Log Groups",
         }
     }
 
@@ -217,7 +217,7 @@ impl DatabaseCategory {
             DatabaseCategory::Graph => "Node",
             DatabaseCategory::TimeSeries => "Measurement",
             DatabaseCategory::WideColumn => "Table",
-            DatabaseCategory::LogStream => "Log group",
+            DatabaseCategory::LogStream => "Log Group",
         }
     }
 
@@ -245,6 +245,18 @@ impl DatabaseCategory {
             DatabaseCategory::WideColumn => "Row",
             DatabaseCategory::LogStream => "Log event",
         }
+    }
+
+    /// Whether the sidebar should expand the primary container folder by
+    /// default when a profile is freshly connected.
+    ///
+    /// LogStream connections (CloudWatch) routinely surface hundreds of log
+    /// groups per account/region; pre-expanding that folder buries the rest
+    /// of the tree (Dashboards, Saved Charts, Metrics) below a long list.
+    /// Other categories typically have a handful of tables/collections where
+    /// auto-expand is the productive default.
+    pub fn default_expand_container(&self) -> bool {
+        !matches!(self, DatabaseCategory::LogStream)
     }
 
     /// Bitmask of capabilities the UI should display for this category.
@@ -514,6 +526,33 @@ bitflags! {
         /// dimensions) via the `MetricCatalog` trait accessor on `Connection`.
         /// Independent from `METRIC_SERIES` — a driver MAY set one without the other.
         const METRIC_CATALOG = 1 << 50;
+
+        /// Driver can import a dashboard from a JSON blob via the `DashboardImporter` seam.
+        ///
+        /// When set, the UI exposes an \"Import dashboard\" affordance that calls
+        /// `Connection::dashboard_importer()` to parse the JSON. The check is purely
+        /// capability-driven — no `driver_id` comparison is needed.
+        const DASHBOARD_IMPORT = 1 << 51;
+
+        /// Driver implements the `DashboardSource` trait: it can list dashboards
+        /// from the upstream system and fetch a dashboard body on demand.
+        ///
+        /// When set, the UI lists the driver's dashboards in the sidebar and
+        /// opens them read-only. Gating flows exclusively through this
+        /// capability — no `driver_id` comparisons are allowed.
+        const DASHBOARD_SYNC = 1 << 52;
+
+        /// Driver participates in DBFlux's local chart-authoring flow: users
+        /// commonly turn its query/metric results into `SavedChart`s and group
+        /// them into `Dashboard`s persisted in DBFlux's own SQLite store.
+        ///
+        /// When set, the sidebar surfaces the per-profile `Dashboards` and
+        /// `Saved Charts` folders. When unset, those folders are hidden so the
+        /// driver's tree stays focused on its native browsing model. This is
+        /// independent of `DASHBOARD_SYNC` (upstream listing) and
+        /// `DASHBOARD_IMPORT` (JSON import). Gating flows exclusively through
+        /// this capability — no `driver_id` or `category` comparisons.
+        const CHART_AUTHORING = 1 << 53;
     }
 }
 
@@ -2737,6 +2776,112 @@ mod tests {
                 other.bits(),
                 "METRIC_SERIES bit ({bits}) collides with an existing flag ({})",
                 other.bits()
+            );
+        }
+    }
+
+    #[test]
+    fn test_dashboard_import_bit_value() {
+        assert_eq!(
+            DriverCapabilities::DASHBOARD_IMPORT.bits(),
+            1u64 << 51,
+            "DASHBOARD_IMPORT must equal 1 << 51"
+        );
+    }
+
+    #[test]
+    fn test_dashboard_import_no_collision() {
+        let bits = DriverCapabilities::DASHBOARD_IMPORT.bits();
+
+        // Exactly one bit must be set (power of two).
+        assert_eq!(
+            bits.count_ones(),
+            1,
+            "DASHBOARD_IMPORT must be a power of two"
+        );
+
+        // No other named constant may share the same bit.
+        for (name, cap) in DriverCapabilities::all().iter_names() {
+            if name == "DASHBOARD_IMPORT" {
+                continue;
+            }
+            assert_eq!(
+                cap.bits() & bits,
+                0,
+                "DASHBOARD_IMPORT bit (1 << 51) collides with existing flag '{name}'"
+            );
+        }
+    }
+
+    #[test]
+    fn test_dashboard_sync_bit_value() {
+        assert_eq!(
+            DriverCapabilities::DASHBOARD_SYNC.bits(),
+            1u64 << 52,
+            "DASHBOARD_SYNC must equal 1 << 52"
+        );
+    }
+
+    #[test]
+    fn test_dashboard_sync_no_collision() {
+        let bits = DriverCapabilities::DASHBOARD_SYNC.bits();
+
+        assert_eq!(
+            bits.count_ones(),
+            1,
+            "DASHBOARD_SYNC must be a power of two"
+        );
+
+        for (name, cap) in DriverCapabilities::all().iter_names() {
+            if name == "DASHBOARD_SYNC" {
+                continue;
+            }
+            assert_eq!(
+                cap.bits() & bits,
+                0,
+                "DASHBOARD_SYNC bit (1 << 52) collides with existing flag '{name}'"
+            );
+        }
+    }
+
+    #[test]
+    fn test_dashboard_sync_composes_with_dashboard_import() {
+        let combined = DriverCapabilities::DASHBOARD_IMPORT | DriverCapabilities::DASHBOARD_SYNC;
+        assert!(combined.contains(DriverCapabilities::DASHBOARD_IMPORT));
+        assert!(combined.contains(DriverCapabilities::DASHBOARD_SYNC));
+        // Both bits must round-trip through Debug.
+        let dbg = format!("{combined:?}");
+        assert!(dbg.contains("DASHBOARD_IMPORT"));
+        assert!(dbg.contains("DASHBOARD_SYNC"));
+    }
+
+    #[test]
+    fn test_chart_authoring_bit_value() {
+        assert_eq!(
+            DriverCapabilities::CHART_AUTHORING.bits(),
+            1u64 << 53,
+            "CHART_AUTHORING must equal 1 << 53"
+        );
+    }
+
+    #[test]
+    fn test_chart_authoring_no_collision() {
+        let bits = DriverCapabilities::CHART_AUTHORING.bits();
+
+        assert_eq!(
+            bits.count_ones(),
+            1,
+            "CHART_AUTHORING must be a power of two"
+        );
+
+        for (name, cap) in DriverCapabilities::all().iter_names() {
+            if name == "CHART_AUTHORING" {
+                continue;
+            }
+            assert_eq!(
+                cap.bits() & bits,
+                0,
+                "CHART_AUTHORING bit (1 << 53) collides with existing flag '{name}'"
             );
         }
     }

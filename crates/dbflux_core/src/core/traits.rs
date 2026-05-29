@@ -1005,6 +1005,28 @@ pub trait Connection: Send + Sync {
         None
     }
 
+    /// Return a reference to this connection's dashboard importer, if supported.
+    ///
+    /// Drivers that implement `DashboardImporter` override this and return `Some(&self.importer)`.
+    /// Drivers without dashboard import support inherit this default and return `None`.
+    /// These drivers MUST NOT advertise `DriverCapabilities::DASHBOARD_IMPORT`.
+    fn dashboard_importer(
+        &self,
+    ) -> Option<&dyn crate::connection::dashboard_import::DashboardImporter> {
+        None
+    }
+
+    /// Return a reference to this connection's dashboard sync source, if supported.
+    ///
+    /// Drivers that implement `DashboardSource` override this and return `Some(&self.source)`.
+    /// Drivers without dashboard sync support inherit this default and return `None`.
+    /// These drivers MUST NOT advertise `DriverCapabilities::DASHBOARD_SYNC`.
+    fn dashboard_source(
+        &self,
+    ) -> Option<&dyn crate::connection::dashboard_source::DashboardSource> {
+        None
+    }
+
     /// Explain a query execution plan for a table or custom query.
     ///
     /// If `request.query` is `None`, explains a `SELECT * FROM table LIMIT 100`.
@@ -1513,6 +1535,27 @@ mod tests {
             matches!(result, Ok(ref v) if v.is_empty()),
             "default schema_routines must return Ok(vec![]), got: {:?}",
             result
+        );
+    }
+
+    #[test]
+    fn test_connection_default_dashboard_importer_is_none() {
+        // The default `Connection::dashboard_importer()` must return None.
+        // StubConnection does not override the method, so it exercises the default.
+        let conn = StubConnection;
+        assert!(
+            conn.dashboard_importer().is_none(),
+            "default dashboard_importer() must return None"
+        );
+    }
+
+    #[test]
+    fn test_connection_default_dashboard_source_is_none() {
+        // The default `Connection::dashboard_source()` must return None.
+        let conn = StubConnection;
+        assert!(
+            conn.dashboard_source().is_none(),
+            "default dashboard_source() must return None"
         );
     }
 }

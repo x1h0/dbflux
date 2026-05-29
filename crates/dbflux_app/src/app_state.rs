@@ -19,6 +19,11 @@ use dbflux_core::{
     ShutdownPhase, SshTunnelProfile, TaskId, TaskKind, TaskSnapshot,
 };
 use dbflux_storage::bootstrap::StorageRuntime;
+use dbflux_storage::repositories::viz_dashboard_panels::DashboardPanelsRepository;
+use dbflux_storage::repositories::viz_dashboards::DashboardsRepository;
+use dbflux_storage::repositories::viz_saved_chart_binding_y::SavedChartBindingYRepository;
+use dbflux_storage::repositories::viz_saved_chart_series::SavedChartSeriesRepository;
+use dbflux_storage::repositories::viz_saved_charts::SavedChartsRepository;
 
 #[cfg(feature = "mcp")]
 use dbflux_mcp::{
@@ -111,6 +116,11 @@ pub struct AppState {
     /// Shared via `Arc` so multiple chart documents can read and write it
     /// without holding a reference to `AppState` itself.
     pub metric_catalog_cache: Arc<crate::metric_catalog_cache::MetricCatalogCache>,
+    /// Session-scoped cache for upstream dashboard listings (read-only browse).
+    ///
+    /// Shared via `Arc` so the sidebar can read and write it without holding a
+    /// reference to `AppState` itself.
+    pub remote_dashboard_cache: Arc<crate::remote_dashboard_cache::RemoteDashboardCache>,
     /// Tracks whether the audit service was initialized from a degraded (in-memory)
     /// store because the real SQLite database could not be opened. When true,
     /// bootstrap_audit_settings will not enable the service even if persisted
@@ -123,6 +133,17 @@ pub struct AppState {
     pub session_passphrase_vault: Arc<RwLock<dbflux_ssh::SessionPassphraseVault>>,
     #[cfg(feature = "mcp")]
     mcp_runtime: McpRuntime,
+
+    /// Repository for `viz_saved_charts` and its child tables.
+    pub saved_charts_repo: Arc<SavedChartsRepository>,
+    /// Repository for `viz_saved_chart_series` child rows.
+    pub saved_chart_series_repo: Arc<SavedChartSeriesRepository>,
+    /// Repository for `viz_saved_chart_binding_y` child rows.
+    pub saved_chart_binding_y_repo: Arc<SavedChartBindingYRepository>,
+    /// Repository for `viz_dashboards`.
+    pub dashboards_repo: Arc<DashboardsRepository>,
+    /// Repository for `viz_dashboard_panels` child rows.
+    pub dashboard_panels_repo: Arc<DashboardPanelsRepository>,
 }
 
 impl AppState {
@@ -245,6 +266,18 @@ impl AppState {
         #[cfg(feature = "mcp")]
         let mcp_runtime = McpRuntime::new(audit_service.clone());
 
+        // Construct viz repositories sharing a single connection.
+        // Decision C.1: one shared Arc<Mutex<Connection>> is used for all five repos so
+        // they serialize through the same lock, matching the pattern used by saved_filters.
+        let viz_conn = storage_runtime.viz_connection();
+        let saved_charts_repo = Arc::new(SavedChartsRepository::new(Arc::clone(&viz_conn)));
+        let saved_chart_series_repo =
+            Arc::new(SavedChartSeriesRepository::new(Arc::clone(&viz_conn)));
+        let saved_chart_binding_y_repo =
+            Arc::new(SavedChartBindingYRepository::new(Arc::clone(&viz_conn)));
+        let dashboards_repo = Arc::new(DashboardsRepository::new(Arc::clone(&viz_conn)));
+        let dashboard_panels_repo = Arc::new(DashboardPanelsRepository::new(Arc::clone(&viz_conn)));
+
         let mut state = Self {
             facade,
             external_driver_diagnostics,
@@ -263,8 +296,14 @@ impl AppState {
                 dbflux_ssh::SessionPassphraseVault::new(),
             )),
             metric_catalog_cache: crate::metric_catalog_cache::MetricCatalogCache::new(),
+            remote_dashboard_cache: crate::remote_dashboard_cache::RemoteDashboardCache::new(),
             #[cfg(feature = "mcp")]
             mcp_runtime,
+            saved_charts_repo,
+            saved_chart_series_repo,
+            saved_chart_binding_y_repo,
+            dashboards_repo,
+            dashboard_panels_repo,
         };
 
         #[cfg(feature = "mcp")]
@@ -974,11 +1013,20 @@ impl AppState {
         self.facade.connections.disconnect(profile_id);
         // Evict stale metric catalog data for this connection.
         self.metric_catalog_cache.invalidate(profile_id);
+        // Evict the cached remote dashboard listing for this connection.
+        self.remote_dashboard_cache.invalidate(profile_id);
     }
 
     /// Access the session-scoped metric catalog cache.
     pub fn metric_catalog_cache(&self) -> &Arc<crate::metric_catalog_cache::MetricCatalogCache> {
         &self.metric_catalog_cache
+    }
+
+    /// Access the session-scoped remote dashboard listing cache.
+    pub fn remote_dashboard_cache(
+        &self,
+    ) -> &Arc<crate::remote_dashboard_cache::RemoteDashboardCache> {
+        &self.remote_dashboard_cache
     }
 
     #[allow(dead_code)]
@@ -2441,6 +2489,31 @@ impl AppState {
         self.audit_degraded
     }
 
+    /// Record a `Config` failure event for a storage write that did not
+    /// reach the database (typically a `StorageError` from a Manager).
+    ///
+    /// `action`, `object_type`, and `object_id` describe the attempted
+    /// mutation; `summary` is the human-readable headline shown in the audit
+    /// viewer; `error_message` carries the underlying error string. The
+    /// summary and error message must NOT contain secret values.
+    pub fn record_storage_failure(
+        &self,
+        action: dbflux_core::observability::AuditAction,
+        object_type: &'static str,
+        object_id: String,
+        summary: String,
+        error_message: String,
+    ) {
+        self.record_config_event(
+            EventOutcome::Failure,
+            action,
+            object_type,
+            object_id,
+            summary,
+            Some(error_message),
+        );
+    }
+
     pub fn connection_tree(&self) -> &dbflux_core::ConnectionTree {
         &self.facade.tree.tree
     }
@@ -3719,6 +3792,24 @@ mod tests {
     }
 
     /// D.2.1 — With the influxdb feature enabled, the builtin driver registry must contain
+    #[test]
+    fn test_appstate_repos_accessible() {
+        // Construct AppState with an in-memory StorageRuntime and verify that
+        // the viz repositories are accessible and return empty lists on a fresh DB.
+        let storage_runtime =
+            dbflux_storage::bootstrap::StorageRuntime::in_memory().expect("in-memory storage");
+        let state = AppState::new_with_storage_runtime(storage_runtime);
+
+        let charts = state.saved_charts_repo.list().expect("list saved_charts");
+        assert!(charts.is_empty(), "fresh DB must return empty saved charts");
+
+        let dashboards = state.dashboards_repo.list().expect("list dashboards");
+        assert!(
+            dashboards.is_empty(),
+            "fresh DB must return empty dashboards"
+        );
+    }
+
     /// a driver whose `driver_key()` is `"builtin:influxdb"`.
     // --- T-3.6: list_auth_profiles() union seam ---
 

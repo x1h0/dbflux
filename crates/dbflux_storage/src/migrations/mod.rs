@@ -140,8 +140,18 @@ impl MigrationRegistry {
         registry.register(mod_007_session_exec_ctx_json::MigrationImpl);
         registry.register(mod_008_general_settings_style::MigrationImpl);
         registry.register(mod_009_mssql_instance::MigrationImpl);
+        // The 010/011 prefixes are intentionally reused across two parallel
+        // migration series merged from separate branches (AWS reflection and the
+        // visualization domain). Migrations are tracked by their full unique
+        // `name()`, not the numeric prefix, so the duplicate prefixes are cosmetic
+        // and must NOT be renumbered: renaming an already-applied migration makes
+        // it re-run on databases that recorded it under the old name.
         registry.register(mod_010_aws_reflect_migration_flag::MigrationImpl);
         registry.register(mod_011_connection_drop_auth_profile_fk::MigrationImpl);
+        registry.register(mod_010_viz_charts_and_dashboards::MigrationImpl);
+        registry.register(mod_011_viz_saved_chart_metric_source::MigrationImpl);
+        registry.register(mod_012_viz_saved_chart_metric_series::MigrationImpl);
+        registry.register(mod_013_viz_dashboard_panel_kind::MigrationImpl);
         registry
     }
 
@@ -290,7 +300,11 @@ mod mod_007_session_exec_ctx_json;
 mod mod_008_general_settings_style;
 mod mod_009_mssql_instance;
 mod mod_010_aws_reflect_migration_flag;
+mod mod_010_viz_charts_and_dashboards;
 mod mod_011_connection_drop_auth_profile_fk;
+mod mod_011_viz_saved_chart_metric_source;
+mod mod_012_viz_saved_chart_metric_series;
+mod mod_013_viz_dashboard_panel_kind;
 
 pub use mod_001_initial::MigrationImpl;
 pub use mod_002_audit_extended::MigrationImpl as MigrationImplAuditExtended;
@@ -647,6 +661,20 @@ mod tests {
             );
             INSERT INTO cfg_services (socket_id, enabled, command, startup_timeout_ms)
             VALUES ('legacy-socket', 1, 'dbflux-driver-host', 5000);
+
+            -- Pre-create the cfg_connection_profiles stub that migrations
+            -- registered after 001_initial expect to exist. The test
+            -- pretends 001_initial already ran without actually creating its
+            -- tables, so subsequent migrations (mod_010+ in particular) that
+            -- reference cfg_connection_profiles via FK fail when SQLite tries
+            -- to resolve those references during table rebuilds.
+            CREATE TABLE IF NOT EXISTS cfg_connection_profiles (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                driver_id TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
             "#,
         )
         .unwrap();
@@ -691,6 +719,67 @@ mod tests {
             )
             .unwrap();
         assert_eq!(applied, 1);
+
+        drop(conn);
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_010_all_viz_tables_present() {
+        let temp_dir = temp_dir("010_viz_tables");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let db_path = temp_dir.join("test.db");
+
+        let conn = Connection::open(&db_path).unwrap();
+        MigrationRegistry::new().run_all(&conn).unwrap();
+
+        let tables = table_names(&conn);
+
+        for expected in &[
+            "viz_saved_charts",
+            "viz_saved_chart_series",
+            "viz_saved_chart_binding_y",
+            "viz_dashboards",
+            "viz_dashboard_panels",
+        ] {
+            assert!(
+                tables.contains(*expected),
+                "table '{expected}' should exist after migration 010"
+            );
+        }
+
+        drop(conn);
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_010_idempotent_rerun() {
+        let temp_dir = temp_dir("010_idempotent");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let db_path = temp_dir.join("test.db");
+
+        let conn = Connection::open(&db_path).unwrap();
+        let registry = MigrationRegistry::new();
+
+        registry.run_all(&conn).unwrap();
+        // Second run must not error and all viz tables must still be present.
+        registry.run_all(&conn).unwrap();
+
+        let tables = table_names(&conn);
+        for expected in &[
+            "viz_saved_charts",
+            "viz_saved_chart_series",
+            "viz_saved_chart_binding_y",
+            "viz_dashboards",
+            "viz_dashboard_panels",
+        ] {
+            assert!(
+                tables.contains(*expected),
+                "table '{expected}' must still be present after idempotent rerun"
+            );
+        }
 
         drop(conn);
         let _ = std::fs::remove_dir_all(temp_dir);
