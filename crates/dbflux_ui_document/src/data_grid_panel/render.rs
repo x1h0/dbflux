@@ -129,8 +129,13 @@ impl Render for DataGridPanel {
             DataSource::Collection { collection, .. } => collection.qualified_name(),
             DataSource::QueryResult { .. } => String::new(),
         };
-        let (source_query_prefix, filter_keyword) =
+        let (source_query_prefix, raw_filter_keyword) =
             DataGridPanel::filter_labels_for_source(&self.source, &self.app_state, cx);
+        let filter_keyword = if self.filter_input_hidden {
+            String::new()
+        } else {
+            raw_filter_keyword.to_string()
+        };
         let filter_input = self.filter_input.clone();
         let filter_has_value = !self.filter_input.read(cx).value().is_empty();
         let limit_input = self.limit_input.clone();
@@ -216,7 +221,7 @@ impl Render for DataGridPanel {
             .when(show_data_toolbar, |d| {
                 d.child(self.render_toolbar(
                     source_query_prefix,
-                    filter_keyword,
+                    &filter_keyword,
                     &source_name,
                     &filter_input,
                     filter_has_value,
@@ -436,8 +441,13 @@ pub(super) fn render_filter_bar_as_segment(
         return div().into_any();
     }
 
-    let (source_query_prefix, filter_keyword) =
+    let (source_query_prefix, raw_filter_keyword) =
         DataGridPanel::filter_labels_for_source(&g.source, &g.app_state, cx);
+    let filter_keyword = if g.filter_input_hidden {
+        String::new()
+    } else {
+        raw_filter_keyword.to_string()
+    };
 
     let source_name = match &g.source {
         DataSource::Table { table, .. } => table.qualified_name(),
@@ -466,10 +476,13 @@ pub(super) fn render_filter_bar_as_segment(
         "Refresh"
     };
 
+    let can_open_builder = g.can_open_builder(cx);
+
     let grid_for_filter = grid.clone();
     let grid_for_limit = grid.clone();
     let grid_for_clear = grid.clone();
     let grid_for_refresh = grid.clone();
+    let grid_for_builder = grid.clone();
 
     // Pre-clone theme for each section that needs it in a closure.
     let theme_filter = theme.clone();
@@ -503,7 +516,7 @@ pub(super) fn render_filter_bar_as_segment(
                 .child(Text::caption(source_query_prefix).primary())
                 .child(Text::label(source_name)),
         )
-        // Filter input: hidden for drivers that don't support collection filtering.
+        // Toolbar order: WHERE filter (flex_1) | LIMIT | Builder | Refresh.
         .when(!filter_keyword.is_empty(), move |d| {
             let grid_for_filter_event = grid_for_filter.clone();
             let grid_for_clear_event = grid_for_clear.clone();
@@ -512,14 +525,15 @@ pub(super) fn render_filter_bar_as_segment(
             d.child(
                 div()
                     .flex()
+                    .flex_1()
                     .items_center()
                     .gap(Spacing::XS)
                     .child(Text::caption(filter_keyword).primary())
                     .child(
                         div()
                             .flex()
+                            .flex_1()
                             .items_center()
-                            .w(px(420.0))
                             .h(Heights::ROW_COMPACT)
                             .rounded(Radii::SM)
                             .when(
@@ -607,6 +621,32 @@ pub(super) fn render_filter_bar_as_segment(
                         .child(Input::new(&limit_input).small()),
                 ),
         )
+        .when(can_open_builder, {
+            let theme_btn = theme.clone();
+            let icon_color = theme.muted_foreground;
+            move |d| {
+                d.child(
+                    div()
+                        .id("open-builder-btn")
+                        .h(Heights::ROW_COMPACT)
+                        .px(Spacing::SM)
+                        .flex()
+                        .items_center()
+                        .gap(Spacing::XS)
+                        .rounded(Radii::SM)
+                        .text_color(theme_btn.muted_foreground)
+                        .cursor_pointer()
+                        .hover(move |d| d.bg(theme_btn.secondary).text_color(theme_btn.foreground))
+                        .on_click(move |_, window, cx| {
+                            grid_for_builder.update(cx, |this, cx| {
+                                this.open_query_builder(window, cx);
+                            });
+                        })
+                        .child(Icon::new(AppIcon::ListFilter).small().color(icon_color))
+                        .child(Text::muted("Builder")),
+                )
+            }
+        })
         .child(
             div()
                 .id("refresh-action-btn")
@@ -694,20 +734,20 @@ impl DataGridPanel {
                     .child(Text::caption(source_query_prefix.to_string()).primary())
                     .child(Text::label(source_name.to_string())),
             )
-            // Filter input: hidden for drivers that don't support collection filtering
-            // (e.g. TimeSeries/InfluxDB where browse_collection ignores the filter).
+            // Toolbar order: WHERE filter (flex_1) | LIMIT | view toggle | Builder | Refresh.
             .when(!filter_keyword.is_empty(), |d| {
                 d.child(
                     div()
                         .flex()
+                        .flex_1()
                         .items_center()
                         .gap(Spacing::XS)
                         .child(Text::caption(filter_keyword.to_string()).primary())
                         .child(
                             div()
                                 .flex()
+                                .flex_1()
                                 .items_center()
-                                .w(px(420.0))
                                 .rounded(Radii::SM)
                                 .when(
                                     show_toolbar_focus && toolbar_focus == ToolbarFocus::Filter,
@@ -780,6 +820,60 @@ impl DataGridPanel {
                             .child(Input::new(limit_input).small()),
                     ),
             )
+            .when(self.can_toggle_view(), |d| {
+                let mode = self.view_config.mode;
+                let view_icon: AppIcon = match mode {
+                    DataViewMode::Table => AppIcon::Table,
+                    DataViewMode::Document => AppIcon::Braces,
+                };
+                let _tooltip = match mode {
+                    DataViewMode::Table => "Switch to Document View",
+                    DataViewMode::Document => "Switch to Table View",
+                };
+
+                d.child(
+                    div()
+                        .id("view-toggle-btn")
+                        .h_full()
+                        .px(Spacing::SM)
+                        .flex()
+                        .items_center()
+                        .gap(Spacing::XS)
+                        .rounded(Radii::SM)
+                        .text_color(theme.muted_foreground)
+                        .cursor_pointer()
+                        .hover(|d| d.bg(theme.secondary).text_color(theme.foreground))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.toggle_view_mode(cx);
+                        }))
+                        .child(Icon::new(view_icon).small().color(theme.muted_foreground))
+                        .child(Text::muted(mode.label())),
+                )
+            })
+            .when(self.can_open_builder(cx), |d| {
+                d.child(
+                    div()
+                        .id("open-builder-btn")
+                        .h_full()
+                        .px(Spacing::SM)
+                        .flex()
+                        .items_center()
+                        .gap(Spacing::XS)
+                        .rounded(Radii::SM)
+                        .text_color(theme.muted_foreground)
+                        .cursor_pointer()
+                        .hover(|d| d.bg(theme.secondary).text_color(theme.foreground))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.open_query_builder(window, cx);
+                        }))
+                        .child(
+                            Icon::new(AppIcon::ListFilter)
+                                .small()
+                                .color(theme.muted_foreground),
+                        )
+                        .child(Text::muted("Builder")),
+                )
+            })
             .child(
                 div()
                     .id("refresh-action-btn")
@@ -837,36 +931,6 @@ impl DataGridPanel {
                             .child(self.refresh_dropdown.clone()),
                     ),
             )
-            .when(self.can_toggle_view(), |d| {
-                let mode = self.view_config.mode;
-                let view_icon: AppIcon = match mode {
-                    DataViewMode::Table => AppIcon::Table,
-                    DataViewMode::Document => AppIcon::Braces,
-                };
-                let _tooltip = match mode {
-                    DataViewMode::Table => "Switch to Document View",
-                    DataViewMode::Document => "Switch to Table View",
-                };
-
-                d.child(
-                    div()
-                        .id("view-toggle-btn")
-                        .h_full()
-                        .px(Spacing::SM)
-                        .flex()
-                        .items_center()
-                        .gap(Spacing::XS)
-                        .rounded(Radii::SM)
-                        .text_color(theme.muted_foreground)
-                        .cursor_pointer()
-                        .hover(|d| d.bg(theme.secondary).text_color(theme.foreground))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.toggle_view_mode(cx);
-                        }))
-                        .child(Icon::new(view_icon).small().color(theme.muted_foreground))
-                        .child(Text::muted(mode.label())),
-                )
-            })
     }
 
     pub(super) fn render_edit_toolbar(
