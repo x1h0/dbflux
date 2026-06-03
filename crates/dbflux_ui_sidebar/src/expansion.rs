@@ -191,7 +191,9 @@ impl Sidebar {
             return;
         }
 
-        if let Some(SchemaNodeId::ConnectionFolder { node_id }) = parse_node_id(item_id) {
+        let parsed = parse_node_id(item_id);
+
+        if let Some(SchemaNodeId::ConnectionFolder { node_id }) = parsed {
             self.app_state.update(cx, |state, _cx| {
                 state.set_folder_collapsed(node_id, !expanded);
             });
@@ -199,7 +201,18 @@ impl Sidebar {
 
         self.expansion_overrides
             .insert(item_id.to_string(), expanded);
-        self.rebuild_tree_with_overrides(cx);
+
+        // Script folders live in `scripts_tree_state`, which the connections
+        // rebuild path ignores. Without this, the override is recorded but
+        // never propagated, leaving the folder visually stuck open.
+        if matches!(
+            parsed,
+            Some(SchemaNodeId::ScriptsFolder { .. }) | Some(SchemaNodeId::ScriptFile { .. })
+        ) {
+            self.refresh_scripts_tree(cx);
+        } else {
+            self.rebuild_tree_with_overrides(cx);
+        }
     }
 
     /// Starts any background fetches required when a node is expanded.

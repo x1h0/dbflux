@@ -1145,7 +1145,7 @@ impl Sidebar {
             None => Vec::new(),
         };
 
-        let items = Self::build_scripts_tree_items(&entries);
+        let items = self.apply_expansion_overrides_public(Self::build_scripts_tree_items(&entries));
         self.scripts_gutter_metadata = compute_gutter_map(&items);
         self.prune_scripts_selection(&items);
         self.scripts_tree_state.update(cx, |state, cx| {
@@ -1549,9 +1549,28 @@ impl Sidebar {
     }
 
     fn toggle_item_expansion(&mut self, item_id: &str, cx: &mut Context<Self>) {
-        let items = self.build_tree_items_with_overrides(cx);
+        // Look up the current expanded state from the tree that actually owns
+        // this item. Script folders are not present in the connections tree,
+        // so falling back to that source always yielded `false` and made
+        // every chevron click try to expand — never collapse.
+        let items = match self.active_tab {
+            SidebarTab::Connections => self.build_tree_items_with_overrides(cx),
+            SidebarTab::Scripts => self.build_scripts_tree_items_with_overrides(cx),
+        };
         let currently_expanded = Self::find_item_expanded(&items, item_id).unwrap_or(false);
         self.set_expanded(item_id, !currently_expanded, cx);
+    }
+
+    pub(crate) fn build_scripts_tree_items_with_overrides(
+        &self,
+        cx: &Context<Self>,
+    ) -> Vec<TreeItem> {
+        let state = self.app_state.read(cx);
+        let entries = match state.scripts_directory() {
+            Some(dir) => dbflux_core::filter_entries(dir.entries(), &self.scripts_search_query),
+            None => Vec::new(),
+        };
+        self.apply_expansion_overrides_public(Self::build_scripts_tree_items(&entries))
     }
 
     fn find_item_expanded(items: &[TreeItem], target_id: &str) -> Option<bool> {
