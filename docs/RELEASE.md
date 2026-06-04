@@ -110,9 +110,9 @@ Per release, update all of the following to the exact same version:
 - `CHANGELOG.md` — header for the version and entries.
 - Manual review (does not inherit): `examples/custom_driver/Cargo.toml`.
 
-For **stable** releases only, also update:
+After the GitHub Release artifacts for the tag are published, also update:
 
-- `nix/release-info.nix` — `version` + both prebuilt-tarball hashes (see "Nix" under "Downstream Channels").
+- `nix/release-info.nix` — `version` + both prebuilt-tarball `url`s and `hash`es (see "Nix" under "Downstream Channels"). This pins the prebuilt package to the release line the default branch currently serves: each `-dev.N` during development, the `-rc.0` marker at an RC cut, and the stable `vX.Y.Z`. It requires the published artifacts, so it lands as a follow-up commit once the release workflow finishes.
 
 The AUR `PKGBUILD` lives in an **external AUR repository**, not in this repo. It is bumped only for stable tags.
 
@@ -169,11 +169,13 @@ Batch the cleanup into a single commit on `main` once the release branch is tagg
 
 ## Downstream Channels
 
-| Tag kind          | GitHub Release | AUR              | Nix flake (this repo) | nixpkgs (future)  |
-|-------------------|----------------|------------------|-----------------------|-------------------|
-| `-dev.N` (main)   | prerelease     | skip             | skip                  | skip              |
-| `-rc.N` (release) | prerelease     | skip             | skip                  | skip              |
-| Stable `vX.Y.Z`   | published      | bump + push      | bump `release-info`   | bump + PR         |
+| Tag kind          | GitHub Release | AUR              | Nix flake (this repo)        | nixpkgs (future)  |
+|-------------------|----------------|------------------|------------------------------|-------------------|
+| `-dev.N` (main)   | prerelease     | skip             | bump `release-info` ¹        | skip              |
+| `-rc.N` (release) | prerelease     | skip             | `-rc.0`: bump ¹ · else skip  | skip              |
+| Stable `vX.Y.Z`   | published      | bump + push      | bump `release-info`          | bump + PR         |
+
+¹ `nix/release-info.nix` pins the prebuilt package to the version the **default branch** currently serves, so it is refreshed (after the artifacts publish) whenever main's version advances: each `-dev.N`, the `-rc.0` cut marker, and the stable tag. Later `-rc.N` tags live only on the release branch and do not move main, so they don't trigger a `release-info` bump.
 
 ### AUR
 
@@ -186,15 +188,13 @@ The PKGBUILD is maintained in an external AUR repository. AUR `pkgver` does **no
 
 The flake at the root exposes both a prebuilt-binary package (`dbflux-bin`, default) and a from-source build (`dbflux-source`). The prebuilt package reads `nix/release-info.nix`, which pins each supported system to the GitHub Release tarball it should fetch.
 
-On every **stable** release, refresh `nix/release-info.nix`:
+Whenever main's served version advances — a `-dev.N`, the `-rc.0` cut marker, or the stable tag — refresh `nix/release-info.nix` once that tag's release artifacts have published. The release publishes a `.sha256` next to each tarball, so you can read the digest without downloading the full artifact:
 
 ```bash
-ver=X.Y.Z
+ver=X.Y.Z          # or X.Y.Z-dev.N / X.Y.Z-rc.0
 for arch in amd64 arm64; do
-  curl -fsSL -o /tmp/dbflux-$arch.tar.gz \
-    "https://github.com/0xErwin1/dbflux/releases/download/v$ver/dbflux-linux-$arch.tar.gz"
-  nix-hash --to-sri --type sha256 \
-    "$(sha256sum /tmp/dbflux-$arch.tar.gz | cut -d' ' -f1)"
+  hex=$(curl -fsSL "https://github.com/0xErwin1/dbflux/releases/download/v$ver/dbflux-linux-$arch.tar.gz.sha256" | awk '{print $1}')
+  nix-hash --to-sri --type sha256 "$hex"
 done
 ```
 
@@ -204,7 +204,7 @@ Update `version`, both `url`s, and both `hash`es in `nix/release-info.nix`. Veri
 nix build .#dbflux-bin --no-link --print-out-paths
 ```
 
-Skip Nix bumps for `-dev.N` and `-rc.N` — only stable releases update the flake.
+Do not bump `release-info` for `-rc.N` tags with `N > 0`: those live only on the release branch and do not move main's served version.
 
 ### nixpkgs (future)
 
