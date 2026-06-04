@@ -8,6 +8,8 @@ use gpui_component::ActiveTheme;
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::theme::Theme;
 
+use crate::query_builder::mutation_state::BuilderMode;
+
 use super::panel::QueryBuilderPanel;
 
 /// Top-level render function for `QueryBuilderPanel`.
@@ -59,7 +61,14 @@ pub fn render_panel(
         panel.sweep_stale_join_condition_state();
     }
 
+    if panel.pending_assign_rebuild {
+        panel.pending_assign_rebuild = false;
+        panel.rebuild_assign_inputs(window, cx);
+    }
+
     let theme = cx.theme().clone();
+
+    let show_mode_selector = panel.shows_mutation_selector(cx);
 
     let container = div().flex().flex_col().size_full().bg(theme.background);
 
@@ -70,6 +79,9 @@ pub fn render_panel(
 
     container
         .child(render_header(panel, &theme, cx))
+        .when(show_mode_selector, |c| {
+            c.child(render_mode_selector(panel, &theme, cx))
+        })
         .child(render_body(panel, &theme, cx))
         .child(render_preview_pane(panel, &theme))
         .child(render_footer(panel, &theme, cx))
@@ -141,6 +153,60 @@ fn render_header(
 }
 
 // ---------------------------------------------------------------------------
+// Mode selector (SELECT / UPDATE / DELETE) — shown only for SQL connections
+// ---------------------------------------------------------------------------
+
+fn render_mode_selector(
+    panel: &mut QueryBuilderPanel,
+    theme: &Theme,
+    cx: &mut Context<QueryBuilderPanel>,
+) -> impl IntoElement {
+    use crate::query_builder::mutation_state::BuilderMode;
+
+    let current_mode = panel
+        .mutation_state
+        .as_ref()
+        .map(|s| s.mode)
+        .unwrap_or(BuilderMode::Select);
+
+    let modes: [(BuilderMode, &'static str); 3] = [
+        (BuilderMode::Select, "SELECT"),
+        (BuilderMode::Update, "UPDATE"),
+        (BuilderMode::Delete, "DELETE"),
+    ];
+
+    let mut row = div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(Spacing::XS)
+        .px(Spacing::MD)
+        .py(Spacing::SM)
+        .border_b_1()
+        .border_color(theme.border)
+        .bg(theme.background);
+
+    for (mode, label) in modes {
+        let is_active = mode == current_mode;
+        let variant = if is_active {
+            ButtonVariant::Primary
+        } else {
+            ButtonVariant::Default
+        };
+        row = row.child(
+            Button::new(("qb-mode", mode as usize), label)
+                .variant(variant)
+                .small()
+                .on_click(cx.listener(move |this, _event, _window, cx| {
+                    this.switch_builder_mode(mode, cx);
+                })),
+        );
+    }
+
+    row
+}
+
+// ---------------------------------------------------------------------------
 // Scrollable body with section cards
 // ---------------------------------------------------------------------------
 
@@ -149,63 +215,125 @@ fn render_body(
     theme: &Theme,
     cx: &mut Context<QueryBuilderPanel>,
 ) -> impl IntoElement {
-    use super::sections::{columns, filters, group_by, joins, sort};
+    use super::sections::{assignments, columns, execution, filters, group_by, joins, sort};
 
-    let is_grouped = panel.is_grouped();
+    let current_mode = panel
+        .mutation_state
+        .as_ref()
+        .map(|s| s.mode)
+        .unwrap_or(BuilderMode::Select);
 
-    let columns_body = if is_grouped {
-        render_effective_select_preview(panel, theme).into_any_element()
-    } else {
-        columns::render_columns(panel, cx).into_any_element()
-    };
+    match current_mode {
+        BuilderMode::Select => {
+            let is_grouped = panel.is_grouped();
 
-    let filters_body = filters::render_filters(panel, cx).into_any_element();
-    let joins_body = joins::render_joins(panel, cx).into_any_element();
-    let group_by_body = group_by::render_group_by(panel, cx).into_any_element();
-    let sort_body = sort::render_sort(panel, cx).into_any_element();
-    let limit_body = render_limit_offset_body(panel).into_any_element();
+            let columns_body = if is_grouped {
+                render_effective_select_preview(panel, theme).into_any_element()
+            } else {
+                columns::render_columns(panel, cx).into_any_element()
+            };
 
-    let mut body = div()
-        .flex_1()
-        .min_h(px(0.0))
-        .overflow_y_scrollbar()
-        .child(section_card(
-            "COLUMNS",
-            AppIcon::Columns,
-            theme,
-            columns_body,
-        ))
-        .child(section_card(
-            "FILTERS",
-            AppIcon::ListFilter,
-            theme,
-            filters_body,
-        ))
-        .child(section_card("JOINS", AppIcon::Layers, theme, joins_body))
-        .child(section_card(
-            "GROUP BY / AGGREGATES",
-            AppIcon::Layers,
-            theme,
-            group_by_body,
-        ));
+            let filters_body = filters::render_filters(panel, cx).into_any_element();
+            let joins_body = joins::render_joins(panel, cx).into_any_element();
+            let group_by_body = group_by::render_group_by(panel, cx).into_any_element();
+            let sort_body = sort::render_sort(panel, cx).into_any_element();
+            let limit_body = render_limit_offset_body(panel).into_any_element();
 
-    if is_grouped {
-        let having_body = group_by::render_having(panel, cx).into_any_element();
-        body = body.child(section_card(
-            "HAVING",
-            AppIcon::ListFilter,
-            theme,
-            having_body,
-        ));
+            let mut body = div()
+                .flex_1()
+                .min_h(px(0.0))
+                .overflow_y_scrollbar()
+                .child(section_card(
+                    "COLUMNS",
+                    AppIcon::Columns,
+                    theme,
+                    columns_body,
+                ))
+                .child(section_card(
+                    "FILTERS",
+                    AppIcon::ListFilter,
+                    theme,
+                    filters_body,
+                ))
+                .child(section_card("JOINS", AppIcon::Layers, theme, joins_body))
+                .child(section_card(
+                    "GROUP BY / AGGREGATES",
+                    AppIcon::Layers,
+                    theme,
+                    group_by_body,
+                ));
+
+            if is_grouped {
+                let having_body = group_by::render_having(panel, cx).into_any_element();
+                body = body.child(section_card(
+                    "HAVING",
+                    AppIcon::ListFilter,
+                    theme,
+                    having_body,
+                ));
+            }
+
+            body.child(section_card("SORT", AppIcon::ArrowUpDown, theme, sort_body))
+                .child(section_card(
+                    "LIMIT & OFFSET",
+                    AppIcon::Hash,
+                    theme,
+                    limit_body,
+                ))
+                .into_any_element()
+        }
+        BuilderMode::Update => {
+            let assignments_body = assignments::render_assignments(panel, cx).into_any_element();
+            let filters_body = filters::render_filters(panel, cx).into_any_element();
+            let execution_body = execution::render_execution(panel, cx).into_any_element();
+
+            div()
+                .flex_1()
+                .min_h(px(0.0))
+                .overflow_y_scrollbar()
+                .child(section_card(
+                    "SET",
+                    AppIcon::Pencil,
+                    theme,
+                    assignments_body,
+                ))
+                .child(section_card(
+                    "FILTERS (WHERE)",
+                    AppIcon::ListFilter,
+                    theme,
+                    filters_body,
+                ))
+                .child(section_card(
+                    "EXECUTION",
+                    AppIcon::Play,
+                    theme,
+                    execution_body,
+                ))
+                .into_any_element()
+        }
+        BuilderMode::Delete => {
+            let filters_body = filters::render_filters(panel, cx).into_any_element();
+            let execution_body = execution::render_execution(panel, cx).into_any_element();
+
+            div()
+                .flex_1()
+                .min_h(px(0.0))
+                .overflow_y_scrollbar()
+                .child(section_card(
+                    "FILTERS (WHERE)",
+                    AppIcon::ListFilter,
+                    theme,
+                    filters_body,
+                ))
+                .child(section_card(
+                    "EXECUTION",
+                    AppIcon::Play,
+                    theme,
+                    execution_body,
+                ))
+                .into_any_element()
+        }
     }
-
-    body.child(section_card("SORT", AppIcon::ArrowUpDown, theme, sort_body))
-        .child(section_card(
-            "LIMIT & OFFSET",
-            AppIcon::Hash,
-            theme,
-            limit_body,
-        ))
 }
 
 /// Renders the SQL Preview as a fixed pane between the scrollable body and
@@ -398,7 +526,38 @@ fn render_footer(
     theme: &Theme,
     cx: &mut Context<QueryBuilderPanel>,
 ) -> impl IntoElement {
-    let is_runnable = panel.is_runnable();
+    let current_mode = panel
+        .mutation_state
+        .as_ref()
+        .map(|s| s.mode)
+        .unwrap_or(BuilderMode::Select);
+
+    let is_mutation_mode = current_mode.is_mutation();
+
+    let mutation_disabled = is_mutation_mode
+        && panel
+            .mutation_state
+            .as_ref()
+            .map(|s| s.is_update_with_no_assignments())
+            .unwrap_or(true);
+
+    let is_runnable = if is_mutation_mode {
+        !mutation_disabled
+    } else {
+        panel.is_runnable()
+    };
+
+    let run_label = if is_mutation_mode {
+        let has_filter = panel.current_spec.filter.is_some();
+        if current_mode == BuilderMode::Update && has_filter {
+            "Apply Update"
+        } else {
+            "Run"
+        }
+    } else {
+        "Run"
+    };
+
     let sort_error = panel.sort_validation_error.clone();
     let incomplete_count = panel.incomplete_aggregate_row_count;
     let is_grouped = panel.is_grouped();
@@ -466,26 +625,45 @@ fn render_footer(
                 .px(Spacing::MD)
                 .h(Heights::HEADER)
                 .child(
-                    Button::new("qb-run", "Run")
+                    Button::new("qb-run", run_label)
                         .icon(AppIcon::Play)
                         .primary()
                         .small()
                         .disabled(!is_runnable)
-                        .on_click(cx.listener(|_this, _event, _window, cx| {
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
                             use crate::query_builder::events::BuilderEvent;
-                            cx.emit(BuilderEvent::RunRequested);
+                            if is_mutation_mode {
+                                if let Some(result) = this.build_mutation_spec_and_opts() {
+                                    use crate::data_grid_panel::mutation_executor::CountState;
+                                    let est_rows = this.mutation_state.as_ref().and_then(|s| {
+                                        match &s.count_state {
+                                            CountState::Done(n) => Some(*n),
+                                            _ => None,
+                                        }
+                                    });
+                                    cx.emit(BuilderEvent::MutationRunRequested {
+                                        spec: Box::new(result.0),
+                                        opts: Box::new(result.1),
+                                        est_rows,
+                                    });
+                                }
+                            } else {
+                                cx.emit(BuilderEvent::RunRequested);
+                            }
                         })),
                 )
-                .child(
-                    Button::new("qb-open-editor", "Open in Editor")
-                        .icon(AppIcon::ExternalLink)
-                        .variant(ButtonVariant::Ghost)
-                        .small()
-                        .on_click(cx.listener(|_this, _event, _window, cx| {
-                            use crate::query_builder::events::BuilderEvent;
-                            cx.emit(BuilderEvent::OpenInEditorRequested);
-                        })),
-                )
+                .when(!is_mutation_mode, |row| {
+                    row.child(
+                        Button::new("qb-open-editor", "Open in Editor")
+                            .icon(AppIcon::ExternalLink)
+                            .variant(ButtonVariant::Ghost)
+                            .small()
+                            .on_click(cx.listener(|_this, _event, _window, cx| {
+                                use crate::query_builder::events::BuilderEvent;
+                                cx.emit(BuilderEvent::OpenInEditorRequested);
+                            })),
+                    )
+                })
                 .child(div().flex_1()),
         )
 }

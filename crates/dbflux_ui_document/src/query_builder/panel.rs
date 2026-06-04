@@ -253,6 +253,13 @@ pub struct QueryBuilderPanel {
     /// generator and materialises the SQL text for display.
     generate_preview: Box<dyn Fn(&VisualQuerySpec) -> String + Send + Sync>,
 
+    /// Generator function for mutation preview: takes a `VisualMutationSpec`, returns SQL text.
+    ///
+    /// Injected at construction time alongside `generate_preview`. Returns an
+    /// empty string when no generator is available (e.g. no active connection).
+    generate_mutation_preview:
+        Box<dyn Fn(&dbflux_core::VisualMutationSpec) -> String + Send + Sync>,
+
     /// Read-only code editor state backing the SQL preview widget.
     ///
     /// The editor uses SQL syntax highlighting and is disabled (no user edits).
@@ -352,6 +359,34 @@ pub struct QueryBuilderPanel {
     /// join-condition HashMaps.
     pub(crate) pending_join_condition_sweep: bool,
 
+    /// Current builder mode state. `None` when the panel is in SELECT mode.
+    /// `Some(MutationBuilderState)` when in UPDATE or DELETE mode.
+    pub(crate) mutation_state: Option<crate::query_builder::mutation_state::MutationBuilderState>,
+
+    /// Per-assignment-row column-name `InputState`, keyed by row index.
+    /// Rebuilt whenever `pending_assign_rebuild` is `true`.
+    pub(crate) assign_col_inputs: HashMap<usize, Entity<InputState>>,
+
+    /// Per-assignment-row value `InputState`, keyed by row index.
+    /// Rebuilt whenever `pending_assign_rebuild` is `true`.
+    pub(crate) assign_val_inputs: HashMap<usize, Entity<InputState>>,
+
+    /// Subscriptions that mirror assignment column/value inputs back into
+    /// `mutation_state`. Cleared and rebuilt by `rebuild_assign_inputs` whenever
+    /// the assignment list changes length. Kept separate from `_input_subs` so
+    /// rebuilding assignment inputs never drops limit/offset/predicate subs.
+    pub(crate) _assign_input_subs: Vec<Subscription>,
+
+    /// `InputState` for the chunk-size field in the execution section.
+    pub(crate) exec_chunk_size_input: Option<Entity<InputState>>,
+
+    /// `InputState` for the lock-timeout field in the execution section.
+    pub(crate) exec_lock_timeout_input: Option<Entity<InputState>>,
+
+    /// Set to `true` when the assignment list changes length so the render
+    /// cycle can rebuild `assign_col_inputs` / `assign_val_inputs`.
+    pub(crate) pending_assign_rebuild: bool,
+
     /// Group-by column rows in display order.
     pub(crate) group_by_rows: Vec<GroupByRow>,
 
@@ -425,6 +460,8 @@ impl QueryBuilderPanel {
     /// previously run the builder; `None` produces the default spec.
     /// `generate_preview` is a closure that calls the driver's
     /// `QueryGenerator::generate_select` and returns the SQL text.
+    /// `generate_mutation_preview` is a closure that calls `generate_update_from_spec`
+    /// or `generate_delete_from_spec` based on `spec.kind` and returns the SQL text.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         source: SourceTable,
@@ -434,6 +471,9 @@ impl QueryBuilderPanel {
         app_state: Entity<AppStateEntity>,
         profile_id: Uuid,
         generate_preview: Box<dyn Fn(&VisualQuerySpec) -> String + Send + Sync>,
+        generate_mutation_preview: Box<
+            dyn Fn(&dbflux_core::VisualMutationSpec) -> String + Send + Sync,
+        >,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -651,6 +691,7 @@ impl QueryBuilderPanel {
             focus_handle,
             sql_preview,
             generate_preview,
+            generate_mutation_preview,
             sql_preview_state: Some(sql_preview_state),
             pending_preview_sync: true,
             limit_input_state: Some(limit_input_state),
@@ -674,6 +715,13 @@ impl QueryBuilderPanel {
             schema_profile_id: profile_id,
             pending_filter_input_sweep: false,
             pending_join_condition_sweep: false,
+            mutation_state: None,
+            assign_col_inputs: HashMap::new(),
+            assign_val_inputs: HashMap::new(),
+            _assign_input_subs: Vec::new(),
+            exec_chunk_size_input: None,
+            exec_lock_timeout_input: None,
+            pending_assign_rebuild: false,
             group_by_rows,
             aggregate_rows,
             group_by_col_inputs: Vec::new(),
@@ -2688,6 +2736,8 @@ impl QueryBuilderPanel {
         self.current_spec.sort = sort;
         self.current_spec.group_by = group_by;
         self.current_spec.aggregates = aggregates;
+        self.current_spec.limit = limit;
+        self.current_spec.offset = offset;
 
         let incomplete_count = self
             .aggregate_rows
@@ -2698,11 +2748,7 @@ impl QueryBuilderPanel {
             .count();
         self.incomplete_aggregate_row_count = incomplete_count;
 
-        let spec = self.current_spec.clone();
-        self.sql_preview = (self.generate_preview)(&spec);
-        self.pending_preview_sync = true;
-        self.current_spec.limit = limit;
-        self.current_spec.offset = offset;
+        self.refresh_mutation_preview_pure();
     }
 
     /// Rebuilds `current_spec` from the panel's mutable row data, then updates
@@ -2717,9 +2763,7 @@ impl QueryBuilderPanel {
 
     /// Recomputes the SQL preview from `current_spec` and notifies GPUI.
     fn refresh_preview_and_notify(&mut self, cx: &mut Context<Self>) {
-        let spec = self.current_spec.clone();
-        self.sql_preview = (self.generate_preview)(&spec);
-        self.pending_preview_sync = true;
+        self.refresh_mutation_preview_pure();
         cx.emit(BuilderEvent::SpecChanged(Box::new(
             self.current_spec.clone(),
         )));
@@ -2753,6 +2797,269 @@ impl QueryBuilderPanel {
     /// The weak handle to the owning `DataGridPanel`, if one was provided.
     pub fn data_grid(&self) -> Option<&WeakEntity<DataGridPanel>> {
         self.data_grid.as_ref()
+    }
+
+    // -----------------------------------------------------------------------
+    // Mutation mode support
+    // -----------------------------------------------------------------------
+
+    /// Returns `true` when the mutation mode selector (SELECT / UPDATE / DELETE)
+    /// should be rendered.
+    ///
+    /// Hidden when the connected driver uses a non-SQL query language or when
+    /// the profile's mutation policy is `ReadOnly` (H-1, H-2, I-1, I-2).
+    pub fn shows_mutation_selector(&self, cx: &App) -> bool {
+        let profile_id = self.schema_profile_id;
+        if profile_id.is_nil() {
+            return false;
+        }
+        let Some(app_state) = self.app_state_weak.upgrade() else {
+            return false;
+        };
+        let state = app_state.read(cx);
+        let Some(connected) = state.connections().get(&profile_id) else {
+            return false;
+        };
+        if connected.mutation_policy == dbflux_core::MutationPolicy::ReadOnly {
+            return false;
+        }
+        connected.connection.metadata().query_language == dbflux_core::QueryLanguage::Sql
+    }
+
+    /// Switches the panel to the given builder mode.
+    ///
+    /// `Select` drops `mutation_state`. `Update` / `Delete` create a fresh
+    /// `MutationBuilderState` if not already in that mode. The filter and
+    /// source are preserved; mode-specific state resets (DR-1.6).
+    pub fn switch_builder_mode(
+        &mut self,
+        mode: crate::query_builder::mutation_state::BuilderMode,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::query_builder::mutation_state::{BuilderMode, MutationBuilderState};
+
+        let current = self
+            .mutation_state
+            .as_ref()
+            .map(|s| s.mode)
+            .unwrap_or(BuilderMode::Select);
+
+        if current == mode {
+            return;
+        }
+
+        match mode {
+            BuilderMode::Select => {
+                self.mutation_state = None;
+                self.assign_col_inputs.clear();
+                self.assign_val_inputs.clear();
+            }
+            _ => {
+                self.mutation_state = Some(MutationBuilderState::new(mode));
+                self.assign_col_inputs.clear();
+                self.assign_val_inputs.clear();
+                self.pending_assign_rebuild = true;
+            }
+        }
+
+        self.refresh_mutation_preview_pure();
+        cx.notify();
+    }
+
+    /// Recomputes `sql_preview` from current state without needing a GPUI context.
+    ///
+    /// In SELECT mode, regenerates from `current_spec` via `generate_preview`.
+    /// In UPDATE/DELETE mode, builds the mutation spec and calls
+    /// `generate_mutation_preview`; falls back to a placeholder when no valid
+    /// spec can be produced (e.g. UPDATE with no table configured yet).
+    pub(crate) fn refresh_mutation_preview_pure(&mut self) {
+        use crate::query_builder::mutation_state::BuilderMode;
+
+        let in_mutation_mode = self
+            .mutation_state
+            .as_ref()
+            .map(|s| s.mode.is_mutation())
+            .unwrap_or(false);
+
+        if in_mutation_mode {
+            if let Some((spec, _opts)) = self.build_mutation_spec_and_opts() {
+                self.sql_preview = (self.generate_mutation_preview)(&spec);
+            } else {
+                let kind_label = self
+                    .mutation_state
+                    .as_ref()
+                    .map(|s| match s.mode {
+                        BuilderMode::Update => "UPDATE",
+                        BuilderMode::Delete => "DELETE",
+                        BuilderMode::Select => "SELECT",
+                    })
+                    .unwrap_or("UPDATE");
+                self.sql_preview =
+                    format!("-- {kind_label}: configure assignments / filter to preview SQL");
+            }
+        } else {
+            let spec = self.current_spec.clone();
+            self.sql_preview = (self.generate_preview)(&spec);
+        }
+
+        self.pending_preview_sync = true;
+    }
+
+    /// Writes `text` into `mutation_state.assignments[row_ix].assignment.column`
+    /// and refreshes the mutation preview. Called by the column input subscription
+    /// in `rebuild_assign_inputs`.
+    pub fn set_assignment_column(&mut self, row_ix: usize, text: String, cx: &mut Context<Self>) {
+        if let Some(state) = self.mutation_state.as_mut()
+            && row_ix < state.assignments.len()
+        {
+            state.assignments[row_ix].assignment.column = text;
+        }
+
+        self.refresh_mutation_preview_pure();
+        cx.notify();
+    }
+
+    /// Writes `text` into `mutation_state.assignments[row_ix].raw_text` and
+    /// re-derives the `AssignmentValue` for the `Literal` and `Expression`
+    /// variants. `Null` and `Default` are left untouched because their value
+    /// inputs are hidden and no text can be entered for them.
+    pub fn set_assignment_raw_text(&mut self, row_ix: usize, text: String, cx: &mut Context<Self>) {
+        if let Some(state) = self.mutation_state.as_mut()
+            && row_ix < state.assignments.len()
+        {
+            let row = &mut state.assignments[row_ix];
+
+            row.raw_text = text.clone();
+
+            row.assignment.value = match &row.assignment.value {
+                dbflux_core::AssignmentValue::Literal(_) => {
+                    dbflux_core::AssignmentValue::Literal(dbflux_core::ScalarLiteral::Text(text))
+                }
+                dbflux_core::AssignmentValue::Expression(_) => {
+                    dbflux_core::AssignmentValue::Expression(text)
+                }
+                other => other.clone(),
+            };
+        }
+
+        self.refresh_mutation_preview_pure();
+        cx.notify();
+    }
+
+    /// Rebuilds `assign_col_inputs` and `assign_val_inputs` to match the
+    /// current assignment count.
+    ///
+    /// Called from the render cycle when `pending_assign_rebuild` is `true`.
+    pub fn rebuild_assign_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self._assign_input_subs.clear();
+        self.assign_col_inputs.clear();
+        self.assign_val_inputs.clear();
+
+        let count = self
+            .mutation_state
+            .as_ref()
+            .map(|s| s.assignments.len())
+            .unwrap_or(0);
+
+        for i in 0..count {
+            let col_placeholder = "column";
+            let val_placeholder = "value";
+
+            let col_name = self
+                .mutation_state
+                .as_ref()
+                .and_then(|s| s.assignments.get(i))
+                .map(|r| r.assignment.column.clone())
+                .unwrap_or_default();
+
+            let raw_text = self
+                .mutation_state
+                .as_ref()
+                .and_then(|s| s.assignments.get(i))
+                .map(|r| r.raw_text.clone())
+                .unwrap_or_default();
+
+            let col_state = cx.new(|cx| {
+                let mut s = InputState::new(window, cx).placeholder(col_placeholder);
+                s.set_value(&col_name, window, cx);
+                s
+            });
+            let val_state = cx.new(|cx| {
+                let mut s = InputState::new(window, cx).placeholder(val_placeholder);
+                s.set_value(&raw_text, window, cx);
+                s
+            });
+
+            let col_sub = cx.subscribe_in(
+                &col_state,
+                window,
+                move |this, entity, event: &InputEvent, _window, cx| {
+                    if matches!(event, InputEvent::Change) {
+                        let text = entity.read(cx).value().to_string();
+                        this.set_assignment_column(i, text, cx);
+                    }
+                },
+            );
+
+            let val_sub = cx.subscribe_in(
+                &val_state,
+                window,
+                move |this, entity, event: &InputEvent, _window, cx| {
+                    if matches!(event, InputEvent::Change) {
+                        let text = entity.read(cx).value().to_string();
+                        this.set_assignment_raw_text(i, text, cx);
+                    }
+                },
+            );
+
+            self.assign_col_inputs.insert(i, col_state);
+            self.assign_val_inputs.insert(i, val_state);
+            self._assign_input_subs.push(col_sub);
+            self._assign_input_subs.push(val_sub);
+        }
+    }
+
+    /// Builds the `VisualMutationSpec` and `MutationExecOptions` from the
+    /// current mutation state and spec.
+    ///
+    /// Returns `None` if the mode is `Select` or if the spec cannot be built.
+    pub fn build_mutation_spec_and_opts(
+        &self,
+    ) -> Option<(
+        dbflux_core::VisualMutationSpec,
+        crate::data_grid_panel::mutation_executor::MutationExecOptions,
+    )> {
+        use crate::query_builder::mutation_state::BuilderMode;
+        use dbflux_core::{MutationKind, TableRef, VisualMutationSpec};
+
+        let state = self.mutation_state.as_ref()?;
+
+        let from = TableRef {
+            schema: self.current_spec.source.schema.clone(),
+            name: self.current_spec.source.table.clone(),
+        };
+
+        let kind = match state.mode {
+            BuilderMode::Select => return None,
+            BuilderMode::Delete => MutationKind::Delete,
+            BuilderMode::Update => {
+                let assignments: Vec<dbflux_core::Assignment> = state
+                    .assignments
+                    .iter()
+                    .filter(|r| !r.assignment.column.is_empty())
+                    .map(|r| r.assignment.clone())
+                    .collect();
+                MutationKind::Update { assignments }
+            }
+        };
+
+        let spec = VisualMutationSpec {
+            from,
+            filter: self.current_spec.filter.clone(),
+            kind,
+        };
+
+        Some((spec, state.exec_options.clone()))
     }
 
     // -----------------------------------------------------------------------
@@ -3358,6 +3665,7 @@ mod tests {
             focus_handle: None,
             sql_preview,
             generate_preview: Box::new(no_op_preview),
+            generate_mutation_preview: Box::new(|_spec| String::new()),
             sql_preview_state: None,
             pending_preview_sync: false,
             limit_input_state: None,
@@ -3381,6 +3689,13 @@ mod tests {
             schema_profile_id: Uuid::nil(),
             pending_filter_input_sweep: false,
             pending_join_condition_sweep: false,
+            mutation_state: None,
+            assign_col_inputs: HashMap::new(),
+            assign_val_inputs: HashMap::new(),
+            _assign_input_subs: Vec::new(),
+            exec_chunk_size_input: None,
+            exec_lock_timeout_input: None,
+            pending_assign_rebuild: false,
             group_by_rows,
             aggregate_rows,
             group_by_col_inputs: Vec::new(),
@@ -3558,6 +3873,73 @@ mod tests {
             let sanitized: String = text.chars().filter(|c| c.is_ascii_digit()).collect();
             self.offset_text = sanitized;
             self.rebuild_spec_pure();
+        }
+
+        fn t_switch_builder_mode(
+            &mut self,
+            mode: crate::query_builder::mutation_state::BuilderMode,
+        ) {
+            use crate::query_builder::mutation_state::{BuilderMode, MutationBuilderState};
+
+            let current = self
+                .mutation_state
+                .as_ref()
+                .map(|s| s.mode)
+                .unwrap_or(BuilderMode::Select);
+
+            if current == mode {
+                return;
+            }
+
+            match mode {
+                BuilderMode::Select => {
+                    self.mutation_state = None;
+                    self.assign_col_inputs.clear();
+                    self.assign_val_inputs.clear();
+                }
+                _ => {
+                    self.mutation_state = Some(MutationBuilderState::new(mode));
+                    self.assign_col_inputs.clear();
+                    self.assign_val_inputs.clear();
+                    self.pending_assign_rebuild = true;
+                }
+            }
+
+            self.refresh_mutation_preview_pure();
+        }
+
+        fn t_set_assignment_column(&mut self, row_ix: usize, text: String) {
+            if let Some(state) = self.mutation_state.as_mut()
+                && row_ix < state.assignments.len()
+            {
+                state.assignments[row_ix].assignment.column = text;
+            }
+
+            self.refresh_mutation_preview_pure();
+        }
+
+        fn t_set_assignment_raw_text(&mut self, row_ix: usize, text: String) {
+            if let Some(state) = self.mutation_state.as_mut()
+                && row_ix < state.assignments.len()
+            {
+                let row = &mut state.assignments[row_ix];
+
+                row.raw_text = text.clone();
+
+                row.assignment.value = match &row.assignment.value {
+                    dbflux_core::AssignmentValue::Literal(_) => {
+                        dbflux_core::AssignmentValue::Literal(dbflux_core::ScalarLiteral::Text(
+                            text,
+                        ))
+                    }
+                    dbflux_core::AssignmentValue::Expression(_) => {
+                        dbflux_core::AssignmentValue::Expression(text)
+                    }
+                    other => other.clone(),
+                };
+            }
+
+            self.refresh_mutation_preview_pure();
         }
 
         fn t_add_group_by_column(&mut self, source_alias: &str, column: &str) {
@@ -4526,6 +4908,99 @@ mod tests {
         }
     }
 
+    // ---- Slice 8: mutation preview regen -----------------------------------
+
+    fn make_panel_with_mutation_preview(
+        spec: VisualQuerySpec,
+        mutation_preview: impl Fn(&dbflux_core::VisualMutationSpec) -> String + Send + Sync + 'static,
+    ) -> QueryBuilderPanel {
+        let mut panel = make_panel(spec);
+        panel.generate_mutation_preview = Box::new(mutation_preview);
+        panel
+    }
+
+    #[test]
+    fn switch_to_update_mode_regenerates_sql_preview() {
+        use crate::query_builder::mutation_state::BuilderMode;
+
+        let mut panel = make_panel_with_mutation_preview(make_spec(test_source()), |spec| {
+            format!("UPDATE {} SET ...", spec.from.name)
+        });
+
+        assert_eq!(panel.sql_preview, "SELECT * FROM users");
+
+        panel.t_switch_builder_mode(BuilderMode::Update);
+
+        assert_eq!(
+            panel.sql_preview, "UPDATE users SET ...",
+            "preview must be regenerated when switching to UPDATE mode"
+        );
+    }
+
+    #[test]
+    fn switch_to_delete_mode_regenerates_sql_preview() {
+        use crate::query_builder::mutation_state::BuilderMode;
+
+        let mut panel = make_panel_with_mutation_preview(make_spec(test_source()), |spec| {
+            format!("DELETE FROM {}", spec.from.name)
+        });
+
+        panel.t_switch_builder_mode(BuilderMode::Delete);
+
+        assert_eq!(
+            panel.sql_preview, "DELETE FROM users",
+            "preview must be regenerated when switching to DELETE mode"
+        );
+    }
+
+    #[test]
+    fn switch_back_to_select_restores_select_preview() {
+        use crate::query_builder::mutation_state::BuilderMode;
+
+        let mut panel = make_panel_with_mutation_preview(make_spec(test_source()), |_spec| {
+            "UPDATE users SET ...".to_string()
+        });
+
+        panel.t_switch_builder_mode(BuilderMode::Update);
+        assert_eq!(panel.sql_preview, "UPDATE users SET ...");
+
+        panel.t_switch_builder_mode(BuilderMode::Select);
+
+        assert_eq!(
+            panel.sql_preview, "SELECT * FROM users",
+            "preview must revert to SELECT text when switching back to Select mode"
+        );
+    }
+
+    #[test]
+    fn switch_to_same_mode_is_noop_for_preview() {
+        use crate::query_builder::mutation_state::BuilderMode;
+
+        let call_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = call_count.clone();
+
+        let mut panel = make_panel(make_spec(test_source()));
+        panel.generate_mutation_preview = Box::new(move |_spec| {
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            "UPDATE users SET ...".to_string()
+        });
+
+        panel.t_switch_builder_mode(BuilderMode::Update);
+        let preview_after_first = panel.sql_preview.clone();
+
+        panel.t_switch_builder_mode(BuilderMode::Update);
+
+        assert_eq!(
+            panel.sql_preview, preview_after_first,
+            "preview must not change when re-selecting the current mode"
+        );
+        assert_eq!(
+            call_count.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "mutation preview generator must only be called once (first switch)"
+        );
+    }
+
     // ---- Slice 2: interactive control round-trips ----------------------------
 
     #[test]
@@ -4696,6 +5171,70 @@ mod tests {
     }
 
     #[test]
+    fn assignment_column_setter_writes_to_mutation_state() {
+        use crate::query_builder::mutation_state::{AssignmentRow, BuilderMode};
+        use dbflux_core::{Assignment, AssignmentValue, ScalarLiteral};
+
+        let mut panel = make_panel(make_spec(test_source()));
+        panel.t_switch_builder_mode(BuilderMode::Update);
+
+        panel
+            .mutation_state
+            .as_mut()
+            .unwrap()
+            .assignments
+            .push(AssignmentRow {
+                assignment: Assignment {
+                    column: String::new(),
+                    value: AssignmentValue::Literal(ScalarLiteral::Text(String::new())),
+                },
+                raw_text: String::new(),
+            });
+
+        // Simulate what the subscription fires by calling the test helper directly.
+        // A live GPUI context is required for cx.notify(); the t_* helpers bypass that.
+        panel.t_set_assignment_column(0, "email".to_string());
+
+        assert_eq!(
+            panel.mutation_state.as_ref().unwrap().assignments[0]
+                .assignment
+                .column,
+            "email",
+        );
+    }
+
+    #[test]
+    fn assignment_value_setter_writes_raw_text_and_derives_value() {
+        use crate::query_builder::mutation_state::{AssignmentRow, BuilderMode};
+        use dbflux_core::{Assignment, AssignmentValue, ScalarLiteral};
+
+        let mut panel = make_panel(make_spec(test_source()));
+        panel.t_switch_builder_mode(BuilderMode::Update);
+
+        panel
+            .mutation_state
+            .as_mut()
+            .unwrap()
+            .assignments
+            .push(AssignmentRow {
+                assignment: Assignment {
+                    column: "name".to_string(),
+                    value: AssignmentValue::Literal(ScalarLiteral::Text(String::new())),
+                },
+                raw_text: String::new(),
+            });
+
+        panel.t_set_assignment_raw_text(0, "Alice".to_string());
+
+        let row = &panel.mutation_state.as_ref().unwrap().assignments[0];
+        assert_eq!(row.raw_text, "Alice");
+        assert_eq!(
+            row.assignment.value,
+            AssignmentValue::Literal(ScalarLiteral::Text("Alice".to_string())),
+        );
+    }
+
+    #[test]
     fn add_sort_accepts_aggregate_alias_when_grouped() {
         let mut panel = make_panel(make_spec(test_source()));
         panel.t_add_group_by_column("users", "country");
@@ -4719,6 +5258,58 @@ mod tests {
         assert!(
             panel.sort_validation_error.is_some(),
             "sort_validation_error must be set for invalid column"
+        );
+    }
+
+    #[test]
+    fn adding_assignment_preserves_prior_typed_values() {
+        use crate::query_builder::mutation_state::{AssignmentRow, BuilderMode};
+        use dbflux_core::{Assignment, AssignmentValue, ScalarLiteral};
+
+        let mut panel = make_panel(make_spec(test_source()));
+        panel.t_switch_builder_mode(BuilderMode::Update);
+
+        panel
+            .mutation_state
+            .as_mut()
+            .unwrap()
+            .assignments
+            .push(AssignmentRow {
+                assignment: Assignment {
+                    column: String::new(),
+                    value: AssignmentValue::Literal(ScalarLiteral::Text(String::new())),
+                },
+                raw_text: String::new(),
+            });
+
+        // User types into the first assignment row via the setters.
+        panel.t_set_assignment_column(0, "email".to_string());
+        panel.t_set_assignment_raw_text(0, "alice@example.com".to_string());
+
+        // User clicks "+ Add assignment".
+        panel
+            .mutation_state
+            .as_mut()
+            .unwrap()
+            .assignments
+            .push(AssignmentRow {
+                assignment: Assignment {
+                    column: String::new(),
+                    value: AssignmentValue::Literal(ScalarLiteral::Text(String::new())),
+                },
+                raw_text: String::new(),
+            });
+        panel.pending_assign_rebuild = true;
+
+        // The render cycle would call rebuild_assign_inputs (requires Window),
+        // but the state in mutation_state is what matters for the spec builder.
+        // Assert the first row still holds the typed values.
+        let first = &panel.mutation_state.as_ref().unwrap().assignments[0];
+        assert_eq!(first.assignment.column, "email");
+        assert_eq!(first.raw_text, "alice@example.com");
+        assert_eq!(
+            first.assignment.value,
+            AssignmentValue::Literal(ScalarLiteral::Text("alice@example.com".to_string())),
         );
     }
 
@@ -4761,6 +5352,47 @@ mod tests {
         assert_eq!(
             panel.incomplete_aggregate_row_count, 0,
             "CountStar without column is NOT incomplete"
+        );
+    }
+
+    #[test]
+    fn mutation_preview_reflects_typed_assignment() {
+        use crate::query_builder::mutation_state::{AssignmentRow, BuilderMode};
+        use dbflux_core::{Assignment, AssignmentValue, ScalarLiteral};
+
+        let mut panel = make_panel_with_mutation_preview(make_spec(test_source()), |spec| {
+            use dbflux_core::MutationKind;
+            match &spec.kind {
+                MutationKind::Update { assignments } => assignments
+                    .iter()
+                    .map(|a| format!("{}=?", a.column))
+                    .collect::<Vec<_>>()
+                    .join(","),
+                MutationKind::Delete => "DELETE".to_string(),
+            }
+        });
+
+        panel.t_switch_builder_mode(BuilderMode::Update);
+
+        panel
+            .mutation_state
+            .as_mut()
+            .unwrap()
+            .assignments
+            .push(AssignmentRow {
+                assignment: Assignment {
+                    column: String::new(),
+                    value: AssignmentValue::Literal(ScalarLiteral::Text(String::new())),
+                },
+                raw_text: String::new(),
+            });
+
+        panel.t_set_assignment_column(0, "email".to_string());
+        panel.t_set_assignment_raw_text(0, "alice@example.com".to_string());
+
+        assert_eq!(
+            panel.sql_preview, "email=?",
+            "sql_preview must be regenerated when an assignment column is typed",
         );
     }
 

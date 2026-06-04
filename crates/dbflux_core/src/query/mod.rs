@@ -1,25 +1,29 @@
 pub(crate) mod column_kind;
 pub(crate) mod generator;
+pub(crate) mod keyset;
 pub(crate) mod language_service;
 pub mod relational_filter;
 pub(crate) mod safety;
 pub(crate) mod semantic;
 pub(crate) mod table_browser;
 pub(crate) mod time_macros;
+pub(crate) mod tx_vocab;
 pub(crate) mod types;
 pub(crate) mod visual_query;
 
 pub use column_kind::{infer_column_kind, project_aggregate_kinds};
 pub use generator::{
-    CollectionTemplateRequest, GeneratedQuery, MutationCategory, MutationTemplateOperation,
-    MutationTemplateRequest, QueryGenError, QueryGenerator, ReadTemplateOperation,
-    ReadTemplateRequest, SelectQuery, SqlMutationGenerator,
+    CollectionTemplateRequest, GeneratedMutation, GeneratedQuery, GeneratorError, MutationCategory,
+    MutationTemplateOperation, MutationTemplateRequest, QueryGenError, QueryGenerator,
+    ReadTemplateOperation, ReadTemplateRequest, SelectQuery, SqlMutationGenerator,
+    render_filter_node_sql,
 };
+pub use keyset::lower_keyset_predicate;
 pub use language_service::{
-    DangerousQueryKind, Diagnostic, DiagnosticSeverity, EditorDiagnostic, LanguageService,
-    SqlLanguageService, TextPosition, TextPositionRange, TextRange, ValidationResult,
-    classify_query_for_language, detect_dangerous_query, detect_dangerous_sql,
-    strip_leading_comments,
+    ClassifiedMutation, DangerousQueryKind, Diagnostic, DiagnosticSeverity, EditorDiagnostic,
+    LanguageService, SqlLanguageService, TextPosition, TextPositionRange, TextRange,
+    ValidationResult, classify_query_for_language, classify_visual_mutation,
+    detect_dangerous_query, detect_dangerous_sql, strip_leading_comments,
 };
 pub use safety::{classify_query_for_governance, classify_sql_execution, is_safe_read_query};
 pub use semantic::{
@@ -33,6 +37,7 @@ pub use table_browser::{
     TableCountRequest, TableRef,
 };
 pub use time_macros::{contains_time_macros, substitute_time_macros};
+pub use tx_vocab::TransactionVocab;
 pub use types::{
     ColumnKind, ColumnMeta, QueryHandle, QueryRequest, QueryResult, QueryResultShape,
     ResolvedWindow, Row,
@@ -40,7 +45,8 @@ pub use types::{
 pub use visual_query::AggregateSpec as VisualAggregateSpec;
 pub use visual_query::SortDirection as VisualSortDirection;
 pub use visual_query::{
-    AggFn, AliasOrigin, BoolOp, Comparator, FilterNode, GroupByEntry, JoinFilterNode, JoinKind,
-    JoinOn, JoinPredicate, JoinStep, LiteralValue, Predicate, PredicateValue, ProjectedColumn,
-    Projection, SortEntry, SourceTable, SpecError, VisualQuerySpec,
+    AggFn, AliasOrigin, Assignment, AssignmentValue, BoolOp, Comparator, CountSpec, FilterNode,
+    GroupByEntry, JoinFilterNode, JoinKind, JoinOn, JoinPredicate, JoinStep, LiteralValue,
+    MutationKind, Predicate, PredicateValue, ProjectedColumn, Projection, ScalarLiteral, SortEntry,
+    SourceTable, SpecError, VisualMutationSpec, VisualQuerySpec,
 };
