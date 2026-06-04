@@ -380,6 +380,7 @@ Key abstractions for UI adaptation:
 9. Register in `AppState::new()` under `#[cfg(feature = "name")]`
 10. **Set `ColumnMeta::kind` on every column** using the `ColumnKind` enum (Timestamp, Float, Integer, Text, Unknown). The chart engine uses `ColumnKind` exclusively — it never inspects `type_name` strings or driver identifiers. Columns with `kind = Unknown` are excluded from chart auto-detection.
 11. Optional: implement `DashboardSource` and/or `DashboardImporter` and advertise `DriverCapabilities::DASHBOARD_SYNC` / `DASHBOARD_IMPORT` to let the UI browse/import upstream dashboards (see `docs/DASHBOARDS.md`).
+12. Optional: implement `InstanceCatalog` (`dbflux_core/src/connection/instance_catalog.rs`) and advertise `DriverCapabilities::INSTANCE_METRICS` (time-series) and/or `INSTANCE_INSPECTOR` (tabular snapshots). The catalog exposes metrics, inspectors, a `DefaultInstanceDashboard` descriptor for the read-only Instance Overview, and optional `InspectorRowAction`s gated by per-driver privilege probes. See `docs/DASHBOARDS.md` § Instance Overview and inspectors.
 
 For external RPC-backed drivers, keep discovery/adaptation in `dbflux_app::rpc_services` rather than adding a parallel bootstrap path.
 
@@ -404,7 +405,7 @@ Documents are open-tab entities managed through a closure-erasing shell. The pol
 1. **Shell**: `PaneHandle` (`crates/dbflux_ui_document/src/pane.rs`) wraps the typed `Entity<T>` with `Box<dyn Fn>` closures for 22 operations (render, focus, dispatch_command, meta_snapshot, dedup, subscribe, etc.). `PaneHandle` is `!Clone`. Each document provides `XxxDocument::into_pane(entity, cx) -> PaneHandle` in its own `pane.rs`.
 2. **Tab**: `Tab::Pane(Box<PaneHandle>)` (`crates/dbflux_ui_document/src/tab_manager.rs`) — `#[non_exhaustive]` single-variant enum for forward-compat.
 3. **Event**: documents emit `DocumentEvent` directly (`crates/dbflux_ui_document/src/handle.rs`, 29 LOC). No per-document event enums.
-4. **Dedup**: `DocumentKey` enum (`crates/dbflux_ui_document/src/dedup.rs`) — variants `Table`, `Collection`, `File`, `KeyValueDb`, `Chart`, `Audit`, `EventStream`. Find existing tabs via `tab_manager.find_by_key(&DocumentKey::Table { ... }, cx)`. No `is_*` methods.
+4. **Dedup**: `DocumentKey` enum (`crates/dbflux_ui_document/src/dedup.rs`) — variants `Table`, `Collection`, `File`, `KeyValueDb`, `Chart`, `Audit`, `EventStream`, `Routine`, `MetricChart`, `Dashboard`, `InstanceMetric`, `InstanceInspector`, `InstanceOverview`. Find existing tabs via `tab_manager.find_by_key(&DocumentKey::Table { ... }, cx)`. No `is_*` methods.
 5. **Chrome**: `ResultPanel` + `ViewHandle` (`dbflux_components::result_panel`) is the universal chrome host for data-result views. View entities expose `into_view_handle(entity, cx) -> ViewHandle` whose `toolbar_segments` closure returns `ToolbarSegment`s positioned `Left | Center | Right` with `index`. Filter bars, axis bars, range chips all become segments — the chrome row uses `flex_wrap` so segments wrap when narrow.
 6. **Scripts**: Lua/Python/Bash use `CodeDocument` and execute as scripts, not DB queries; script output streams into `crates/dbflux_ui_document/src/code/live_output.rs`.
 7. **Focus**: Documents receive `FocusTarget::Document` and manage internal focus via their own `FocusHandle`.
@@ -478,15 +479,29 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 ### Dashboards & Saved Charts
 
 - Saved charts and dashboards are persisted in SQLite under the `viz_*` table prefix (`viz_dashboards`, `viz_dashboard_panels`, `viz_saved_charts`, `viz_saved_chart_series`, `viz_saved_chart_binding_y`, `viz_saved_chart_source_metric_*`). Repositories live in `crates/dbflux_storage/src/repositories/viz_*.rs`.
-- In-memory managers wrap the repositories: `DashboardManager` (`crates/dbflux_ui_base/src/dashboard_manager.rs`) for `Dashboard` / `DashboardPanel` / `DashboardPanelKind { Chart | Divider }`, and `SavedChartManager` (`crates/dbflux_ui_base/src/saved_chart_manager.rs`) for `SavedChart` + `SavedChartRefreshPolicy`. Writes go to the repo first; caches update only on success.
-- `DashboardDocument` (`crates/dbflux_ui_document/src/dashboard/`) hosts a 12-column grid of chart panels (each a `Loaded`/`Orphan` `ChartDocument`) with a shared `TimeRangePanel`. Dedup key: `DocumentKey::Dashboard { dashboard_id }`.
+- In-memory managers wrap the repositories: `DashboardManager` (`crates/dbflux_ui_base/src/dashboard_manager.rs`) for `Dashboard` / `DashboardPanel` / `DashboardPanelKind { Chart { saved_chart_id } | Divider { markdown } | Inspector { metric_id } }`, and `SavedChartManager` (`crates/dbflux_ui_base/src/saved_chart_manager.rs`) for `SavedChart` + `SavedChartRefreshPolicy`. Writes go to the repo first; caches update only on success.
+- `DashboardDocument` (`crates/dbflux_ui_document/src/dashboard/`) hosts a 12-column grid of chart, divider, and inspector panels with a shared `TimeRangePanel`. Dedup keys: `DocumentKey::Dashboard { dashboard_id }` (persisted) or `DocumentKey::InstanceOverview { profile_id }` (auto-generated read-only Instance Overview).
+- Refresh timers (dashboard, standalone chart, inspector) check `AppState::connections()` before each tick and skip work when the underlying profile is disconnected; the timer itself stays alive so refresh resumes on reconnect without re-arming.
 - Driver seams (UI never branches on driver id):
   - `DashboardSource` (`dbflux_core/src/connection/dashboard_source.rs`) — lists upstream dashboards; gated by `DriverCapabilities::DASHBOARD_SYNC`.
   - `DashboardImporter` (`dbflux_core/src/connection/dashboard_import.rs`) — parses upstream JSON into `WidgetImportSpec`s; gated by `DriverCapabilities::DASHBOARD_IMPORT`.
-  - CloudWatch is the reference implementation (read-only browse + import, never writes back upstream).
+  - `InstanceCatalog` (`dbflux_core/src/connection/instance_catalog.rs`) — exposes per-driver metrics, inspectors, default-dashboard descriptor, and row actions; gated by `DriverCapabilities::INSTANCE_METRICS` / `INSTANCE_INSPECTOR`.
+  - CloudWatch is the reference implementation for `DashboardSource` / `DashboardImporter`. PostgreSQL, MySQL/MariaDB, MongoDB, Redis, and SQL Server are the reference implementations for `InstanceCatalog`.
 - Remote dashboard listings are session-scoped via `RemoteDashboardCache` (`crates/dbflux_app/src/remote_dashboard_cache.rs`); they do not persist across restart.
 
 Full reference: `docs/DASHBOARDS.md`.
+
+### Visual Query Builder
+
+The right-rail builder composes SELECT / UPDATE / DELETE without writing SQL. It is **driver-agnostic**: gated on `QueryLanguage::Sql` with no per-driver branching, so every relational driver gets it.
+
+- Specs live in `dbflux_core/src/query/visual_query.rs` (re-exported from `dbflux_core::query`): `VisualQuerySpec`, `VisualMutationSpec`, and `EditableBinding`.
+- SQL generation extends the existing `QueryGenerator` trait (`dbflux_core/src/query/generator.rs`) with defaulted `generate_select` / `generate_update_from_spec` / `generate_delete_from_spec`; `SqlSelectBuilder` renders the dialect-specific SQL (SQLite, PostgreSQL, MySQL/MariaDB, SQL Server). Add new builder shapes here, not in the UI.
+- `MutationPolicy` (`dbflux_core/src/connection/manager.rs`) composes to `Allowed` / `ReadOnly` / `ApprovalRequired`. `MutationExecutor` (`crates/dbflux_ui_document/src/data_grid_panel/mutation_executor.rs`) runs the chosen mode: `SingleTransaction`, `ChunkedTransaction` (keyset over the PK), or `DirectAutocommit`.
+- No-`WHERE` UPDATE/DELETE is gated by the shared dangerous-query dispatcher (see Language Services), not a builder-local check.
+- UI lives in `crates/dbflux_ui_document/src/query_builder/` (panel, view, `sections/`, `mutation_state`, `completion`, `events`) and integrates into the DataView through `crates/dbflux_ui_document/src/data_grid_panel/`.
+- Inline edit on builder-generated SELECT results is driven by `EditableBinding`: the result must be *editable-safe* (maps 1:1 to one table with every PK column projected under its original name); otherwise the grid is read-only. The proof lives in `dbflux_core` over generic spec/metadata types — keep it there, not in `dbflux_ui`.
+- Persistence: migration `017_qry_saved_queries`, the `qry_*` tables, `SavedQueryRepo` (`crates/dbflux_storage/src/repositories/qry_saved_queries.rs`), and the in-memory `SavedQueryManager` (`crates/dbflux_ui_base/src/saved_query_manager.rs`) wired into `AppStateEntity`. Cross-connection import verifies table existence through a `TableProbe` seam rather than reaching into driver code.
 
 ### Language Services
 

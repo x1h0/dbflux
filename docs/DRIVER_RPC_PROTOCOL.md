@@ -146,6 +146,14 @@ Current validation boundary:
 - DBFlux persists per-service API family/version metadata for discovery and future runtime seams.
 - The live driver handshake currently validates negotiated protocol versions, but it does not transmit or separately re-validate the API family string on the wire because the driver RPC transport is already family-specific.
 
+### Audit emission from drivers (v1.2+)
+
+A driver that advertises `DriverCapability::AuditEmit` (driver RPC ≥ 1.2) may write to the host audit log by sending `EmitAuditEvent` intermediate frames (`done=false`) during any request/response cycle. The host sanitizes every event before persisting it to `aud_audit_events`.
+
+Allowed categories: `Connection`, `Query`, `System`. All other categories are silently dropped.
+
+The host overrides identity fields (`actor_type` → `ExternalDriver`, `actor_id`, `source_id`, `driver_id`, `correlation_id`) and the connection context from `AppState`, and truncates `details_json` to the configured limit. Rate limiting is shared with auth providers: 100 events per 60 seconds per `socket_id`; overflow events are dropped without erroring the session. Peers that negotiate below v1.2 or omit the capability remain silent. See [Audit § external audit emission](AUDIT.md) for the full sanitization contract.
+
 ## Auth-provider RPC contract
 
 The active auth-provider RPC API family is `auth_provider_rpc` at `1.3`.

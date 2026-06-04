@@ -16,6 +16,7 @@ The long-term goal is to provide a fully open-source alternative to DBeaver, sup
 - [Architecture](ARCHITECTURE.md) — layered diagrams, query/connection flow, crate map
 - [Drivers Overview](docs/DRIVERS.md) — supported databases, capabilities, limitations
 - [Charts](docs/CHARTS.md) — chart types, column kinds, axis auto-detection
+- [Dashboards](docs/DASHBOARDS.md) — dashboards, saved charts, instance metrics and inspectors
 - [Contributing](CONTRIBUTING.md)
 - [Release Process](docs/RELEASE.md)
 - [Code Style](CODE_STYLE.md)
@@ -239,12 +240,26 @@ See [docs/DRIVERS.md](docs/DRIVERS.md) for a full capability matrix and per-driv
 - Background task panel
 - Session restore: open tabs are restored on startup with conflict detection for externally modified files
 
+### Visual Query Builder
+
+- Right-rail SELECT builder: projection, joins, a nested WHERE predicate tree, ORDER BY, and LIMIT/OFFSET, with a live parameterized SQL preview
+- GROUP BY with aggregates (COUNT, SUM, AVG, MIN, MAX) and HAVING
+- Visual UPDATE / DELETE builder with mutation policies (read-only / approval-required) and chunked, cancellable execution
+- Schema-aware autocomplete on builder inputs and the results WHERE filter
+- Relational filters in the results filter bar via dotted foreign-key paths (e.g. `created_by.email LIKE '%@acme.com'`)
+- Inline cell edit and row delete on builder-generated results when they map 1:1 to a single table
+- Saved visual queries per connection
+- SQL drivers only (SQLite, PostgreSQL, MySQL/MariaDB, SQL Server); driver-agnostic by construction
+
 ### Charts & Visualization
 
 - Chart any query or collection result: Line, Bar, Scatter, Area, Stacked Bar, and Pie
 - Automatic axis detection from column kinds (timestamp X axis, numeric Y series) — no per-driver heuristics
 - Saved charts that reopen as their own document tab
-- See [docs/CHARTS.md](docs/CHARTS.md) for details
+- Dashboards: arrange saved charts, dividers, and inspector panels on a 12-column grid with a shared time range
+- Read-only Instance Overview per connection — live server metrics and tabular inspectors, with "Save as editable"; PostgreSQL, MySQL/MariaDB, MongoDB, Redis, and SQL Server ship instance catalogs
+- Browse and import upstream provider dashboards (CloudWatch)
+- See [docs/CHARTS.md](docs/CHARTS.md) and [docs/DASHBOARDS.md](docs/DASHBOARDS.md) for details
 
 ### Connectivity & Access
 
@@ -263,6 +278,7 @@ See [docs/DRIVERS.md](docs/DRIVERS.md) for a full capability matrix and per-driv
 ### Audit & Scripting
 
 - SQLite-backed audit log for queries, connections, hooks, scripts, MCP, governance, and config events, with redaction and query fingerprinting — see [docs/AUDIT.md](docs/AUDIT.md)
+- Centralized user-facing error reporting: failures surface as a toast with a correlation id and a "View in Audit" action, drive a status-bar error badge, and are correlated with their audit row
 - Lua, Python, and Bash scripts run as documents with live streamed output — see [docs/LUA.md](docs/LUA.md)
 
 ### Keyboard Navigation

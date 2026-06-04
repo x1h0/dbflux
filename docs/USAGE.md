@@ -152,6 +152,115 @@ Their output streams live into the document's output area while running, and the
 final output is kept as a text result. See `docs/LUA.md` for the embedded Lua
 runtime.
 
+### Visual query builder
+
+For SQL connections you can compose queries without writing SQL. From a table's
+data grid toolbar, click **Builder** to open a right-rail panel. The builder is
+available only on SQL drivers; non-SQL connections do not show it.
+
+The panel has a mode selector at the top — **SELECT**, **UPDATE**, **DELETE** —
+and a live SQL preview that regenerates on every change. The preview is always
+visible. Press **Run** to execute, or (in SELECT mode) **Open in Editor** to drop
+the generated SQL into a normal query editor. The header has **Save** and
+**Reset**.
+
+| Keys | Action |
+|------|--------|
+| `Cmd+Enter` / `Ctrl+Enter` | Run |
+| `Cmd+E` / `Ctrl+E` | Open in Editor (SELECT mode) |
+| `Cmd+S` / `Ctrl+S` | Save |
+| `Cmd+Shift+S` / `Ctrl+Shift+S` | Save As |
+| `Cmd+Backspace` / `Ctrl+Backspace` | Reset |
+
+#### Building a SELECT
+
+The SELECT body has sections you fill in top to bottom:
+
+- **Columns** — the projection (which columns to select).
+- **Filters** — a `WHERE` predicate tree. Predicates can be nested into AND/OR
+  groups, so you can build complex conditions visually.
+- **Joins** — additional tables with an alias and an `ON` condition.
+- **Group By / Aggregates** — see below.
+- **Sort** — `ORDER BY` entries.
+- **Limit & Offset** — paging bounds.
+
+The SQL preview is parameterized: literal values are emitted as placeholders for
+the active dialect (SQLite, PostgreSQL, MySQL/MariaDB, or SQL Server).
+
+#### GROUP BY and aggregates
+
+Add group columns and aggregates in the **Group By / Aggregates** section. The
+supported aggregate functions are `COUNT`, `COUNT(*)`, `COUNT(DISTINCT)`, `SUM`,
+`AVG`, `MIN`, and `MAX`. Each aggregate gets an editable alias that
+auto-generates from the function and column.
+
+Once the query is grouped:
+
+- The **Columns** section is replaced by a read-only preview of the effective
+  `SELECT` (group columns followed by aggregate aliases).
+- A **Having** section appears, using the same predicate editor as Filters but
+  applied to `HAVING`.
+- **Sort** entries are restricted to group columns and aggregate aliases;
+  invalid entries are rejected with a visible error.
+
+How grouped results behave in the data grid is described under
+[Aggregated results](#aggregated-results).
+
+#### Schema-aware autocomplete
+
+The builder's single-line inputs (filter, sort, projected columns, the join
+target table, and both sides of a join `ON`) offer inline suggestions sourced
+from the live schema and the builder's own spec: source-table columns, declared
+join aliases, and joined-table columns (fetched lazily in the background). Typing
+`<alias>.` scopes suggestions to that alias's columns only. Matching is
+prefix-only.
+
+| Keys | Action |
+|------|--------|
+| `Up` / `Down` | Move through suggestions |
+| `Tab` / `Enter` | Commit the highlighted suggestion |
+| `Esc` (or focus loss) | Dismiss |
+
+The same autocomplete is available in the data grid's `WHERE` filter input (see
+[Filtering results](#filtering-results)).
+
+#### Saved queries
+
+Builders can be saved per connection profile and reopened later. Saved queries
+are scoped to the profile, with unique names. A saved query can also be imported
+onto a different connection; on import DBFlux verifies that the referenced tables
+exist on the target connection before loading.
+
+#### Visual UPDATE and DELETE
+
+Switch the mode selector to **UPDATE** or **DELETE** to build a mutation. Both
+modes reuse the same filter editor for the `WHERE` clause; UPDATE adds an
+assignments section for the `SET` columns (including raw-expression assignments).
+The SQL preview stays visible the whole time.
+
+Mutations are subject to a policy that composes the connection's read-only state
+and the actor context:
+
+| Policy | Effect |
+|--------|--------|
+| Allowed | The mutation can run. |
+| Read-only | Execution is blocked (for example, a read-only profile). |
+| Approval required | The mutation must be approved before it runs. |
+
+**Execution mode.** The **Execution** section offers three modes, with a default
+auto-suggested from the row-count estimate, the driver's transaction support, and
+primary-key availability. Overriding the suggestion shows a tradeoff modal.
+
+| Mode | Behavior |
+|------|----------|
+| **Single TX** | One transaction for the whole change. |
+| **Chunked TX** | Keyset-paginated chunks over the table's primary key (chunk size clamped to 1000–10000, default 5000). Each chunk is its own transaction, surfaces a Tasks-panel entry, can be cancelled between chunks, and rolls back on failure. |
+| **Direct** | No transaction wrapper (autocommit). Used when the driver does not support transactions. |
+
+**Dangerous-query gate.** An `UPDATE` or `DELETE` with no `WHERE` is gated by the
+dangerous-query confirmation (see
+[Dangerous-query confirmation](#dangerous-query-confirmation)) before it runs.
+
 ---
 
 ## 4. Working with Results
@@ -179,6 +288,27 @@ When the results panel has focus:
 - `z` toggles collapsing the panel.
 - `m` (or `Shift+F10`) opens the row/cell context menu.
 
+### Filtering results
+
+The data grid toolbar has a `WHERE` filter input that re-runs the query with the
+condition you type. For SQL connections it supports two styles:
+
+- **Raw `WHERE`** — type a plain condition (for example `status = 'active'`). This
+  is the default behavior.
+- **Relational (ORM-style) paths** — type a dotted path that walks foreign keys,
+  for example `created_by.email LIKE '%@acme.com'` or
+  `created_by.organization.name = 'Acme'`. DBFlux resolves the path against the
+  table's foreign-key metadata and joins through to the referenced table for you;
+  there is no need to write the JOINs by hand.
+
+When a relational filter resolves, a chip shows how many joins it added. If a
+segment is ambiguous or cannot be resolved, an inline error appears with an
+**Open in builder** link that opens the visual query builder seeded with the
+joins resolved so far. Non-dotted input always keeps the raw-`WHERE` behavior.
+
+The filter input also offers schema-aware autocomplete (same navigation as the
+builder — see [Schema-aware autocomplete](#schema-aware-autocomplete)).
+
 ### Editing and CRUD
 
 In the data grid:
@@ -188,6 +318,38 @@ In the data grid:
 - `r` — rename / edit (context-dependent).
 - `y` — copy the selected row.
 - `Ctrl+c` (`Cmd+c`) — copy the selected cell(s) to the clipboard.
+
+#### When results are editable
+
+Plain table browses are editable when the table has a primary key. Results
+produced by the **visual query builder** (SELECT mode) are also editable, but
+only when they are provably bound to a single table: the result maps 1:1 to one
+underlying table and every primary-key column of that table is projected under
+its original name. Edits and deletes then build their `WHERE` from the projected
+primary-key values.
+
+JOINs are allowed: columns from the source table are editable, while joined
+columns are read-only.
+
+A builder result falls back to **read-only** — with a toolbar hint explaining why
+— when any of these hold:
+
+- The query aggregates or uses `GROUP BY` / `HAVING`.
+- The projection is a wildcard across a JOIN.
+- A primary-key column is missing or projected under an alias.
+- The table's keys have not been loaded from the schema cache yet (the grid
+  upgrades itself to editable once the keys arrive).
+
+Free-form SQL typed into the editor stays read-only; inline edit applies only to
+plain table browses and builder-generated SELECTs.
+
+#### Aggregated results
+
+When a result comes from a grouped (`GROUP BY`) query, rows show the aggregated
+output and editing is disabled — add-row, delete-row, edit-cell, and inspect-row
+are unavailable, with explanatory tooltips. Pagination counts the grouped rows
+(not the underlying rows), so the page total is accurate. Aggregate columns keep
+the correct column kind, so charting still works.
 
 ### Copy as Query
 

@@ -16,7 +16,7 @@ This document is the human-facing reference. The automated `dbflux-release` skil
 - A commit is **never** authored on a release branch. It always lands on `main` first and is then `git cherry-pick -x <sha>` into the release branch.
 - A release branch is **never** merged back into `main`.
 - **No new features** on a release branch once cut. Only bugfixes and the release's own version/changelog bumps.
-- `main` always carries the next minor's `-dev` version in its manifests (`vX.(Y+1).0-dev.N`). The release branch carries the version it is stabilizing.
+- During normal development `main` carries the next minor's `-dev` version (`vX.(Y+1).0-dev.N`). **Exception — the RC stabilization window:** from the moment `release/vX.Y` is cut until `vX.Y.0` ships stable, `main` stays on the `vX.Y.0-rc.0` marker and tracks the release line. Stabilization fixes land on `main` first and are cherry-picked into the release branch; no new `-dev` is cut while a release is stabilizing. `main` opens the next `-dev` cycle only **after** the stable `vX.Y.0` tag. The release branch carries the exact version it is stabilizing (`-rc.N`, then `vX.Y.0`).
 
 ## Tags
 
@@ -41,25 +41,26 @@ git push origin vX.Y.Z[-suffix.N]
 The workspace version (`Cargo.toml` `[workspace.package].version`) is the source of truth. All other manifests must stay in lockstep.
 
 **On `main`:**
-- The manifest version is always a `-dev.N` of the next minor (e.g. `0.7.0-dev.5`).
+- Outside an RC window, the manifest version is a `-dev.N` of the next minor (e.g. `0.7.0-dev.5`).
 - Next dev bump: if last main tag is `vX.Y.Z-dev.N` → `vX.Y.Z-dev.(N+1)`. If the previous tag was stable → start at `vX.(Y+1).0-dev.0`.
+- **Inside an RC window** (a `release/vX.Y` exists and `vX.Y.0` has not shipped): `main` holds the `vX.Y.0-rc.0` marker. It is **not** re-bumped as new RCs are tagged — `-rc.N` tags live only on the release branch. `main` leaves this marker only when it opens `vX.(Y+1).0-dev.0` after the stable release.
 
 **On `release/vX.Y`:**
-- Next RC: if last tag on the branch is `vX.Y.Z-rc.N` → `-rc.(N+1)`. If none → `-rc.1`.
+- Next RC: if last tag on the branch is `vX.Y.Z-rc.N` → `-rc.(N+1)`. If none → `-rc.0`.
 - Promote to stable: drop the `-rc.N` suffix → `vX.Y.0`.
 - Patch: increment `Z` → `vX.Y.(Z+1)`. **Never bump the minor on a release branch.**
 
 ## Cycle Example: `0.6.0`
 
-1. Features keep landing on `main`. Every so often, tag `v0.6.0-dev.N` directly from main's HEAD.
-2. When ready to stabilize, cut `release/v0.6` from the chosen main commit. Tag `v0.6.0-rc.1` there.
+1. Features keep landing on `main` (carrying `v0.6.0-dev.N`). Every so often, tag `v0.6.0-dev.N` directly from main's HEAD.
+2. When ready to stabilize, cut `release/v0.6` from the chosen main commit at `v0.6.0-rc.0`, and set `main` to the same `v0.6.0-rc.0` marker (close `[Unreleased]` as `[0.6.0]`). Tag `v0.6.0-rc.0` on the release branch.
 3. A bug appears during RC:
-   - Commit the fix on `main` first.
+   - Commit the fix on `main` first (its entry goes under `[0.6.0]`; `main` stays at the `v0.6.0-rc.0` marker).
    - `git cherry-pick -x <sha>` into `release/v0.6`.
-   - Tag `v0.6.0-rc.2`.
-4. When clean, tag `v0.6.0` on `release/v0.6`. This is the stable release.
-5. Patches (`v0.6.1`, `v0.6.2`, ...) come from the same release branch (cherry-picks from main).
-6. Meanwhile, `main` is already producing `v0.7.0-dev.N`.
+   - Bump the release branch to `v0.6.0-rc.1` and tag `v0.6.0-rc.1`.
+4. When clean, drop the suffix on `release/v0.6` → tag `v0.6.0`. This is the stable release.
+5. **Only now** does `main` open the next cycle: bump to `v0.7.0-dev.0`, open a fresh `[Unreleased]`.
+6. Patches (`v0.6.1`, `v0.6.2`, ...) come from the same release branch (cherry-picks from main, which is now on `v0.7.0-dev.N`).
 
 ## Cut Procedure: `main` → `release/vX.Y`
 
@@ -68,21 +69,36 @@ When stabilization begins:
 1. Verify you are on `main`, clean tree, up to date with `origin/main`.
 2. Verify `.github/workflows/release.yml` on `main` contains the `Classify release` step. Without it, stable tags from the new release branch will publish as drafts (this happened to `v0.5.1`). If the step is missing, fix on `main` first.
 3. Confirm the target minor `vX.Y`.
-4. Create the branch:
+4. Create the branch (in a dedicated worktree if you use the bare-repo + worktrees layout, so `main` stays checked out):
    ```bash
+   git worktree add ../release-vX.Y -b release/vX.Y main
+   # or, in a single-checkout repo:
    git checkout -b release/vX.Y
    ```
 5. On `release/vX.Y`:
-   - In `CHANGELOG.md`, rename `## [Unreleased]` to `## [X.Y.0] - YYYY-MM-DD`.
-   - Bump every versioned artifact to `X.Y.0-rc.1` (see below).
-   - Commit: `chore(release): cut release/vX.Y at vX.Y.0-rc.1`.
+   - In `CHANGELOG.md`, rename `## [Unreleased]` to `## [X.Y.0] - YYYY-MM-DD`. The release branch carries **no** `[Unreleased]` block.
+   - Bump every versioned artifact to `X.Y.0-rc.0` (see below).
+   - Commit: `chore(release): cut release/vX.Y at vX.Y.0-rc.0`.
    - Push: `git push -u origin release/vX.Y`.
-6. Back on `main`:
-   - Open a fresh `## [Unreleased]` block in `CHANGELOG.md`.
+6. Back on `main` (it stays on the release line during the RC window):
+   - In `CHANGELOG.md`, close `## [Unreleased]` as `## [X.Y.0] - YYYY-MM-DD` (same content as the release branch). Do **not** open a fresh `[Unreleased]` or bump to `-dev` yet — that happens only after the stable release.
+   - Bump every versioned artifact to `X.Y.0-rc.0` (mirrors the release branch).
+   - Commit: `chore(release): align main to vX.Y.0-rc.0`.
+   - Push.
+7. Tag `vX.Y.0-rc.0` on the release branch.
+
+At this point `main` and `release/vX.Y` have identical trees; they diverge only as stabilization fixes are tagged on the branch. When the stable `vX.Y.0` ships, run **Begin Next Dev Cycle** below.
+
+## Begin Next Dev Cycle: after stable `vX.Y.0`
+
+Run this **only after** the stable `vX.Y.0` tag is pushed from `release/vX.Y`. Until then `main` stays on the RC marker.
+
+1. On `main`:
+   - Open a fresh `## [Unreleased]` block in `CHANGELOG.md` above the `## [X.Y.0]` section. If the date on `## [X.Y.0]` is the RC-cut date, correct it to the stable release date to match the release branch.
    - Bump every versioned artifact to `X.(Y+1).0-dev.0`.
    - Commit: `chore(version): begin X.(Y+1).0-dev cycle`.
    - Push.
-7. Tag `vX.Y.0-rc.1` on the release branch.
+2. `main` now produces `vX.(Y+1).0-dev.N`; the standard cherry-pick + `[Unreleased]` discipline (below) resumes for any further `vX.Y.Z` patches.
 
 ## Files to Bump
 
@@ -102,12 +118,20 @@ The AUR `PKGBUILD` lives in an **external AUR repository**, not in this repo. It
 
 ## CHANGELOG Discipline
 
-- A single `## [Unreleased]` block lives on `main`. Every commit that introduces user-visible behavior appends an entry to it.
-- When `release/vX.Y` is cut, the `Unreleased` block is "split":
-  - On the release branch, the snapshot becomes `## [X.Y.0] - YYYY-MM-DD`.
-  - On `main`, a new empty `Unreleased` block opens.
-- Cherry-picks into `release/vX.Y` bring their changelog entry too. **After the cherry-pick, the same entry must be removed from main's `[Unreleased]` block** — once shipped on a release branch, the change is no longer "unreleased" in main's history. Skipping this step is what caused main's `[Unreleased]` to keep stale `v0.5.1` content after that release went out.
-- The release workflow extracts the section by header (`## [X.Y.Z]`). Keep that format exactly.
+The discipline differs by phase. The key idea: an entry lives under exactly one header, and the header reflects the version that ships it.
+
+**Normal development (no active RC window).** `main` carries a single `## [Unreleased]` block; every commit with user-visible behavior appends an entry to it.
+
+**Cutting `release/vX.Y`.** The `[Unreleased]` snapshot becomes `## [X.Y.0] - YYYY-MM-DD` on **both** the release branch and `main` (their trees are identical at the cut). `main` does **not** open a fresh `[Unreleased]` — while the release stabilizes, new fix entries are appended under `## [X.Y.0]`, because those fixes ship in `X.Y.0`.
+
+**During the RC window.** A stabilization fix lands on `main` (entry under `## [X.Y.0]`), then is cherry-picked into `release/vX.Y` (which carries the same `## [X.Y.0]`). No `[Unreleased]`/removal dance is needed here — both branches are the same release line.
+
+**After the stable `vX.Y.0` and the next dev cycle opens.** `main` returns to a single `## [Unreleased]` on top. From here, a fix destined for a `vX.Y.(Z+1)` patch lands on main's `[Unreleased]`, is cherry-picked into `release/vX.Y` under `## [X.Y.(Z+1)]`, and **the same entry must then be removed from main's `[Unreleased]`** — once shipped on a release branch it is no longer "unreleased" in main's history. Skipping this is what left main's `[Unreleased]` carrying stale `v0.5.1` content after that release.
+
+**Always:**
+- The release workflow's `Extract changelog section` step matches the **exact tag version** as the header (`## [X.Y.Z-suffix]`, with the leading `v` stripped). Keep that header format exactly.
+  - `-dev.N` releases carry their own dated `## [X.Y.Z-dev.N]` section, so they match and surface their curated notes.
+  - An `-rc.N` tag looks up `## [X.Y.0-rc.N]`, which the cut procedure does **not** create (it uses the shared `## [X.Y.0]`). So RC release bodies omit the curated changelog and fall back to the installation template plus auto-generated contributor notes. The curated `## [X.Y.0]` section surfaces on the **stable** `vX.Y.0` release, whose tag matches the header exactly. (To also surface it on RC bodies, the extractor would need a fallback from `## [X.Y.0-rc.N]` to `## [X.Y.0]` — not yet implemented.)
 - Invariant after every stable release: no entry present in `[X.Y.Z]` (on the release branch) should still appear in main's `[Unreleased]`.
 
 ## Cherry-Pick Discipline
@@ -193,6 +217,7 @@ Not yet upstream. When it is, only stable tags will get a PR to `NixOS/nixpkgs` 
 - Merging `release/vX.Y` back into `main`.
 - Creating new features (non-fix commits) on a `release/*` branch.
 - Bumping minor or major version inside a `release/*` branch.
+- Opening the next `-dev` cycle on `main` (bumping to `vX.(Y+1).0-dev.0`) before the stable `vX.Y.0` has shipped. During the RC window `main` stays on the `vX.Y.0-rc.0` marker.
 - Pushing a tag without a clean working tree.
 - Pushing the AUR bump with `pkgver` containing a hyphen.
 - Cherry-picking a commit with a `CHANGELOG.md` entry into a release branch without then removing that entry from main's `[Unreleased]` block.
