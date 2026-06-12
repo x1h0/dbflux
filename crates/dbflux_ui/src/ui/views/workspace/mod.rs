@@ -293,6 +293,9 @@ pub struct Workspace {
     modal_delete_saved_chart: Entity<ModalDeleteSavedChartConfirm>,
     modal_add_panel: Entity<ModalAddPanelPicker>,
 
+    /// In-app single-connection export modal (overlay, not an OS window).
+    export_modal: Entity<dbflux_ui_windows::connection_manager::ExportConnectionModal>,
+
     tasks_state: PanelState,
     pending_command: Option<&'static str>,
     pending_sql: Option<String>,
@@ -376,6 +379,14 @@ impl Workspace {
         let modal_delete_dashboard = cx.new(ModalDeleteDashboardConfirm::new);
         let modal_delete_saved_chart = cx.new(ModalDeleteSavedChartConfirm::new);
         let modal_add_panel = cx.new(|cx| ModalAddPanelPicker::new(window, cx));
+
+        let export_modal = cx.new(|cx| {
+            dbflux_ui_windows::connection_manager::ExportConnectionModal::new(
+                app_state.clone(),
+                window,
+                cx,
+            )
+        });
 
         // Subscribe: ModalDeleteConnection — on Confirmed, execute the pending delete.
         cx.subscribe(
@@ -987,6 +998,9 @@ impl Workspace {
                         modal.open(req, window, cx);
                     });
                 }
+                SidebarEvent::RequestExportConnection { profile_id } => {
+                    this.open_export_connection_modal(*profile_id, window, cx);
+                }
             },
         )
         .detach();
@@ -1243,6 +1257,7 @@ impl Workspace {
             modal_delete_dashboard,
             modal_delete_saved_chart,
             modal_add_panel,
+            export_modal,
             tasks_state: PanelState::Collapsed,
             pending_command: None,
             pending_sql: None,

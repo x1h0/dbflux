@@ -5402,4 +5402,15 @@ mod tests {
             profile_field.kind
         );
     }
+
+    #[test]
+    fn dynamodb_export_hint_profile_is_required_on_import() {
+        let driver = DynamoDriver::new();
+        let values = FormValues::default();
+        assert_eq!(
+            driver.export_field_hint("profile", &values),
+            dbflux_core::ExportFieldHint::RequiredOnImport,
+            "DynamoDB 'profile' field must be RequiredOnImport on export"
+        );
+    }
 }

@@ -128,6 +128,14 @@ impl CommandDispatcher for Workspace {
                 self.open_connection_manager(cx);
                 true
             }
+            Command::ExportConnections => {
+                // Export is now per-connection: it is initiated from a
+                // connection's three-dots menu, which carries the profile id.
+                dbflux_ui_base::toast::Toast::info("Export a connection from its menu")
+                    .body("Right-click a connection in the sidebar and choose Export.")
+                    .push(cx);
+                true
+            }
             Command::OpenLoginModal => {
                 self.open_login_modal(window, cx);
                 true

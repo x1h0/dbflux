@@ -147,6 +147,52 @@ pub struct DriverFormDef {
 /// Values collected from a driver form.
 pub type FormValues = HashMap<String, String>;
 
+/// How a connection field value travels in an export bundle.
+///
+/// The default derivation maps `Password`/`WriteOnly` form kinds to `Secret`
+/// and `FilePath` to `LocalPath`; everything else defaults to `Include`.
+/// Drivers override `DbDriver::export_field_hint` only for values whose
+/// semantics cannot be inferred from the field kind alone — for example, a
+/// `Text` or `AuthProfileRef` field that names an environment-local AWS
+/// profile must be marked `RequiredOnImport` explicitly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExportFieldHint {
+    /// Value travels as-is in the cleartext config section of the bundle.
+    Include,
+    /// Value is a keyring-managed secret and is placed only in the encrypted
+    /// (or force-plaintext) secrets section of the bundle.
+    Secret,
+    /// Value is a filesystem-local path that may not resolve at the destination.
+    /// Included verbatim in the cleartext config with a portability warning.
+    LocalPath,
+    /// Value is omitted from the bundle entirely and recorded as a required
+    /// reference; the importer must supply it before the connection can be used.
+    RequiredOnImport,
+}
+
+/// Describes a structured per-field transform to apply during export.
+///
+/// Returned by `DbDriver::export_field_transform`. The default implementation
+/// returns `None`, leaving all fields on the existing `export_field_hint` path.
+/// URI-bearing drivers override it for the `uri` field when credentials are
+/// embedded, splitting the URI into a cleartext skeleton and a recoverable secret.
+pub enum FieldExportTransform {
+    /// No special transform; fall through to `export_field_hint`.
+    None,
+    /// The field value was split: the password-stripped skeleton stays in the
+    /// cleartext `[connections.fields]` section, while the extracted password
+    /// rides in `[secrets]` and is re-merged by the runtime injection path on
+    /// connect (e.g. `inject_password_into_pg_uri`).
+    SplitSecret {
+        /// URI with the password component replaced by an empty placeholder
+        /// (e.g. `postgres://alice:@host/db`). Contains NO credential.
+        skeleton: String,
+        /// The extracted password. Staged into `[secrets]` and written to
+        /// `connection_secret_ref` on import so the runtime injection path picks it up.
+        secret: ::secrecy::SecretString,
+    },
+}
+
 // ---------------------------------------------------------------------------
 // Builder helpers — keep form definitions concise
 // ---------------------------------------------------------------------------
@@ -387,5 +433,29 @@ mod tests {
             let deserialized: RefreshTrigger = serde_json::from_str(&serialized).unwrap();
             assert_eq!(trigger, deserialized);
         }
+    }
+
+    #[test]
+    fn export_field_hint_variants_are_eq_debug_clone() {
+        let variants = [
+            ExportFieldHint::Include,
+            ExportFieldHint::Secret,
+            ExportFieldHint::LocalPath,
+            ExportFieldHint::RequiredOnImport,
+        ];
+
+        for hint in &variants {
+            let cloned = hint.clone();
+            assert_eq!(hint, &cloned);
+            let debug_str = format!("{:?}", hint);
+            assert!(!debug_str.is_empty());
+        }
+
+        assert_ne!(ExportFieldHint::Include, ExportFieldHint::Secret);
+        assert_ne!(ExportFieldHint::Secret, ExportFieldHint::LocalPath);
+        assert_ne!(
+            ExportFieldHint::LocalPath,
+            ExportFieldHint::RequiredOnImport
+        );
     }
 }

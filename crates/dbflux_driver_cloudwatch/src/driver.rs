@@ -1634,7 +1634,8 @@ mod tests {
     use aws_sdk_cloudwatch::primitives::DateTime;
     use aws_sdk_cloudwatch::types::MetricDataResult;
     use dbflux_core::{
-        ColumnKind, DbConfig, DbDriver, DriverCapabilities, FormFieldKind, MetricQuerySeries, Value,
+        ColumnKind, DbConfig, DbDriver, DriverCapabilities, FormFieldKind, FormValues,
+        MetricQuerySeries, Value,
     };
     use std::collections::HashMap;
 
@@ -2109,6 +2110,17 @@ mod tests {
             ),
             "CloudWatch 'profile' field must be AuthProfileRef {{ provider_id: None }}, got {:?}",
             profile_field.kind
+        );
+    }
+
+    #[test]
+    fn cloudwatch_export_hint_profile_is_required_on_import() {
+        let driver = CloudWatchDriver::new();
+        let values = FormValues::default();
+        assert_eq!(
+            driver.export_field_hint("profile", &values),
+            dbflux_core::ExportFieldHint::RequiredOnImport,
+            "CloudWatch 'profile' field must be RequiredOnImport on export"
         );
     }
 }

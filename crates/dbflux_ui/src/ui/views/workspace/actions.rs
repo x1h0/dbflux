@@ -128,6 +128,18 @@ impl Workspace {
         }
     }
 
+    /// Open the in-app export modal for a single connection profile.
+    pub(super) fn open_export_connection_modal(
+        &self,
+        profile_id: uuid::Uuid,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.export_modal.update(cx, |modal, cx| {
+            modal.open(profile_id, window, cx);
+        });
+    }
+
     pub(super) fn open_settings(&self, cx: &mut Context<Self>) {
         let workspace = cx.entity().clone();
         crate::ui::windows::settings::open_or_focus_settings(
