@@ -8,6 +8,7 @@ use aws_sdk_dynamodb::operation::batch_write_item::BatchWriteItemError;
 use aws_sdk_dynamodb::operation::delete_item::DeleteItemError;
 use aws_sdk_dynamodb::operation::delete_table::DeleteTableError;
 use aws_sdk_dynamodb::operation::describe_table::DescribeTableError;
+use aws_sdk_dynamodb::operation::execute_statement::ExecuteStatementError;
 use aws_sdk_dynamodb::operation::list_tables::ListTablesError;
 use aws_sdk_dynamodb::operation::put_item::PutItemError;
 use aws_sdk_dynamodb::operation::query::QueryError;
@@ -23,16 +24,17 @@ use dbflux_core::{
     CollectionBrowseRequest, CollectionCountRequest, CollectionIndexInfo, CollectionInfo,
     CollectionRef, ColumnKind, ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionExt,
     ConnectionProfile, DangerousQueryKind, DatabaseCategory, DatabaseInfo, DbConfig, DbDriver,
-    DbError, DbKind, DbSchemaInfo, DdlCapabilities, DeploymentClass, DocumentConnection,
-    DocumentDelete, DocumentInsert, DocumentSchema, DocumentUpdate, DriverCapabilities,
-    DriverFormDef, DriverLimits, DriverMetadata, FieldInfo, FormFieldKind, FormSection, FormTab,
+    DbError, DbKind, DbSchemaInfo, DdlCapabilities, DeploymentClass, DiagnosticSeverity,
+    DocumentConnection, DocumentDelete, DocumentInsert, DocumentSchema, DocumentUpdate,
+    DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata, EditorDiagnostic,
+    EditorLanguageProfile, ExecutionClassification, FieldInfo, FormFieldKind, FormSection, FormTab,
     FormValues, FormattedError, Icon, IndexData, IndexDirection, KeyValueConnection,
     LanguageService, MutationCapabilities, OrderByColumn, Pagination, PaginationStyle,
     QueryCapabilities, QueryErrorFormatter, QueryGenerator, QueryLanguage, QueryRequest,
     QueryResult, RelationalConnection, SchemaDropTarget, SchemaLoadingStrategy, SchemaObjectKind,
     SchemaSnapshot, SemanticFieldRef, SemanticFilter, SemanticPlan, SemanticPlanKind,
-    SemanticRequest, SqlDialect, TableInfo, TransactionCapabilities, ValidationResult, Value,
-    WhereOperator, field, field_required,
+    SemanticRequest, SqlDialect, TableInfo, TextPosition, TextPositionRange,
+    TransactionCapabilities, ValidationResult, Value, WhereOperator, field, field_required,
 };
 
 use crate::query_generator::DynamoQueryGenerator;
@@ -312,6 +314,7 @@ pub static DYNAMODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Driver
             WhereOperator::Not,
         ],
         supports_order_by: true,
+        order_by_mode: dbflux_core::OrderByMode::SortKeyOnly,
         supports_group_by: false,
         supports_having: false,
         supports_distinct: false,
@@ -327,7 +330,7 @@ pub static DYNAMODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Driver
         supports_ctes: false,
         supports_explain: false,
         max_query_parameters: 0,
-        max_order_by_columns: 0,
+        max_order_by_columns: 1,
         max_group_by_columns: 0,
     }),
     mutation: Some(MutationCapabilities {
@@ -387,6 +390,12 @@ pub static DYNAMODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Driver
     classification_override: None,
     default_chunk_size: None,
     supports_lock_timeout: false,
+    editor_profile: Some(EditorLanguageProfile {
+        editor_mode: "sql".to_string(),
+        supports_connection_context: true,
+        placeholder: "-- SELECT * FROM \"table\" WHERE pk = '...'".to_string(),
+        comment_prefix: "--".to_string(),
+    }),
 });
 
 pub const DYNAMODB_MVP_SUPPORTED_FLOWS: &[&str] = &[
@@ -557,6 +566,13 @@ impl Connection for DynamoConnection {
 
     fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
         let started = std::time::Instant::now();
+
+        if partiql_verb(&req.sql).is_some() {
+            let mut result = self.execute_partiql(req)?;
+            result.execution_time = started.elapsed();
+            return Ok(result);
+        }
+
         let envelope = parse_command_envelope(&req.sql)?;
 
         let mut result = match envelope {
@@ -1220,6 +1236,58 @@ impl ConnectionExt for DynamoConnection {
 }
 
 impl DynamoConnection {
+    /// Execute a single PartiQL statement through the DynamoDB
+    /// `ExecuteStatement` API.
+    ///
+    /// `SELECT` statements map their returned items into a `QueryResult` (the
+    /// SDK pagination token is carried as `next_page_token`); write statements
+    /// (`INSERT`/`UPDATE`/`DELETE`) report an affected-row count. Row limiting
+    /// rides on the SDK `set_limit` argument because PartiQL has no `LIMIT`
+    /// keyword. Only single statements are supported here; the JSON command
+    /// envelope remains the escape hatch for everything PartiQL cannot express.
+    fn execute_partiql(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
+        let config = DynamoProfileConfig {
+            region: self.default_region.clone(),
+            profile: None,
+            endpoint: None,
+            table: self.default_table.clone(),
+        };
+
+        let runtime = runtime();
+
+        // limitation: PartiQL pagination beyond page 1 needs an inbound page-token
+        // seam on QueryRequest (deferred to the UI batch); only the first page is
+        // returned and next_page_token is surfaced but cannot yet be fed back in.
+        let request = self
+            .client
+            .execute_statement()
+            .statement(req.sql.trim())
+            .set_limit(
+                req.limit
+                    .map(|limit| i32::try_from(limit).unwrap_or(i32::MAX)),
+            );
+
+        let output = runtime.block_on(request.send()).map_err(|error| {
+            let formatted = DYNAMO_ERROR_FORMATTER.format_execute_statement_error(&error, &config);
+            classify_query_error(formatted)
+        })?;
+
+        if partiql_verb(&req.sql) == Some(PartiqlVerb::Select) {
+            let next_page_token = output.next_token().map(|token| token.to_string());
+            Ok(partiql_items_to_query_result(
+                output.items(),
+                next_page_token,
+            ))
+        } else {
+            // ExecuteStatement returns no affected-row count for writes, so the
+            // affected count is reported as unknown rather than fabricated.
+            let mut query_result =
+                QueryResult::json(Vec::new(), Vec::new(), std::time::Duration::ZERO);
+            query_result.affected_rows = None;
+            Ok(query_result)
+        }
+    }
+
     fn browse_collection_with_read_options(
         &self,
         request: &CollectionBrowseRequest,
@@ -2245,6 +2313,7 @@ struct DynamoScanPlan {
 struct DynamoQueryPlan {
     index_name: Option<String>,
     consistent_read: bool,
+    scan_index_forward: Option<bool>,
     key_condition_expression: String,
     key_expression_attribute_names: HashMap<String, String>,
     key_expression_attribute_values: HashMap<String, AttributeValue>,
@@ -2434,6 +2503,7 @@ fn decide_read_strategy(
         return Ok(DynamoReadStrategy::Query(DynamoQueryPlan {
             index_name: read_options.index_name.clone(),
             consistent_read: read_options.consistent_read,
+            scan_index_forward: read_options.scan_index_forward,
             key_condition_expression,
             key_expression_attribute_names,
             key_expression_attribute_values,
@@ -2872,6 +2942,7 @@ fn fetch_read_page(
                 .table_name(table)
                 .set_index_name(plan.index_name.clone())
                 .consistent_read(plan.consistent_read)
+                .set_scan_index_forward(plan.scan_index_forward)
                 .key_condition_expression(&plan.key_condition_expression)
                 .set_expression_attribute_names(Some(expression_attribute_names))
                 .set_expression_attribute_values(Some(expression_attribute_values))
@@ -3041,6 +3112,61 @@ fn items_to_query_result(
                 nullable: true,
                 is_primary_key,
             }
+        })
+        .collect();
+
+    let rows = items
+        .iter()
+        .map(|item| {
+            field_names
+                .iter()
+                .map(|field| {
+                    item.get(field)
+                        .map(attribute_value_to_value)
+                        .unwrap_or(Value::Null)
+                })
+                .collect()
+        })
+        .collect();
+
+    let mut result = QueryResult::json(columns, rows, std::time::Duration::ZERO);
+    result.next_page_token = next_page_token;
+    result
+}
+
+/// Build a `QueryResult` from PartiQL `ExecuteStatement` items.
+///
+/// Unlike `items_to_query_result`, no table key schema is available for a
+/// free-form PartiQL `SELECT`, so column order is derived purely from the
+/// sampled items and no column is marked as a primary key. Column kinds are
+/// still inferred from the sampled values (CLAUDE.md rule 10) so the chart
+/// engine can use them.
+fn partiql_items_to_query_result(
+    items: &[HashMap<String, AttributeValue>],
+    next_page_token: Option<String>,
+) -> QueryResult {
+    let mut field_names: Vec<String> = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+
+    for item in items {
+        let mut keys: Vec<&String> = item.keys().collect();
+        keys.sort();
+
+        for key in keys {
+            if seen.insert(key.clone()) {
+                field_names.push(key.clone());
+            }
+        }
+    }
+
+    let columns = field_names
+        .iter()
+        .map(|name| ColumnMeta {
+            name: name.clone(),
+            type_name: infer_field_type_label(items, name),
+            kind: infer_field_kind(items, name),
+            nullable: true,
+            is_primary_key: false,
         })
         .collect();
 
@@ -4046,6 +4172,20 @@ impl DynamoErrorFormatter {
         self.format_sdk_message(&error.to_string(), config)
     }
 
+    fn format_execute_statement_error(
+        &self,
+        error: &aws_sdk_dynamodb::error::SdkError<ExecuteStatementError>,
+        config: &DynamoProfileConfig,
+    ) -> FormattedError {
+        if let Some(service_error) = error.as_service_error() {
+            let code = service_error.code();
+            let message = service_error.message().unwrap_or("DynamoDB service error");
+            return self.format_from_code(code, message, config);
+        }
+
+        self.format_sdk_message(&error.to_string(), config)
+    }
+
     fn format_put_error(
         &self,
         error: &aws_sdk_dynamodb::error::SdkError<PutItemError>,
@@ -4147,30 +4287,93 @@ static DYNAMO_ERROR_FORMATTER: DynamoErrorFormatter = DynamoErrorFormatter;
 
 struct DynamoLanguageService;
 
+/// The leading PartiQL verb of a statement, when the text starts with one.
+///
+/// DynamoDB's query surface has two shapes: a JSON command envelope and PartiQL
+/// statements (`SELECT`/`INSERT`/`UPDATE`/`DELETE`). This recognizes the latter
+/// so validation, danger detection, and governance classification can treat
+/// PartiQL distinctly from the envelope.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PartiqlVerb {
+    Select,
+    Insert,
+    Update,
+    Delete,
+}
+
+/// Strip leading `--` line comments and surrounding whitespace from a PartiQL
+/// statement so verb detection sees the first real keyword. The editor
+/// placeholder itself is a `--` comment, so a comment-led statement must still
+/// classify by its underlying verb.
+fn strip_partiql_leading_comments(query: &str) -> &str {
+    let mut rest = query.trim_start();
+
+    while let Some(after) = rest.strip_prefix("--") {
+        match after.find('\n') {
+            Some(newline) => rest = after[newline + 1..].trim_start(),
+            None => return "",
+        }
+    }
+
+    rest
+}
+
+fn partiql_verb(query: &str) -> Option<PartiqlVerb> {
+    let stripped = strip_partiql_leading_comments(query);
+
+    let verb_end = stripped
+        .char_indices()
+        .find(|(_, character)| character.is_ascii_whitespace())
+        .map(|(index, _)| index)?;
+
+    match stripped[..verb_end].to_ascii_lowercase().as_str() {
+        "select" => Some(PartiqlVerb::Select),
+        "insert" => Some(PartiqlVerb::Insert),
+        "update" => Some(PartiqlVerb::Update),
+        "delete" => Some(PartiqlVerb::Delete),
+        _ => None,
+    }
+}
+
+/// Whether a PartiQL statement carries a `WHERE` clause. `WHERE` is matched as a
+/// case-insensitive token bounded by ASCII whitespace on both sides, so a clause
+/// whose keyword is followed by a newline or tab is still recognized.
+fn partiql_has_where(query: &str) -> bool {
+    let lower = query.to_ascii_lowercase();
+    let bytes = lower.as_bytes();
+
+    lower.match_indices("where").any(|(index, _)| {
+        let before_ok = index
+            .checked_sub(1)
+            .is_none_or(|previous| bytes.get(previous).is_some_and(u8::is_ascii_whitespace));
+
+        let after = index + "where".len();
+        let after_ok = bytes
+            .get(after)
+            .is_none_or(|byte| byte.is_ascii_whitespace());
+
+        before_ok && after_ok
+    })
+}
+
 impl LanguageService for DynamoLanguageService {
-    fn validate(&self, query: &str) -> ValidationResult {
-        let trimmed = query.trim();
-        if trimmed.is_empty() {
-            return ValidationResult::Valid;
-        }
-
-        let lower = trimmed.to_ascii_lowercase();
-        if lower.starts_with("select ")
-            || lower.starts_with("insert ")
-            || lower.starts_with("update ")
-            || lower.starts_with("delete ")
-        {
-            return ValidationResult::WrongLanguage {
-                expected: QueryLanguage::Custom("DynamoDB".to_string()),
-                message: "SQL syntax not supported for DynamoDB. Use DynamoDB command envelopes or mutation tools."
-                    .to_string(),
-            };
-        }
-
+    fn validate(&self, _query: &str) -> ValidationResult {
         ValidationResult::Valid
     }
 
     fn detect_dangerous(&self, query: &str) -> Option<DangerousQueryKind> {
+        if let Some(verb) = partiql_verb(query) {
+            return match verb {
+                PartiqlVerb::Delete if !partiql_has_where(query) => {
+                    Some(DangerousQueryKind::DeleteNoWhere)
+                }
+                PartiqlVerb::Update if !partiql_has_where(query) => {
+                    Some(DangerousQueryKind::UpdateNoWhere)
+                }
+                _ => None,
+            };
+        }
+
         let normalized = query.trim().to_ascii_lowercase();
 
         if normalized.contains("\"op\":\"delete\"") {
@@ -4183,9 +4386,68 @@ impl LanguageService for DynamoLanguageService {
 
         None
     }
+
+    fn editor_diagnostics(&self, query: &str) -> Vec<EditorDiagnostic> {
+        let trimmed = query.trim();
+
+        if trimmed.is_empty() || partiql_verb(query).is_some() {
+            return Vec::new();
+        }
+
+        if !trimmed.starts_with('{') {
+            return Vec::new();
+        }
+
+        match parse_command_envelope(query) {
+            Ok(_) => Vec::new(),
+            Err(error) => vec![EditorDiagnostic {
+                severity: DiagnosticSeverity::Error,
+                message: error.to_string(),
+                range: dynamo_full_query_range(query),
+            }],
+        }
+    }
+
+    fn classify_execution(&self, query: &str) -> Option<ExecutionClassification> {
+        if let Some(verb) = partiql_verb(query) {
+            return Some(match verb {
+                PartiqlVerb::Select => ExecutionClassification::Read,
+                PartiqlVerb::Insert | PartiqlVerb::Update => ExecutionClassification::Write,
+                PartiqlVerb::Delete => ExecutionClassification::Destructive,
+            });
+        }
+
+        let normalized = query.trim().to_ascii_lowercase();
+
+        if normalized.contains("\"op\":\"scan\"") || normalized.contains("\"op\":\"query\"") {
+            return Some(ExecutionClassification::Read);
+        }
+
+        if normalized.contains("\"op\":\"delete\"") {
+            return Some(ExecutionClassification::Destructive);
+        }
+
+        Some(ExecutionClassification::Write)
+    }
 }
 
 static DYNAMO_LANGUAGE_SERVICE: DynamoLanguageService = DynamoLanguageService;
+
+/// A diagnostic range spanning the whole query text (single-position editors
+/// for the JSON envelope have no finer-grained span available).
+fn dynamo_full_query_range(query: &str) -> TextPositionRange {
+    let last_line = query.lines().count().saturating_sub(1) as u32;
+    let last_column = query
+        .lines()
+        .last()
+        .map(|line| line.chars().count())
+        .unwrap_or(0) as u32;
+
+    TextPositionRange::new(
+        TextPosition::new(0, 0),
+        TextPosition::new(last_line, last_column.max(1)),
+    )
+}
 
 fn classify_connection_error(formatted: FormattedError) -> DbError {
     match formatted.code.as_deref() {
@@ -4268,9 +4530,9 @@ mod tests {
     use dbflux_core::{
         CollectionBrowseRequest, CollectionCountRequest, CollectionRef, ColumnKind,
         ConnectionProfile, DangerousQueryKind, DatabaseCategory, DbConfig, DbDriver, DbError,
-        DocumentFilter, DocumentUpdate, DriverCapabilities, FormFieldKind, FormValues, IndexData,
-        LanguageService, QueryLanguage, SemanticFilter, SemanticPlanKind, SemanticRequest, Value,
-        WhereOperator,
+        DocumentFilter, DocumentUpdate, DriverCapabilities, ExecutionClassification, FormFieldKind,
+        FormValues, IndexData, LanguageService, QueryLanguage, SemanticFilter, SemanticPlanKind,
+        SemanticRequest, Value, WhereOperator,
     };
     use serde_json::json;
     use std::collections::HashMap;
@@ -4776,6 +5038,7 @@ mod tests {
             index_name: Some("gsi_users_by_status".to_string()),
             consistent_read: true,
             filter_fallback: DynamoFilterFallback::Reject,
+            scan_index_forward: None,
         };
 
         let strategy =
@@ -4810,6 +5073,7 @@ mod tests {
             index_name: Some("gsi_users_by_status".to_string()),
             consistent_read: false,
             filter_fallback: DynamoFilterFallback::Reject,
+            scan_index_forward: None,
         };
 
         let strategy = decide_read_strategy(
@@ -4873,6 +5137,7 @@ mod tests {
             index_name: None,
             consistent_read: false,
             filter_fallback: DynamoFilterFallback::Reject,
+            scan_index_forward: None,
         };
 
         let error = decide_read_strategy(
@@ -4934,6 +5199,7 @@ mod tests {
             index_name: Some("missing_index".to_string()),
             consistent_read: false,
             filter_fallback: DynamoFilterFallback::ClientSide,
+            scan_index_forward: None,
         };
 
         let error = validate_read_options("users", &key_schema, &read_options)
@@ -4957,6 +5223,7 @@ mod tests {
             index_name: Some("gsi_users_by_status".to_string()),
             consistent_read: true,
             filter_fallback: DynamoFilterFallback::ClientSide,
+            scan_index_forward: None,
         };
 
         let error = validate_read_options("users", &key_schema, &read_options)
@@ -5320,6 +5587,126 @@ mod tests {
         assert_eq!(delete, Some(DangerousQueryKind::DeleteNoWhere));
         assert_eq!(update, Some(DangerousQueryKind::UpdateNoWhere));
         assert_eq!(put, None);
+    }
+
+    #[test]
+    fn dangerous_detection_flags_no_where_partiql_delete_and_update() {
+        let service = DynamoLanguageService;
+
+        assert_eq!(
+            service.detect_dangerous("DELETE FROM \"users\""),
+            Some(DangerousQueryKind::DeleteNoWhere)
+        );
+        assert_eq!(
+            service.detect_dangerous("  delete from \"users\"  "),
+            Some(DangerousQueryKind::DeleteNoWhere)
+        );
+        assert_eq!(
+            service.detect_dangerous("UPDATE \"users\" SET name = 'A'"),
+            Some(DangerousQueryKind::UpdateNoWhere)
+        );
+    }
+
+    #[test]
+    fn dangerous_detection_ignores_partiql_with_where() {
+        let service = DynamoLanguageService;
+
+        assert_eq!(
+            service.detect_dangerous("DELETE FROM \"users\" WHERE pk = '1'"),
+            None
+        );
+        assert_eq!(
+            service.detect_dangerous("UPDATE \"users\" SET name = 'A' WHERE pk = '1'"),
+            None
+        );
+        assert_eq!(
+            service.detect_dangerous("SELECT * FROM \"users\" WHERE pk = '1'"),
+            None
+        );
+    }
+
+    #[test]
+    fn dangerous_detection_recognizes_where_followed_by_newline_or_tab() {
+        let service = DynamoLanguageService;
+
+        assert_eq!(
+            service.detect_dangerous("DELETE FROM \"users\" WHERE\n pk = '1'"),
+            None
+        );
+        assert_eq!(
+            service.detect_dangerous("DELETE FROM \"users\" WHERE\tpk = '1'"),
+            None
+        );
+        assert_eq!(
+            service.detect_dangerous("UPDATE \"users\" SET name = 'A' WHERE\n pk = '1'"),
+            None
+        );
+    }
+
+    #[test]
+    fn verb_detection_handles_leading_comments_and_tab_delimited_verbs() {
+        let service = DynamoLanguageService;
+
+        assert_eq!(
+            service.classify_execution("-- note\nSELECT * FROM \"users\" WHERE pk = '1'"),
+            Some(ExecutionClassification::Read)
+        );
+        assert_eq!(
+            service.classify_execution("SELECT\t* FROM \"users\" WHERE pk = '1'"),
+            Some(ExecutionClassification::Read)
+        );
+        assert_eq!(
+            service.classify_execution("DELETE\tFROM \"users\" WHERE pk = '1'"),
+            Some(ExecutionClassification::Destructive)
+        );
+    }
+
+    #[test]
+    fn classify_execution_distinguishes_partiql_reads_and_writes() {
+        let service = DynamoLanguageService;
+
+        assert_eq!(
+            service.classify_execution("SELECT * FROM \"users\" WHERE pk = '1'"),
+            Some(ExecutionClassification::Read)
+        );
+        assert_eq!(
+            service.classify_execution("INSERT INTO \"users\" VALUE {'pk': '1'}"),
+            Some(ExecutionClassification::Write)
+        );
+        assert_eq!(
+            service.classify_execution("UPDATE \"users\" SET name = 'A' WHERE pk = '1'"),
+            Some(ExecutionClassification::Write)
+        );
+        assert_eq!(
+            service.classify_execution("DELETE FROM \"users\" WHERE pk = '1'"),
+            Some(ExecutionClassification::Destructive)
+        );
+    }
+
+    #[test]
+    fn classify_execution_handles_command_envelopes() {
+        let service = DynamoLanguageService;
+
+        assert_eq!(
+            service.classify_execution(r#"{"op":"scan","table":"users"}"#),
+            Some(ExecutionClassification::Read)
+        );
+        assert_eq!(
+            service.classify_execution(r#"{"op":"query","table":"users"}"#),
+            Some(ExecutionClassification::Read)
+        );
+        assert_eq!(
+            service.classify_execution(r#"{"op":"put","table":"users","item":{"pk":"1"}}"#),
+            Some(ExecutionClassification::Write)
+        );
+        assert_eq!(
+            service.classify_execution(r#"{"op":"update","table":"users","key":{"pk":"1"}}"#),
+            Some(ExecutionClassification::Write)
+        );
+        assert_eq!(
+            service.classify_execution(r#"{"op":"delete","table":"users","key":{"pk":"1"}}"#),
+            Some(ExecutionClassification::Destructive)
+        );
     }
 
     #[test]
