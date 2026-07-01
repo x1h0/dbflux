@@ -9,3 +9,4 @@ result
 .atl/
 # Local Pi runtime state
 .agent/
+.codegraph/
