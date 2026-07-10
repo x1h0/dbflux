@@ -22,8 +22,10 @@ mod governance;
 
 mod handle;
 pub mod history_modal;
+pub mod import_wizard;
 pub mod instance_inspector;
 mod key_value;
+pub mod migrate_wizard;
 mod new_key_modal;
 pub mod pane;
 pub mod refresh;

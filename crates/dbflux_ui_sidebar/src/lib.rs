@@ -258,6 +258,28 @@ pub enum SidebarEvent {
     RequestOpenConnectionManagerInFolder {
         folder_id: Uuid,
     },
+
+    /// Request to open the Import wizard, targeting the currently connected
+    /// profile (and, for `ConnectionPerDatabase` drivers, its active
+    /// database). The wizard itself lives in `dbflux_ui_document`; the
+    /// integrator (`dbflux_ui` Workspace) owns opening it, mirroring
+    /// `RequestExportConnection`'s layering.
+    RequestImportWizard {
+        profile_id: Uuid,
+        database: Option<String>,
+    },
+
+    /// Request to open the Migrate wizard, pre-populated with the resolved
+    /// table selection from the sidebar (T28). `profile_id`/`database`
+    /// identify the source connection; the wizard itself resolves the target
+    /// connection via its own picker. The wizard lives in `dbflux_ui_document`;
+    /// the integrator (`dbflux_ui` Workspace) owns opening it, mirroring
+    /// `RequestImportWizard`'s layering.
+    RequestMigrateWizard {
+        profile_id: Uuid,
+        database: Option<String>,
+        tables: Vec<TableRef>,
+    },
 }
 
 /// Sentinel value for IDs that don't correspond to schema tree nodes
@@ -427,6 +449,20 @@ pub enum ContextMenuAction {
     RefreshInstanceCatalog,
     /// Copy the string ID of the selected node to the clipboard.
     CopyItemId,
+    /// Export the selected table(s) (or the right-clicked table, when it is
+    /// not part of a larger selection) to a folder bundle in the given
+    /// format. Distinct from `Export` (connection-profile export) — gated on
+    /// `TransferFamily::Sql` so it only appears for SQL-family connections.
+    ExportTablesAs(dbflux_transfer::FileFormat),
+    /// Open the Import wizard for the connected profile this menu was opened
+    /// on. Gated the same way as `ExportTablesAs` — `TransferFamily::Sql`,
+    /// never a driver id.
+    ImportTables,
+    /// Open the Migrate wizard for the selected table(s) (or the right-
+    /// clicked table, when it is not part of a larger selection). Gated the
+    /// same way as `ExportTablesAs`/`ImportTables` — `TransferFamily::Sql`,
+    /// never a driver id.
+    MigrateTables,
 }
 
 #[derive(Clone)]
@@ -513,6 +549,9 @@ impl ContextMenuAction {
             // Instance catalog actions
             Self::RefreshInstanceCatalog => Some(AppIcon::RefreshCcw),
             Self::CopyItemId => Some(AppIcon::Copy),
+            Self::ExportTablesAs(_) => Some(AppIcon::ArrowUp),
+            Self::ImportTables => Some(AppIcon::Download),
+            Self::MigrateTables => Some(AppIcon::ArrowUpDown),
         }
     }
 }

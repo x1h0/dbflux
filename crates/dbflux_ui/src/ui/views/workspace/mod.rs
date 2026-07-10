@@ -294,6 +294,12 @@ pub struct Workspace {
 
     /// In-app single-connection export modal (overlay, not an OS window).
     export_modal: Entity<dbflux_ui_windows::connection_manager::ExportBundleModal>,
+    /// Import wizard (folder bundle -> tables), targeting the connection it
+    /// was opened from.
+    import_wizard: Entity<dbflux_ui_document::import_wizard::ImportWizard>,
+    /// Migrate wizard (table -> table, cross-connection), pre-populated from
+    /// the sidebar's multi-select Migrate action.
+    migrate_wizard: Entity<dbflux_ui_document::migrate_wizard::MigrateWizard>,
 
     tasks_state: PanelState,
     pending_command: Option<&'static str>,
@@ -385,6 +391,11 @@ impl Workspace {
                 window,
                 cx,
             )
+        });
+        let import_wizard = cx
+            .new(|cx| dbflux_ui_document::import_wizard::ImportWizard::new(app_state.clone(), cx));
+        let migrate_wizard = cx.new(|cx| {
+            dbflux_ui_document::migrate_wizard::MigrateWizard::new(app_state.clone(), cx)
         });
 
         // Subscribe: ModalDeleteConnection — on Confirmed, execute the pending delete.
@@ -1000,6 +1011,28 @@ impl Workspace {
                 SidebarEvent::RequestExportConnection { profile_id } => {
                     this.open_export_connection_modal(*profile_id, window, cx);
                 }
+                SidebarEvent::RequestImportWizard {
+                    profile_id,
+                    database,
+                } => {
+                    let profile_id = *profile_id;
+                    let database = database.clone();
+                    this.import_wizard.update(cx, |wizard, cx| {
+                        wizard.open(profile_id, database, window, cx);
+                    });
+                }
+                SidebarEvent::RequestMigrateWizard {
+                    profile_id,
+                    database,
+                    tables,
+                } => {
+                    let profile_id = *profile_id;
+                    let database = database.clone();
+                    let tables = tables.clone();
+                    this.migrate_wizard.update(cx, |wizard, cx| {
+                        wizard.open(profile_id, database, tables, window, cx);
+                    });
+                }
                 SidebarEvent::RequestOpenSettings => {
                     this.open_settings(cx);
                 }
@@ -1269,6 +1302,8 @@ impl Workspace {
             modal_delete_saved_chart,
             modal_add_panel,
             export_modal,
+            import_wizard,
+            migrate_wizard,
             tasks_state: PanelState::Collapsed,
             pending_command: None,
             pending_sql: None,

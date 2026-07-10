@@ -26,9 +26,9 @@ use dbflux_core::{
     QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
     RelationalConnection, Row, SchemaDropTarget, SchemaLoadingStrategy, SchemaObjectKind,
     SchemaSnapshot, SemanticFieldRef, SemanticFilter, SemanticPlan, SemanticPlanKind,
-    SemanticRequest, SqlDialect, SshTunnelConfig, TableInfo, TransactionCapabilities, Value,
-    ViewInfo, WhereOperator, field, field_password, field_required, field_use_uri, sanitize_uri,
-    ssh_tab, when_checked, when_unchecked, with_default,
+    SemanticRequest, SqlDialect, SshTunnelConfig, TableInfo, TransactionCapabilities,
+    TransferFamily, Value, ViewInfo, WhereOperator, field, field_password, field_required,
+    field_use_uri, sanitize_uri, ssh_tab, when_checked, when_unchecked, with_default,
 };
 use dbflux_ssh::SshTunnel;
 use mongodb::sync::{Client, Database};
@@ -103,6 +103,7 @@ pub static MONGODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
     display_name: "MongoDB".into(),
     description: "Document database for modern applications".into(),
     category: DatabaseCategory::Document,
+    transfer_family: TransferFamily::Incompatible,
     deployment_class: Some(DeploymentClass::SelfHosted),
     query_language: QueryLanguage::MongoQuery,
     capabilities: DriverCapabilities::from_bits_truncate(
@@ -207,6 +208,7 @@ pub static MONGODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
         max_identifier_length: 63,
         max_columns: 0,
         max_indexes_per_table: 64,
+        max_bulk_insert_rows: 0,
     }),
     ssl_modes: Some(&[
         dbflux_core::SslModeOption {

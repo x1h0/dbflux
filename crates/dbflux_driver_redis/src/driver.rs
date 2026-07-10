@@ -24,8 +24,9 @@ use dbflux_core::{
     SchemaDropTarget, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan, SemanticRequest,
     SetAddRequest, SetCondition, SetRemoveRequest, SqlDialect, SshTunnelConfig, StreamAddRequest,
     StreamDeleteRequest, StreamEntryId, TextPosition, TextPositionRange, TransactionCapabilities,
-    Value, ValueRepr, ZSetAddRequest, ZSetRemoveRequest, field, field_password, field_required,
-    field_use_uri, sanitize_uri, ssh_tab, when_checked, when_unchecked, with_default,
+    TransferFamily, Value, ValueRepr, ZSetAddRequest, ZSetRemoveRequest, field, field_password,
+    field_required, field_use_uri, sanitize_uri, ssh_tab, when_checked, when_unchecked,
+    with_default,
 };
 use dbflux_ssh::SshTunnel;
 
@@ -119,6 +120,7 @@ pub static REDIS_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMet
     display_name: "Redis".into(),
     description: "In-memory key-value database".into(),
     category: DatabaseCategory::KeyValue,
+    transfer_family: TransferFamily::Incompatible,
     deployment_class: Some(DeploymentClass::SelfHosted),
     query_language: QueryLanguage::RedisCommands,
     capabilities: DriverCapabilities::from_bits_truncate(
@@ -215,6 +217,7 @@ pub static REDIS_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMet
         max_identifier_length: 0,
         max_columns: 0,
         max_indexes_per_table: 0,
+        max_bulk_insert_rows: 0,
     }),
     ssl_modes: Some(&[
         dbflux_core::SslModeOption {

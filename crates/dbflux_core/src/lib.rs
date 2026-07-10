@@ -113,8 +113,9 @@ pub use driver::{
     FormSection, FormTab, FormValues, Icon, IsolationLevel, MutationCapabilities,
     OperationClassifier, OrderByMode, PaginationStyle, QueryCapabilities, QueryLanguage,
     RefreshTrigger, SelectOption, SslCertFields, SslModeOption, SyntaxInfo,
-    TransactionCapabilities, WhereOperator, field, field_file_path, field_password, field_required,
-    field_use_uri, ssh_tab, when_checked, when_unchecked, with_default, with_help,
+    TransactionCapabilities, TransferFamily, WhereOperator, field, field_file_path, field_password,
+    field_required, field_use_uri, ssh_tab, transfer_compatible, when_checked, when_unchecked,
+    with_default, with_help,
 };
 
 pub use facade::{DangerousQuerySuppressions, SessionFacade};
@@ -123,10 +124,10 @@ pub use query::{
     AggFn, AggregateFunction, AggregateRequest, AggregateSpec, AliasOrigin, Assignment,
     AssignmentValue, BoolOp, ClassifiedMutation, CollectionBrowseRequest, CollectionCountRequest,
     CollectionRef, CollectionTemplateRequest, ColumnKind, ColumnMeta, ColumnOrigin, ColumnRef,
-    Comparator, CountSpec, DangerousQueryKind, DescribeRequest, Diagnostic, DiagnosticSeverity,
-    EditableBinding, EditorDiagnostic, ExplainRequest, FilterNode, GeneratedMutation,
-    GeneratedQuery, GeneratorError, GroupByEntry, JoinFilterNode, JoinKind, JoinOn, JoinPredicate,
-    JoinStep, LanguageService, LiteralValue, MutationCategory, MutationKind,
+    Comparator, CountSpec, CreateTableSpec, DangerousQueryKind, DescribeRequest, Diagnostic,
+    DiagnosticSeverity, EditableBinding, EditorDiagnostic, ExplainRequest, FilterNode,
+    GeneratedMutation, GeneratedQuery, GeneratorError, GroupByEntry, JoinFilterNode, JoinKind,
+    JoinOn, JoinPredicate, JoinStep, LanguageService, LiteralValue, MutationCategory, MutationKind,
     MutationTemplateOperation, MutationTemplateRequest, OrderByColumn, Pagination, PlannedQuery,
     Predicate, PredicateValue, ProjectedColumn, Projection, QueryGenError, QueryGenerator,
     QueryHandle, QueryRequest, QueryResult, QueryResultShape, ReadTemplateOperation,
@@ -134,7 +135,7 @@ pub use query::{
     SemanticFilter, SemanticPlan, SemanticPlanKind, SemanticPlanner, SemanticPredicate,
     SemanticRequest, SemanticRequestKind, SortDirection, SortEntry, SourceTable, SpecError,
     SqlLanguageService, SqlMutationGenerator, TableBrowseRequest, TableCountRequest, TableRef,
-    TextPosition, TextPositionRange, TextRange, TransactionVocab, ValidationResult,
+    TextPosition, TextPositionRange, TextRange, TransactionVocab, TransferColumn, ValidationResult,
     VisualAggregateSpec, VisualMutationSpec, VisualQuerySpec, VisualSortDirection,
     classify_query_for_governance, classify_query_for_language,
     classify_query_for_language_with_service, classify_sql_execution, classify_visual_mutation,
@@ -183,7 +184,7 @@ pub use schema::{
     DocumentSchema, DriftOutcome, FieldInfo, ForeignKeyBuilder, ForeignKeyInfo, GraphInfo,
     GraphSchema, IndexBuilder, IndexData, IndexDirection, IndexInfo, KeyInfo, KeySpaceInfo,
     KeyValueSchema, MeasurementInfo, MultiModelCapabilities, MultiModelSchema, NodeLabelInfo,
-    ParseSchemaNodeIdError, PropertyInfo, QueryTableRef, RelationKind, RelationRef,
+    OrderResult, ParseSchemaNodeIdError, PropertyInfo, QueryTableRef, RelationKind, RelationRef,
     RelationalSchema, RelationshipTypeInfo, RetentionPolicyInfo, RoutineInfo, RoutineKind,
     SchemaChange, SchemaDiff, SchemaDriftDetected, SchemaFingerprint, SchemaForeignKeyBuilder,
     SchemaForeignKeyInfo, SchemaIndexBuilder, SchemaIndexInfo, SchemaNodeId, SchemaNodeKind,
@@ -191,6 +192,7 @@ pub use schema::{
     TimeSeriesFieldInfo, TimeSeriesSchema, VectorCollectionInfo, VectorMetadataField, VectorMetric,
     VectorSchema, ViewInfo, WideColumnInfo, WideColumnKeyspaceInfo, WideColumnSchema,
     check_drift_sync, check_schema_drift, diff_table_info, extract_referenced_tables,
+    topological_order,
 };
 
 pub use sql::{

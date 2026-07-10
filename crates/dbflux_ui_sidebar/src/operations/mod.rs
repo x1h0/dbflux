@@ -2,6 +2,8 @@ use crate::*;
 
 mod connection;
 mod dnd;
+mod export_tables;
+mod migrate_tables;
 mod pipeline;
 mod script_ops;
 mod tree_edit;
