@@ -1039,6 +1039,12 @@ impl Workspace {
                         wizard.open(profile_id, database, tables, window, cx);
                     });
                 }
+                SidebarEvent::RequestSchemaDiff {
+                    profile_id,
+                    database,
+                } => {
+                    this.open_schema_diff(*profile_id, database.clone(), window, cx);
+                }
                 SidebarEvent::RequestExportWizard {
                     profile_id,
                     database,
