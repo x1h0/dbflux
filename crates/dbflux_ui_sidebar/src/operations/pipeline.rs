@@ -1,7 +1,7 @@
-use super::connection::{HookPhaseState, run_hook_phase};
 use crate::*;
 use dbflux_core::observability::actions::{CONNECTION_CONNECT, CONNECTION_CONNECT_FAILED};
 use dbflux_core::{CancelToken, HookContext, HookPhase, PipelineState, TaskId, TaskKind};
+use dbflux_ui_base::hook_phase_runner::{DetachedHookScope, HookPhaseState, run_hook_phase};
 use dbflux_ui_base::toast::PendingToast;
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error_async};
 use std::sync::Arc;
@@ -232,6 +232,8 @@ impl Sidebar {
             watcher: state_rx,
         });
 
+        let detached_hook_scope = DetachedHookScope::default();
+
         cx.spawn(async move |_this, cx| {
             let mut hook_warnings = Vec::new();
 
@@ -243,6 +245,7 @@ impl Sidebar {
                 pre_connect_hooks,
                 hook_context.clone(),
                 Some(cancel_token.clone()),
+                &detached_hook_scope,
                 cx,
             )
             .await
@@ -514,6 +517,7 @@ impl Sidebar {
                 post_connect_hooks,
                 hook_context,
                 Some(cancel_token.clone()),
+                &detached_hook_scope,
                 cx,
             )
             .await
