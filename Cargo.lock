@@ -2539,6 +2539,7 @@ dependencies = [
  "dbflux_driver_mysql",
  "dbflux_driver_postgres",
  "dbflux_driver_redis",
+ "dbflux_driver_redshift",
  "dbflux_driver_sqlite",
  "dbflux_ipc",
  "dbflux_lua",
@@ -2820,6 +2821,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "dbflux_driver_redshift"
+version = "0.7.0-dev.0"
+dependencies = [
+ "chrono",
+ "dbflux_core",
+ "dbflux_ssh",
+ "dbflux_test_support",
+ "hex",
+ "log",
+ "native-tls",
+ "postgres",
+ "postgres-native-tls",
+ "serde_json",
+ "urlencoding",
+ "uuid",
+]
+
+[[package]]
 name = "dbflux_driver_sqlite"
 version = "0.7.0-dev.0"
 dependencies = [
@@ -2902,6 +2921,7 @@ dependencies = [
  "dbflux_driver_mysql",
  "dbflux_driver_postgres",
  "dbflux_driver_redis",
+ "dbflux_driver_redshift",
  "dbflux_driver_sqlite",
  "dbflux_ipc",
  "dbflux_mcp",
@@ -3017,6 +3037,7 @@ dependencies = [
  "dbflux_driver_mysql",
  "dbflux_driver_postgres",
  "dbflux_driver_redis",
+ "dbflux_driver_redshift",
  "dbflux_driver_sqlite",
  "dbflux_ipc",
  "interprocess",

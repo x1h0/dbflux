@@ -464,6 +464,7 @@ fn db_kind_to_str(kind: DbKind) -> String {
         DbKind::CloudWatchLogs => "CloudWatchLogs",
         DbKind::InfluxDB => "InfluxDB",
         DbKind::SqlServer => "SqlServer",
+        DbKind::Redshift => "Redshift",
     }
     .to_string()
 }
@@ -480,6 +481,7 @@ fn str_to_db_kind(s: &str) -> Option<DbKind> {
         "CloudWatchLogs" => Some(DbKind::CloudWatchLogs),
         "InfluxDB" => Some(DbKind::InfluxDB),
         "SqlServer" => Some(DbKind::SqlServer),
+        "Redshift" => Some(DbKind::Redshift),
         _ => None,
     }
 }
@@ -495,6 +497,7 @@ fn default_db_config_for_kind(kind: DbKind) -> dbflux_core::DbConfig {
         DbKind::CloudWatchLogs => dbflux_core::DbConfig::default_cloudwatch_logs(),
         DbKind::InfluxDB => dbflux_core::DbConfig::default_influxdb(),
         DbKind::SqlServer => dbflux_core::DbConfig::default_sqlserver(),
+        DbKind::Redshift => dbflux_core::DbConfig::default_redshift(),
     }
 }
 
